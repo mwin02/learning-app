@@ -1,0 +1,67 @@
+// Prisma schema for the Adaptive Learning Path app.
+// Prisma 7 moved connection URLs out of schema.prisma into prisma.config.ts.
+// Runtime DB connection is set up in src/lib/db.ts via @prisma/adapter-pg.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Resource {
+  id                   String         @id @default(cuid())
+  slug                 String         @unique
+  topic                String
+  title                String
+  url                  String         @unique
+  type                 ResourceType
+  tier                 ResourceTier   @default(core)
+  durationMin          Int
+  summary              String
+  difficulty           Difficulty
+  prerequisiteConcepts String[]
+  conceptsTaught       String[]
+  requiresPurchase     Boolean        @default(false)
+  source               ResourceSource @default(seed)
+  status               ResourceStatus @default(active)
+  language             String         @default("en")
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  @@index([topic, status, tier])
+  @@index([difficulty])
+}
+
+enum ResourceType {
+  article
+  video
+  course
+  interactive
+  docs
+  book
+}
+
+enum ResourceTier {
+  core
+  optional
+}
+
+enum Difficulty {
+  beginner
+  intermediate
+  advanced
+}
+
+enum ResourceSource {
+  seed
+  agent
+  user
+}
+
+enum ResourceStatus {
+  active
+  deprecated
+  pending_review
+}
