@@ -24,14 +24,33 @@ model Resource {
   prerequisiteConcepts String[]
   conceptsTaught       String[]
   requiresPurchase     Boolean        @default(false)
-  source               ResourceSource @default(seed)
+  origin               Origin         @default(seed)
   status               ResourceStatus @default(active)
   language             String         @default("en")
+  trustScore           Float          @default(0.5)
+  attribution          String?
+  sourceId             String?
+  source               Source?        @relation(fields: [sourceId], references: [id])
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 
   @@index([topic, status, tier])
   @@index([difficulty])
+  @@index([sourceId])
+}
+
+model Source {
+  id         String     @id @default(cuid())
+  slug       String     @unique
+  name       String
+  url        String
+  kind       SourceKind
+  trustScore Float      @default(0.5)
+  resources  Resource[]
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  @@index([kind])
 }
 
 enum ResourceType {
@@ -54,10 +73,18 @@ enum Difficulty {
   advanced
 }
 
-enum ResourceSource {
+enum Origin {
   seed
   agent
   user
+}
+
+enum SourceKind {
+  official_docs
+  educator
+  course_platform
+  textbook
+  community
 }
 
 enum ResourceStatus {
