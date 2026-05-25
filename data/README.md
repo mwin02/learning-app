@@ -1,9 +1,9 @@
 # `data/` — Resource library
 
-The runtime resource library lives in Postgres (`Resource` table, see
-`prisma/schema.prisma`). This directory holds the **seed source of truth** for
-the four launch topics, plus the curation rules that govern what may enter the
-library — whether added by hand, by the curriculum agent at runtime, or
+The runtime resource library lives in Postgres (`Resource` and `Source` tables,
+see `prisma/schema.prisma`). This directory holds the **seed source of truth**
+for the four launch topics, plus the curation rules that govern what may enter
+the library — whether added by hand, by the curriculum agent at runtime, or
 (post-launch) by users.
 
 ## Files
@@ -11,24 +11,31 @@ library — whether added by hand, by the curriculum agent at runtime, or
 - `seed-resources.ts` — typed array of resources loaded by `prisma/seed.ts` via
   `upsert(slug)`. Idempotent: re-running the seed updates existing rows rather
   than inserting duplicates.
+- `seed-sources.ts` — typed array of publishers (MDN, 3Blue1Brown, MIT OCW, …)
+  with hand-set trust scores. Seeded before resources; each resource resolves
+  its `sourceSlug` to a `sourceId` at seed time.
 - `README.md` — this file.
 
 ## How the library grows
 
-1. **Seed (this directory).** Hand-curated resources for the four launch topics
-   are committed here. `source: 'seed'`.
+1. **Seed (this directory).** Hand-curated sources and resources for the four
+   launch topics are committed here. `origin: 'seed'`.
 2. **Agent (Phase 2).** When a user requests a topic the library doesn't cover
    well, the curriculum agent searches the web, curates and reviews candidates,
-   and writes new rows with `source: 'agent'`. Some may land as
+   and writes new rows with `origin: 'agent'`. Some may land as
    `status: 'pending_review'` for a human to confirm.
 3. **User (post-launch).** Eventually, user-contributed resources land with
-   `source: 'user'`. Same schema, same rules.
+   `origin: 'user'`. Same schema, same rules.
+
+The `origin` enum tracks **how a row got into the DB**, not who published it —
+publisher attribution is the `Source` relation, which is set independently of
+origin.
 
 The schema commits to fields; values are best-effort. `difficulty` and
 `prerequisiteConcepts` are hand-assigned at seed time without usage data to
 validate them — the Phase 2 agent will refine matching over time.
 
-## Schema (one row)
+## Resource schema (one row)
 
 | Field | Type | Notes |
 |---|---|---|
@@ -45,9 +52,43 @@ validate them — the Phase 2 agent will refine matching over time.
 | `prerequisiteConcepts` | `string[]` | Concept tags the learner should know first. May be `[]`. |
 | `conceptsTaught` | `string[]` | Concept tags this resource teaches. At least one. |
 | `requiresPurchase` | `boolean` | `true` for books and paid recommendations. Implies `tier: 'optional'`. |
-| `source` | `ResourceSource` | `seed` for hand-curated. Auto-defaults. |
+| `sourceId` | `string` | FK to `Source`. Set via `sourceSlug` in seed input; the seed script resolves it. |
+| `attribution` | `string?` | Optional byline credit when the publisher of trust differs from the named author(s) — e.g. `"Mike Dane"` on a freeCodeCamp video. Leave null if the source name is sufficient. |
+| `trustScore` | `Float` | Inherits from `source.trustScore` at create time. Updated by reviews in Phase 3+. Curators don't set it manually. |
+| `origin` | `Origin` | `seed` for hand-curated. Auto-defaults. |
 | `status` | `ResourceStatus` | `active` by default. `deprecated` for dead links. `pending_review` for unvetted agent additions. |
 | `language` | `string` | ISO 639-1. Defaults to `en`. |
+
+## Source schema (one row)
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | `string` (cuid) | Auto. |
+| `slug` | `string` | **Stable, unique.** Short kebab-case. Referenced by `Resource.sourceSlug`. |
+| `name` | `string` | Display name. May include parenthetical author for personal channels. |
+| `url` | `string` | Publisher homepage (or work landing page for multi-author books). Not unique — two sources may share a domain in edge cases. |
+| `kind` | `SourceKind` | `official_docs \| educator \| course_platform \| textbook \| community` |
+| `trustScore` | `Float` | Hand-set at seed time per the rubric below. Updated by reviews in Phase 3+. |
+
+## Trust score rubric
+
+| Tier | Score | Use for |
+|---|---|---|
+| **Gold** | `0.95` | Canonical publishers with decades of trust: MDN, official language/library docs, 3Blue1Brown, MIT OCW, Khan Academy, OpenStax, widely-cited academic texts (Axler, Strang). |
+| **Strong** | `0.85` | Well-regarded across the community but narrower scope: smaller official docs (NumPy/Pandas/etc.), individual educators with strong track records (Corey Schafer, StatQuest, Paul's Notes), modern reference sites (javascript.info), broad nonprofits (freeCodeCamp), respected newer texts (MML). |
+| **Solid** | `0.70` | Good resources with a single work, niche audience, or shorter track record (Professor Leonard, Eloquent JS, Immersive Math, Automate the Boring Stuff). |
+| **Unknown** | `0.50` | Default for any source we have no prior on. The Phase 2 agent uses this for newly-discovered publishers until reviews accumulate. |
+
+**Source kind decisions:**
+
+- **Platform > individual contributor.** When an educator publishes via a vetted
+  platform (freeCodeCamp's YouTube channel, MIT OCW), the *platform* is the
+  source — it bears the trust signal. Individual contributor goes in
+  `Resource.attribution` if material. Only attribute to the individual when
+  they are the sole contributor (3Blue1Brown, Corey Schafer).
+- **Multi-author works are atomic.** A book by multiple authors (MML, Axler,
+  Immersive Math) is its own source, independent of each author. No author
+  trust inheritance.
 
 ## Curation rules
 
@@ -99,23 +140,32 @@ viable in the meantime:
   also fine — pick one per topic and stick to it. Check existing tags before
   adding a new one.
 
-## Sources we draw from
-
-freeCodeCamp, MDN, Python official docs, React official docs, 3Blue1Brown,
-Khan Academy, MIT OpenCourseWare, Paul's Online Math Notes, Sentdex, Corey
-Schafer, StatQuest (Josh Starmer), Real Python (free articles only).
-
 ## How to add a resource
+
+### From an existing source
 
 1. Pick an `id`-free, unique `slug` in `{topic}-{short}` format.
 2. Verify the URL loads without login in an incognito window.
-3. Fill every required field. `prerequisiteConcepts` may be `[]`; `conceptsTaught`
-   must have at least one tag.
-4. Check existing concept tags in the same topic — reuse if the concept is the
+3. Set `sourceSlug` to the source's slug from `seed-sources.ts`.
+4. Fill every required field. `prerequisiteConcepts` may be `[]`;
+   `conceptsTaught` must have at least one tag.
+5. Check existing concept tags in the same topic — reuse if the concept is the
    same; don't introduce `derivative` if `derivatives` already exists.
-5. `npm run db:seed` (after Block 2 lands) — re-run is safe.
-6. PR review: include URL, why it's in (or out of) core tier, and any new
+6. `npm run db:seed` — re-run is safe and idempotent.
+7. PR review: include URL, why it's in (or out of) core tier, and any new
    concept tags introduced.
+
+### From a new publisher
+
+Add the source to `seed-sources.ts` first:
+
+1. Pick a short kebab-case `slug`. Avoid topic prefixes — sources are
+   topic-agnostic.
+2. Set `kind` per the categories above.
+3. Set `trustScore` from the rubric. Lean conservative: 0.85 is the right
+   default for a publisher you'd recommend without hesitation but who isn't
+   universally known. Reserve 0.95 for the canonical few.
+4. Then add the resource as above, with `sourceSlug` pointing at the new entry.
 
 ## Tutor agent caveat for books
 
