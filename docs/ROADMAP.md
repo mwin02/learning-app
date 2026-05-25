@@ -29,14 +29,48 @@ Goal: a runnable Next.js scaffold + repo conventions + Vertex/Gemini proven end-
 
 ## Phase 2 — Path generation + library growth agent (spec §7)
 
-- [ ] Prisma schema additions: `User(plan)`, `Path`, `PathItem(status, isCheckpoint, branchOnFail)`, `Progress`. (`Resource` table landed in Feature 1b.)
-- [ ] `lib/curriculum-agent.ts` — input: `{topic, priorKnowledge, timeframe}`. **Library-first matching** against the `Resource` table (filters on topic, difficulty, prerequisite/taught concepts). **Web-fallback** via Vertex grounding for topics the library doesn't cover well. **Cache-back**: vetted finds are upserted into `Resource` with `source='agent'` and `status='pending_review'` so the library compounds with use. Ranks/sequences via Gemini; returns ordered items with one-line `rationale`.
-- [ ] Concept-tag normalization — bring agent-added tags into the seed vocabulary (embedding similarity or LLM canonicalization). Seed tags are free-text today; this is the first time matching cares.
-- [ ] `app/api/generate-path/route.ts`
-- [ ] Landing page `app/page.tsx` — dual-audience hero, form: topic dropdown (extensible beyond the 4 launch topics), prior knowledge, timeframe
-- [ ] `app/path/[id]/page.tsx` — outline rendered (read-only)
+### Locked decisions (resolved during phase planning)
 
-**Exit criteria:** stranger fills form → sees a real sequenced path with per-item rationales. Requesting an off-library topic visibly grows the `Resource` table.
+| Decision | Choice |
+|---|---|
+| Path ↔ User relation | `Path.createdBy` is a **nullable FK** to `User`. Separate `EnrolledPath` join table links users to paths they're working through. In Phase 2 (no auth) `createdBy` stays null. |
+| Path access | Paths are public resources. Subscribed users access any path; seeded "root" paths public to all. URL-based access in Phase 2 (no auth gate yet). |
+| `pending_review` visibility | Show immediately in generated paths for now. **Per-topic gate**: once a topic has ≥ N `active` Resources, exclude `pending_review` from that topic's generation. N starts at 10 in `src/lib/config.ts` and is tunable. |
+| Web fallback | Vertex Gemini with grounded Google Search (single call, built-in citations). Not an agent-with-tools loop. |
+| Topic dropdown | 4 seeded + **Machine Learning, Statistics, Go** = 7 options. The last three deliberately stress the web-fallback + cache-back loop. |
+| Concept-tag normalization | LLM canonicalization at insert time. No embeddings/pgvector in Phase 2. |
+| Phase-5 columns | `PathItem.isCheckpoint`, `PathItem.branchOnFail` get created in 2a but stay inert. |
+| Path regeneration | Same input = fresh path each time. No caching. |
+| Model selection | Central agent → model registry at `src/lib/models.ts`. Each agent has a default `{ modelId, temperature, maxTokens }`, overridable by env var (e.g. `MODEL_CURRICULUM=…`). Phase 2 wires Gemini 2.5 Flash everywhere; abstraction ships so model swaps are config, not refactor. |
+
+### Block sequence (each <300 LOC, one PR per block)
+
+- [ ] **2a — Prisma schema additions.** `User(plan)`, `Path(createdBy nullable FK)`, `PathItem(status, isCheckpoint, branchOnFail)`, `EnrolledPath`, `Progress`. (`Resource` table landed in Feature 1b.)
+- [ ] **2b — Curriculum agent (library-first) + model registry.** `src/lib/models.ts` + `src/lib/curriculum-agent.ts` doing library-first matching against `Resource` (filters on topic, difficulty, prerequisite/taught concepts), Gemini sequencing + per-item `rationale`. Refactor `/api/health` onto the registry. No web fallback, no DB writes yet. Driven via throwaway `scripts/try-agent.ts`.
+- [ ] **2c — Web fallback + cache-back + tag canonicalization.** Vertex-grounded Google Search when topic ∉ seeded set or library candidates < threshold. LLM tag canonicalization against existing topic vocab. Upsert finds as `Resource(origin='agent', status='pending_review')`. Per-topic ≥10 active gate.
+- [ ] **2d — `POST /api/generate-path` route.** Thin wrapper: validates body → calls agent → creates `Path` + `PathItem` rows in a single transaction.
+- [ ] **2e — Landing page `app/page.tsx`.** Dual-audience hero, form (7-topic dropdown, prior knowledge, timeframe), submit → redirect to `/path/[id]`.
+- [ ] **2f — `app/path/[id]/page.tsx`.** Read-only outline with per-item rationale.
+
+**Exit criteria:** stranger fills form → sees a real sequenced path with per-item rationales. Requesting an off-library topic (Go / ML / Statistics) visibly grows the `Resource` table. Re-running the same off-library topic reuses cached agent-found resources.
+
+## Phase 2.5 — Content-generating agent
+
+Sits between Phase 2 and Phase 3. Not the headline feature, but a real differentiator: while learners walk through a path, selected items get **agent-generated exercises and Jupyter notebooks** attached, so the path isn't just a curated link list.
+
+- [ ] **2.5a — `Exercise` schema + migration; storage bucket provisioned.** `Exercise(resourceId, pathItemId?, prompt, answer, rubric, kind, origin)`. Storage backend TBD between Supabase Storage and Google Cloud Storage (GCS adds a 2nd GCP product and uses credits — decide at phase start).
+- [ ] **2.5b — `lib/content-agent.ts`.** Generates `Exercise` records (text/MCQ first; cheapest, fastest).
+- [ ] **2.5c — Notebook generation.** Agent emits `.ipynb` JSON via Gemini, uploaded to storage, registered as a `Resource(type='interactive', origin='agent', status='pending_review')` with a Colab deeplink.
+- [ ] **2.5d — Wire curriculum-agent → content-agent inside `/api/generate-path`.** Curriculum agent decides *which* items deserve generated content (gap-driven), then fans out in parallel.
+- [ ] **2.5e — `/path/[id]` UI updates.** Render exercises inline; notebook items show "Open in Colab".
+
+**Exit criteria:** generating a path on an off-library topic produces at least one auto-generated exercise and one auto-generated notebook, both linked from `/path/[id]`.
+
+### Open items for Phase 2.5
+
+- Storage backend: Supabase Storage vs Google Cloud Storage.
+- How to grade exercises (reveal-only in 2.5, or wait for Phase 4 tutor to grade?).
+- Cost ceiling per `generate-path` request — may need to cap generated content to N items per path.
 
 ## Phase 3 — Auth + Stripe (intentionally before tutor)
 
