@@ -14,27 +14,29 @@ This roadmap mirrors the build order from the original spec (`learning-path-mvp-
 | Styling | Tailwind CSS | Per spec |
 | Hosting | Vercel now → Cloud Run later | Fast start; Cloud Run later adds a 2nd GCP product + uses credits |
 | ORM | Prisma over Postgres (Supabase-hosted) | Per spec |
+| Resource library | Postgres `Resource` table, agent-extensible | Library compounds with use; Phase 2 agent writes vetted finds back so quality grows over time (decided during 1b discussion) |
 
 ## Phase 1 — Foundation
 
 Goal: a runnable Next.js scaffold + repo conventions + Vertex/Gemini proven end-to-end.
 
 - [x] **Initialization** — `create-next-app`, `CLAUDE.md`, `docs/ROADMAP.md`, `.env.example`, initial commit on `main`
-- [ ] **Feature 1a — Vertex/Gemini hello-world.** `/api/health` route calls Gemini via Vertex; installs `ai` + `@ai-sdk/google-vertex`; GCP project + service account set up; verify model strings against current AI SDK docs (don't trust memory)
-- [ ] **Feature 1b — Seed data.** `data/resources.json` with 8–12 hand-picked items per launch topic, shape `{id, topic, title, url, type, durationMin, summary}`
-- [ ] **Feature 1c — Vercel deploy.** Env vars wired in Vercel dashboard; `/api/health` works in prod
+- [x] **Feature 1a — Vertex/Gemini hello-world.** `/api/health` route calls Gemini via Vertex; installs `ai` + `@ai-sdk/google-vertex`; GCP project + service account set up.
+- [x] **Feature 1b — Seed library.** Postgres `Resource` table (Prisma 7) seeded with ~10 hand-curated entries per launch topic (39 total). Schema supports the Phase 2 growth loop: `slug`, `topic`, `title`, `url`, `type`, `tier`, `durationMin`, `summary`, `difficulty`, `prerequisiteConcepts[]`, `conceptsTaught[]`, `requiresPurchase`, `source` (`seed`/`agent`/`user`), `status` (`active`/`deprecated`/`pending_review`). Curation rules in [`data/README.md`](../data/README.md). Originally scoped as a flat JSON; expanded to DB after discussion locked in "library-as-moat" (see Phase 2). PRs #2–#4.
+- [ ] **Feature 1c — Vercel deploy.** Env vars wired in Vercel dashboard (Vertex creds + `DATABASE_URL` + `DIRECT_URL`); `/api/health` works in prod; production DB migrated + seeded.
 
-**Exit criteria:** `curl https://<app>.vercel.app/api/health` returns a Gemini-generated string.
+**Exit criteria:** `/api/health` returns a Gemini-generated string in prod, AND the Resource library is migrated + seeded in the production Supabase database.
 
-## Phase 2 — Path generation agent (spec §7)
+## Phase 2 — Path generation + library growth agent (spec §7)
 
-- [ ] Prisma schema: `User(plan)`, `Path`, `PathItem(status, isCheckpoint, branchOnFail)`, `Progress`
-- [ ] `lib/curriculum-agent.ts` — input: `{topic, priorKnowledge, timeframe}`; ranks/sequences/justifies via Gemini; returns ordered items with one-line `rationale`
+- [ ] Prisma schema additions: `User(plan)`, `Path`, `PathItem(status, isCheckpoint, branchOnFail)`, `Progress`. (`Resource` table landed in Feature 1b.)
+- [ ] `lib/curriculum-agent.ts` — input: `{topic, priorKnowledge, timeframe}`. **Library-first matching** against the `Resource` table (filters on topic, difficulty, prerequisite/taught concepts). **Web-fallback** via Vertex grounding for topics the library doesn't cover well. **Cache-back**: vetted finds are upserted into `Resource` with `source='agent'` and `status='pending_review'` so the library compounds with use. Ranks/sequences via Gemini; returns ordered items with one-line `rationale`.
+- [ ] Concept-tag normalization — bring agent-added tags into the seed vocabulary (embedding similarity or LLM canonicalization). Seed tags are free-text today; this is the first time matching cares.
 - [ ] `app/api/generate-path/route.ts`
-- [ ] Landing page `app/page.tsx` — dual-audience hero, form: topic dropdown, prior knowledge, timeframe
+- [ ] Landing page `app/page.tsx` — dual-audience hero, form: topic dropdown (extensible beyond the 4 launch topics), prior knowledge, timeframe
 - [ ] `app/path/[id]/page.tsx` — outline rendered (read-only)
 
-**Exit criteria:** stranger fills form → sees a real sequenced path with per-item rationales.
+**Exit criteria:** stranger fills form → sees a real sequenced path with per-item rationales. Requesting an off-library topic visibly grows the `Resource` table.
 
 ## Phase 3 — Auth + Stripe (intentionally before tutor)
 
