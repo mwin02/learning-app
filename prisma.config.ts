@@ -8,7 +8,7 @@ export default defineConfig({
   schema: 'prisma/schema.prisma',
   migrations: {
     path: 'prisma/migrations',
-    seed: 'tsx prisma/seed.ts',
+    seed: 'tsx --env-file=.env.local prisma/seed.ts',
   },
   // Migrations use the direct (5432) connection; the pooled URL goes to the
   // runtime adapter in src/lib/db.ts. Falls back to a placeholder so
