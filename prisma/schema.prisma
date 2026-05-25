@@ -29,8 +29,8 @@ model Resource {
   language             String         @default("en")
   trustScore           Float          @default(0.5)
   attribution          String?
-  sourceId             String?
-  source               Source?        @relation(fields: [sourceId], references: [id])
+  sourceId             String
+  source               Source         @relation(fields: [sourceId], references: [id])
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 

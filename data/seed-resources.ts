@@ -7,6 +7,7 @@ const pythonDataMl: ResourceSeedInput[] = [
   {
     slug: 'python-data-ml-python-official-tutorial',
     topic: 'python-data-ml',
+    sourceSlug: 'python-docs',
     title: 'The Python Tutorial',
     url: 'https://docs.python.org/3/tutorial/',
     type: 'docs',
@@ -28,6 +29,7 @@ const pythonDataMl: ResourceSeedInput[] = [
   {
     slug: 'python-data-ml-fcc-python-mike-dane',
     topic: 'python-data-ml',
+    sourceSlug: 'freecodecamp',
     title: 'Learn Python — Full Course for Beginners (freeCodeCamp / Mike Dane)',
     url: 'https://www.youtube.com/watch?v=rfscVS0vtbw',
     type: 'course',
@@ -47,6 +49,7 @@ const pythonDataMl: ResourceSeedInput[] = [
   {
     slug: 'python-data-ml-corey-schafer-python-tutorials',
     topic: 'python-data-ml',
+    sourceSlug: 'corey-schafer',
     title: 'Python Tutorials (Corey Schafer)',
     url: 'https://www.youtube.com/playlist?list=PL-osiE80TeTskrapNbzXhwoFUiLCjGgY7',
     type: 'course',
@@ -68,6 +71,7 @@ const pythonDataMl: ResourceSeedInput[] = [
   {
     slug: 'python-data-ml-automate-boring-stuff',
     topic: 'python-data-ml',
+    sourceSlug: 'automate-the-boring-stuff',
     title: 'Automate the Boring Stuff with Python (online edition)',
     url: 'https://automatetheboringstuff.com/',
     type: 'book',
@@ -88,6 +92,7 @@ const pythonDataMl: ResourceSeedInput[] = [
   {
     slug: 'python-data-ml-numpy-absolute-basics',
     topic: 'python-data-ml',
+    sourceSlug: 'numpy-docs',
     title: 'NumPy: the absolute basics for beginners',
     url: 'https://numpy.org/doc/stable/user/absolute_beginners.html',
     type: 'docs',
@@ -101,6 +106,7 @@ const pythonDataMl: ResourceSeedInput[] = [
   {
     slug: 'python-data-ml-numpy-quickstart',
     topic: 'python-data-ml',
+    sourceSlug: 'numpy-docs',
     title: 'NumPy Quickstart',
     url: 'https://numpy.org/doc/stable/user/quickstart.html',
     type: 'docs',
@@ -118,6 +124,7 @@ const pythonDataMl: ResourceSeedInput[] = [
   {
     slug: 'python-data-ml-pandas-getting-started',
     topic: 'python-data-ml',
+    sourceSlug: 'pandas-docs',
     title: 'Pandas — Getting started',
     url: 'https://pandas.pydata.org/docs/getting_started/intro_tutorials/index.html',
     type: 'docs',
@@ -136,6 +143,7 @@ const pythonDataMl: ResourceSeedInput[] = [
   {
     slug: 'python-data-ml-pandas-10-minutes',
     topic: 'python-data-ml',
+    sourceSlug: 'pandas-docs',
     title: '10 minutes to pandas',
     url: 'https://pandas.pydata.org/docs/user_guide/10min.html',
     type: 'docs',
@@ -158,6 +166,7 @@ const pythonDataMl: ResourceSeedInput[] = [
   {
     slug: 'python-data-ml-matplotlib-quickstart',
     topic: 'python-data-ml',
+    sourceSlug: 'matplotlib-docs',
     title: 'Matplotlib — Quick start guide',
     url: 'https://matplotlib.org/stable/users/explain/quick_start.html',
     type: 'docs',
@@ -171,6 +180,7 @@ const pythonDataMl: ResourceSeedInput[] = [
   {
     slug: 'python-data-ml-scikit-learn-getting-started',
     topic: 'python-data-ml',
+    sourceSlug: 'scikit-learn-docs',
     title: 'scikit-learn — Getting Started',
     url: 'https://scikit-learn.org/stable/getting_started.html',
     type: 'docs',
@@ -192,6 +202,7 @@ const pythonDataMl: ResourceSeedInput[] = [
   {
     slug: 'python-data-ml-statquest-ml-fundamentals',
     topic: 'python-data-ml',
+    sourceSlug: 'statquest',
     title: 'Machine Learning Fundamentals (StatQuest with Josh Starmer)',
     url: 'https://www.youtube.com/playlist?list=PLblh5JKOoLUICTaGLRoHQDuF_7q2GfuJF',
     type: 'course',
@@ -214,6 +225,7 @@ const javascriptReact: ResourceSeedInput[] = [
   {
     slug: 'javascript-react-mdn-learn-javascript',
     topic: 'javascript-react',
+    sourceSlug: 'mdn',
     title: 'MDN — Learn JavaScript (First Steps through Objects)',
     url: 'https://developer.mozilla.org/en-US/docs/Learn_web_development/Core/Scripting',
     type: 'docs',
@@ -236,6 +248,7 @@ const javascriptReact: ResourceSeedInput[] = [
   {
     slug: 'javascript-react-fcc-js-beau-carnes',
     topic: 'javascript-react',
+    sourceSlug: 'freecodecamp',
     title: 'Learn JavaScript — Full Course for Beginners (freeCodeCamp / Beau Carnes)',
     url: 'https://www.youtube.com/watch?v=PkZNo7MFNFg',
     type: 'course',
@@ -256,6 +269,7 @@ const javascriptReact: ResourceSeedInput[] = [
   {
     slug: 'javascript-react-javascript-info',
     topic: 'javascript-react',
+    sourceSlug: 'javascript-info',
     title: 'The Modern JavaScript Tutorial (javascript.info)',
     url: 'https://javascript.info/',
     type: 'docs',
@@ -277,6 +291,7 @@ const javascriptReact: ResourceSeedInput[] = [
   {
     slug: 'javascript-react-mdn-async-js',
     topic: 'javascript-react',
+    sourceSlug: 'mdn',
     title: 'MDN — Asynchronous JavaScript',
     url: 'https://developer.mozilla.org/en-US/docs/Learn_web_development/Extensions/Async_JS',
     type: 'docs',
@@ -290,6 +305,7 @@ const javascriptReact: ResourceSeedInput[] = [
   {
     slug: 'javascript-react-eloquent-javascript',
     topic: 'javascript-react',
+    sourceSlug: 'eloquent-javascript',
     title: 'Eloquent JavaScript (Marijn Haverbeke)',
     url: 'https://eloquentjavascript.net/',
     type: 'book',
@@ -311,6 +327,7 @@ const javascriptReact: ResourceSeedInput[] = [
   {
     slug: 'javascript-react-react-quick-start',
     topic: 'javascript-react',
+    sourceSlug: 'react-dev',
     title: 'React — Quick Start',
     url: 'https://react.dev/learn',
     type: 'docs',
@@ -331,6 +348,7 @@ const javascriptReact: ResourceSeedInput[] = [
   {
     slug: 'javascript-react-react-tic-tac-toe',
     topic: 'javascript-react',
+    sourceSlug: 'react-dev',
     title: 'React — Tutorial: Tic-Tac-Toe',
     url: 'https://react.dev/learn/tutorial-tic-tac-toe',
     type: 'interactive',
@@ -344,6 +362,7 @@ const javascriptReact: ResourceSeedInput[] = [
   {
     slug: 'javascript-react-react-thinking-in-react',
     topic: 'javascript-react',
+    sourceSlug: 'react-dev',
     title: 'React — Thinking in React',
     url: 'https://react.dev/learn/thinking-in-react',
     type: 'docs',
@@ -357,6 +376,7 @@ const javascriptReact: ResourceSeedInput[] = [
   {
     slug: 'javascript-react-react-managing-state',
     topic: 'javascript-react',
+    sourceSlug: 'react-dev',
     title: 'React — Managing State',
     url: 'https://react.dev/learn/managing-state',
     type: 'docs',
@@ -375,6 +395,7 @@ const javascriptReact: ResourceSeedInput[] = [
   {
     slug: 'javascript-react-react-hooks-reference',
     topic: 'javascript-react',
+    sourceSlug: 'react-dev',
     title: 'React — Hooks reference',
     url: 'https://react.dev/reference/react/hooks',
     type: 'docs',
@@ -396,6 +417,7 @@ const calculus: ResourceSeedInput[] = [
   {
     slug: 'calculus-3b1b-essence-of-calculus',
     topic: 'calculus',
+    sourceSlug: 'three-blue-one-brown',
     title: 'Essence of Calculus (3Blue1Brown)',
     url: 'https://www.youtube.com/playlist?list=PLZHQObOWTQDMsr9K-rj53DwVRMYO3t5Yr',
     type: 'course',
@@ -416,6 +438,7 @@ const calculus: ResourceSeedInput[] = [
   {
     slug: 'calculus-khan-differential',
     topic: 'calculus',
+    sourceSlug: 'khan-academy',
     title: 'Khan Academy — Differential Calculus',
     url: 'https://www.khanacademy.org/math/differential-calculus',
     type: 'interactive',
@@ -437,6 +460,7 @@ const calculus: ResourceSeedInput[] = [
   {
     slug: 'calculus-khan-integral',
     topic: 'calculus',
+    sourceSlug: 'khan-academy',
     title: 'Khan Academy — Integral Calculus',
     url: 'https://www.khanacademy.org/math/integral-calculus',
     type: 'interactive',
@@ -457,6 +481,7 @@ const calculus: ResourceSeedInput[] = [
   {
     slug: 'calculus-khan-multivariable',
     topic: 'calculus',
+    sourceSlug: 'khan-academy',
     title: 'Khan Academy — Multivariable Calculus',
     url: 'https://www.khanacademy.org/math/multivariable-calculus',
     type: 'interactive',
@@ -475,6 +500,7 @@ const calculus: ResourceSeedInput[] = [
   {
     slug: 'calculus-pauls-notes-calc-i',
     topic: 'calculus',
+    sourceSlug: 'pauls-online-math-notes',
     title: "Paul's Online Math Notes — Calculus I",
     url: 'https://tutorial.math.lamar.edu/Classes/CalcI/CalcI.aspx',
     type: 'docs',
@@ -496,6 +522,7 @@ const calculus: ResourceSeedInput[] = [
   {
     slug: 'calculus-pauls-notes-calc-ii',
     topic: 'calculus',
+    sourceSlug: 'pauls-online-math-notes',
     title: "Paul's Online Math Notes — Calculus II",
     url: 'https://tutorial.math.lamar.edu/Classes/CalcII/CalcII.aspx',
     type: 'docs',
@@ -514,6 +541,7 @@ const calculus: ResourceSeedInput[] = [
   {
     slug: 'calculus-mit-ocw-18-01',
     topic: 'calculus',
+    sourceSlug: 'mit-ocw',
     title: 'MIT OCW — 18.01 Single Variable Calculus',
     url: 'https://ocw.mit.edu/courses/18-01-single-variable-calculus-fall-2006/',
     type: 'course',
@@ -534,6 +562,7 @@ const calculus: ResourceSeedInput[] = [
   {
     slug: 'calculus-mit-ocw-18-02',
     topic: 'calculus',
+    sourceSlug: 'mit-ocw',
     title: 'MIT OCW — 18.02 Multivariable Calculus',
     url: 'https://ocw.mit.edu/courses/18-02-multivariable-calculus-fall-2007/',
     type: 'course',
@@ -552,6 +581,7 @@ const calculus: ResourceSeedInput[] = [
   {
     slug: 'calculus-professor-leonard-calc-1',
     topic: 'calculus',
+    sourceSlug: 'professor-leonard',
     title: 'Calculus 1 — Full Lectures (Professor Leonard)',
     url: 'https://www.youtube.com/playlist?list=PLF797E961509B4EB5',
     type: 'course',
@@ -572,6 +602,7 @@ const calculus: ResourceSeedInput[] = [
   {
     slug: 'calculus-openstax-volume-1',
     topic: 'calculus',
+    sourceSlug: 'openstax',
     title: 'OpenStax — Calculus Volume 1',
     url: 'https://openstax.org/details/books/calculus-volume-1',
     type: 'book',
@@ -595,6 +626,7 @@ const linearAlgebra: ResourceSeedInput[] = [
   {
     slug: 'linear-algebra-3b1b-essence-of-linear-algebra',
     topic: 'linear-algebra',
+    sourceSlug: 'three-blue-one-brown',
     title: 'Essence of Linear Algebra (3Blue1Brown)',
     url: 'https://www.youtube.com/playlist?list=PLZHQObOWTQDPD3MizzM2xVFitgF8hE_ab',
     type: 'course',
@@ -616,6 +648,7 @@ const linearAlgebra: ResourceSeedInput[] = [
   {
     slug: 'linear-algebra-khan-linear-algebra',
     topic: 'linear-algebra',
+    sourceSlug: 'khan-academy',
     title: 'Khan Academy — Linear Algebra',
     url: 'https://www.khanacademy.org/math/linear-algebra',
     type: 'interactive',
@@ -639,6 +672,7 @@ const linearAlgebra: ResourceSeedInput[] = [
   {
     slug: 'linear-algebra-mit-ocw-18-06',
     topic: 'linear-algebra',
+    sourceSlug: 'mit-ocw',
     title: 'MIT OCW — 18.06 Linear Algebra (Gilbert Strang)',
     url: 'https://ocw.mit.edu/courses/18-06-linear-algebra-spring-2010/',
     type: 'course',
@@ -660,6 +694,7 @@ const linearAlgebra: ResourceSeedInput[] = [
   {
     slug: 'linear-algebra-mit-ocw-18-065',
     topic: 'linear-algebra',
+    sourceSlug: 'mit-ocw',
     title: 'MIT OCW — 18.065 Matrix Methods in Data Analysis (Gilbert Strang)',
     url: 'https://ocw.mit.edu/courses/18-065-matrix-methods-in-data-analysis-signal-processing-and-machine-learning-spring-2018/',
     type: 'course',
@@ -682,6 +717,7 @@ const linearAlgebra: ResourceSeedInput[] = [
   {
     slug: 'linear-algebra-immersive-math',
     topic: 'linear-algebra',
+    sourceSlug: 'immersive-math',
     title: 'Immersive Linear Algebra (Ström, Åström, Akenine-Möller)',
     url: 'https://immersivemath.com/ila/index.html',
     type: 'interactive',
@@ -703,6 +739,7 @@ const linearAlgebra: ResourceSeedInput[] = [
   {
     slug: 'linear-algebra-mml-book',
     topic: 'linear-algebra',
+    sourceSlug: 'mml-book',
     title: 'Mathematics for Machine Learning (Deisenroth, Faisal, Ong)',
     url: 'https://mml-book.github.io/',
     type: 'book',
@@ -723,6 +760,7 @@ const linearAlgebra: ResourceSeedInput[] = [
   {
     slug: 'linear-algebra-axler-done-right',
     topic: 'linear-algebra',
+    sourceSlug: 'linear-algebra-done-right',
     title: 'Linear Algebra Done Right, 4th ed. (Sheldon Axler)',
     url: 'https://linear.axler.net/',
     type: 'book',
@@ -744,6 +782,7 @@ const linearAlgebra: ResourceSeedInput[] = [
   {
     slug: 'linear-algebra-strang-intro-textbook',
     topic: 'linear-algebra',
+    sourceSlug: 'gilbert-strang',
     title: 'Introduction to Linear Algebra, 6th ed. (Gilbert Strang)',
     url: 'https://math.mit.edu/~gs/linearalgebra/',
     type: 'book',
