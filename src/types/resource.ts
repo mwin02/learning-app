@@ -13,8 +13,10 @@ export const TOPIC_SLUGS: readonly TopicSlug[] = [
   'linear-algebra',
 ] as const;
 
-// Shape used by the seed script: every field set by hand, no auto fields.
+// Shape used by the seed script. Curators set `sourceSlug` (resolved by the
+// seed script to a real sourceId); `trustScore` is omitted because it's
+// inherited from the source's trustScore at create time.
 export type ResourceSeedInput = Omit<
   Prisma.ResourceCreateInput,
-  'id' | 'createdAt' | 'updatedAt'
-> & { topic: TopicSlug };
+  'id' | 'createdAt' | 'updatedAt' | 'source' | 'trustScore'
+> & { topic: TopicSlug; sourceSlug: string };
