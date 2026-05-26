@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:17
+    container_name: learning-app-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: learning_app
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - learning_app_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d learning_app"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  learning_app_pgdata:
