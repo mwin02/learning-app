@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: learning_app
     ports:
-      - "55432:5432"
+      - "127.0.0.1:55432:5432"
     volumes:
       - learning_app_pgdata:/var/lib/postgresql/data
     healthcheck:
