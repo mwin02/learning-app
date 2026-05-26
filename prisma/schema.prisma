@@ -31,6 +31,7 @@ model Resource {
   attribution          String?
   sourceId             String
   source               Source         @relation(fields: [sourceId], references: [id])
+  pathItems            PathItem[]
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 
@@ -91,4 +92,108 @@ enum ResourceStatus {
   active
   deprecated
   pending_review
+}
+
+// Phase 2 keeps User minimal. Auth fields (email, supabaseId, etc.) land in
+// Phase 3 with Supabase Google OAuth. Paid status is derived from Subscription.
+model User {
+  id            String         @id @default(cuid())
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  subscription  Subscription?
+  createdPaths  Path[]
+  enrollments   EnrolledPath[]
+  progress      Progress[]
+}
+
+// Scaffold only — Phase 3 (Stripe) will extend with stripeCustomerId,
+// stripeSubscriptionId, currentPeriodEnd, cancellation reasons, etc. `status`
+// is a free-form string so we don't lock an enum before Stripe dictates the
+// vocabulary. Splitting this from User now (rather than a `plan` column)
+// acknowledges that billing concerns belong in their own aggregate.
+model Subscription {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status    String   @default("inactive")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Generation inputs live on Path (not EnrolledPath) because they shape the
+// agent's content selection — prior knowledge gates which prereqs to skip,
+// timeframe + hours/week trim optional items and bias toward shorter
+// resources. Storing them here makes the path reproducible and the per-item
+// rationale auditable ("why this fits a 6-week beginner at 4 hrs/week").
+// Trade-off: less Path reuse across users with similar-but-different inputs;
+// acceptable because (a) "no caching, same input = fresh path" is locked, and
+// (b) dedup, if it becomes worthwhile, belongs at the agent layer.
+model Path {
+  id                   String         @id @default(cuid())
+  topic                String
+  title                String
+  summary              String
+  difficulty           Difficulty
+  inputPriorKnowledge  String?
+  inputTimeframeWeeks  Int?
+  inputHoursPerWeek    Int?
+  createdById          String?
+  createdBy            User?          @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  items                PathItem[]
+  enrollments          EnrolledPath[]
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  @@index([topic])
+  @@index([createdById])
+}
+
+model PathItem {
+  id            String         @id @default(cuid())
+  pathId        String
+  path          Path           @relation(fields: [pathId], references: [id], onDelete: Cascade)
+  resourceId    String
+  resource      Resource       @relation(fields: [resourceId], references: [id])
+  order         Int
+  rationale     String
+  status        PathItemStatus @default(active)
+  // Phase-5 scaffolding — created here per the locked plan but inert until
+  // the adaptive-branch feature lands. `branchOnFail` is a plain nullable
+  // string (not an FK) so Phase 5 can decide whether it points to a
+  // PathItem id, a Resource id, or something else without a migration.
+  isCheckpoint  Boolean        @default(false)
+  branchOnFail  String?
+  progress      Progress[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@unique([pathId, order])
+  @@index([resourceId])
+}
+
+enum PathItemStatus {
+  active
+  removed
+}
+
+model EnrolledPath {
+  userId     String
+  pathId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  path       Path     @relation(fields: [pathId], references: [id], onDelete: Cascade)
+  enrolledAt DateTime @default(now())
+
+  @@id([userId, pathId])
+  @@index([pathId])
+}
+
+model Progress {
+  userId      String
+  pathItemId  String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pathItem    PathItem @relation(fields: [pathItemId], references: [id], onDelete: Cascade)
+  completedAt DateTime @default(now())
+
+  @@id([userId, pathItemId])
+  @@index([pathItemId])
 }
