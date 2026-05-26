@@ -1,5 +1,5 @@
 import { generateText } from 'ai';
-import { geminiFlash } from '@/lib/vertex';
+import { getModel } from '@/lib/models';
 
 export async function GET(request: Request) {
   const probe = new URL(request.url).searchParams.get('probe');
@@ -9,11 +9,17 @@ export async function GET(request: Request) {
   }
 
   try {
-    const { text } = await generateText({
-      model: geminiFlash,
+    const { model, modelId, temperature, maxOutputTokens } = getModel('health');
+    const { text, usage } = await generateText({
+      model,
+      temperature,
+      maxOutputTokens,
       prompt: 'Reply with the single word: pong',
     });
-    return Response.json({ ok: true, model: 'gemini-2.5-flash', reply: text });
+    // TODO(observability): replace with structured logging once multiple
+    // agents are in flight. For now this is enough to spot-check usage.
+    console.log('[health] call', { modelId, usage });
+    return Response.json({ ok: true, model: modelId, reply: text, usage });
   } catch (err) {
     return Response.json(
       { ok: false, error: (err as Error).message },
