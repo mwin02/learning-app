@@ -42,10 +42,12 @@ Goal: a runnable Next.js scaffold + repo conventions + Vertex/Gemini proven end-
 | Phase-5 columns | `PathItem.isCheckpoint`, `PathItem.branchOnFail` get created in 2a but stay inert. |
 | Path regeneration | Same input = fresh path each time. No caching. |
 | Model selection | Central agent → model registry at `src/lib/models.ts`. Each agent has a default `{ modelId, temperature, maxTokens }`, overridable by env var (e.g. `MODEL_CURRICULUM=…`). Phase 2 wires Gemini 2.5 Flash everywhere; abstraction ships so model swaps are config, not refactor. |
+| Billing modeling | Separate `Subscription` table from day 1 (scaffold in 2a, populated in Phase 3), not a `plan` column on `User`. Acknowledges billing belongs in its own aggregate; avoids a schema migration when Stripe lands. |
+| Generation inputs storage | `Path.inputPriorKnowledge`, `Path.inputTimeframeWeeks`, `Path.inputHoursPerWeek` live on `Path`, not `EnrolledPath`. These shape *what content* the agent picks (not just pacing), so storing on `Path` keeps the artifact reproducible and per-item rationale auditable. Trade-off: less Path reuse across users with similar inputs; acceptable because "no caching" is locked and dedup belongs at the agent layer if it ever matters. |
 
 ### Block sequence (each <300 LOC, one PR per block)
 
-- [ ] **2a — Prisma schema additions.** `User(plan)`, `Path(createdBy nullable FK)`, `PathItem(status, isCheckpoint, branchOnFail)`, `EnrolledPath`, `Progress`. (`Resource` table landed in Feature 1b.)
+- [x] **2a — Prisma schema additions.** `User` (minimal), `Subscription` (scaffold), `Path(createdBy nullable FK, input* snapshot)`, `PathItem(status, isCheckpoint, branchOnFail)`, `EnrolledPath`, `Progress`. (`Resource` table landed in Feature 1b.) PR #14.
 - [ ] **2b — Curriculum agent (library-first) + model registry.** `src/lib/models.ts` + `src/lib/curriculum-agent.ts` doing library-first matching against `Resource` (filters on topic, difficulty, prerequisite/taught concepts), Gemini sequencing + per-item `rationale`. Refactor `/api/health` onto the registry. No web fallback, no DB writes yet. Driven via throwaway `scripts/try-agent.ts`.
 - [ ] **2c — Web fallback + cache-back + tag canonicalization.** Vertex-grounded Google Search when topic ∉ seeded set or library candidates < threshold. LLM tag canonicalization against existing topic vocab. Upsert finds as `Resource(origin='agent', status='pending_review')`. Per-topic ≥10 active gate.
 - [ ] **2d — `POST /api/generate-path` route.** Thin wrapper: validates body → calls agent → creates `Path` + `PathItem` rows in a single transaction.
