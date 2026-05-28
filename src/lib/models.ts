@@ -7,7 +7,7 @@ import { vertex } from '@/lib/vertex';
 // (`MODEL_<AGENT>`), so a deployment can swap models without a redeploy
 // but can't silently change generation behavior.
 
-type AgentName = 'curriculum' | 'health';
+type AgentName = 'curriculum' | 'curriculumFallback' | 'tagCanonicalizer' | 'health';
 
 type ModelConfig = {
   modelId: string;
@@ -24,6 +24,20 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // with many candidates. 16k leaves headroom for thinking + a path of
     // ~10 items with verbose rationales.
     maxOutputTokens: 16384,
+  },
+  curriculumFallback: {
+    // Grounded Google Search discovery call. Temperature low-ish so the model
+    // sticks to authoritative URLs from the search citations instead of
+    // free-styling, but not zero — we want variety across re-runs.
+    modelId: 'gemini-2.5-flash',
+    temperature: 0.3,
+    maxOutputTokens: 16384,
+  },
+  tagCanonicalizer: {
+    // Plain JSON shape, no grounding. Deterministic mapping job.
+    modelId: 'gemini-2.5-flash',
+    temperature: 0,
+    maxOutputTokens: 4096,
   },
   health: {
     modelId: 'gemini-2.5-flash',

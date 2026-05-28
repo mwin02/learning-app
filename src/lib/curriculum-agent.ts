@@ -2,7 +2,8 @@ import { Output, generateText } from 'ai';
 import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { getModel } from '@/lib/models';
-import { PENDING_REVIEW_GATE_PER_TOPIC } from '@/lib/config';
+import { FALLBACK_THRESHOLD, FALLBACK_TARGET_COUNT, PENDING_REVIEW_GATE_PER_TOPIC } from '@/lib/config';
+import { runWebFallback } from '@/lib/web-fallback';
 import type { Difficulty, Resource } from '@prisma/client';
 
 export type CurriculumInput = {
@@ -58,7 +59,7 @@ export async function generateCurriculum(
   const candidates = await loadCandidates(topic);
   if (candidates.length === 0) {
     throw new CurriculumAgentError(
-      `No active Resources found for topic '${topic}'. Web fallback lands in Phase 2c.`,
+      `No Resources found for topic '${topic}' after web fallback. The discovery call returned nothing usable.`,
     );
   }
 
@@ -111,6 +112,20 @@ async function loadCandidates(topic: string): Promise<Resource[]> {
   const active = await prisma.resource.findMany({
     where: { topic, status: 'active' },
   });
+
+  // Below the fallback threshold the library is too thin to compose a useful
+  // path on its own — run the web fallback to compound the library, then
+  // re-query. Fallback writes pending_review rows, picked up by the union
+  // below (since active < PENDING_REVIEW_GATE_PER_TOPIC strictly above
+  // FALLBACK_THRESHOLD).
+  if (active.length < FALLBACK_THRESHOLD) {
+    console.log('[curriculum-agent] fallback triggered', { topic, activeCount: active.length, threshold: FALLBACK_THRESHOLD });
+    await runWebFallback({ topic, targetCount: FALLBACK_TARGET_COUNT });
+    const refreshed = await prisma.resource.findMany({ where: { topic, status: 'active' } });
+    const pending = await prisma.resource.findMany({ where: { topic, status: 'pending_review' } });
+    return [...refreshed, ...pending];
+  }
+
   if (active.length >= PENDING_REVIEW_GATE_PER_TOPIC) {
     return active;
   }

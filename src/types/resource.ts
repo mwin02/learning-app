@@ -4,13 +4,19 @@ export type TopicSlug =
   | 'python-data-ml'
   | 'javascript-react'
   | 'calculus'
-  | 'linear-algebra';
+  | 'linear-algebra'
+  | 'machine-learning'
+  | 'statistics'
+  | 'go';
 
 export const TOPIC_SLUGS: readonly TopicSlug[] = [
   'python-data-ml',
   'javascript-react',
   'calculus',
   'linear-algebra',
+  'machine-learning',
+  'statistics',
+  'go',
 ] as const;
 
 // Shape used by the seed script. Curators set `sourceSlug` (resolved by the
