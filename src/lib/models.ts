@@ -7,7 +7,13 @@ import { vertex } from '@/lib/vertex';
 // (`MODEL_<AGENT>`), so a deployment can swap models without a redeploy
 // but can't silently change generation behavior.
 
-type AgentName = 'curriculum' | 'curriculumFallback' | 'tagCanonicalizer' | 'validityAgent' | 'health';
+type AgentName =
+  | 'curriculum'
+  | 'curriculumFallback'
+  | 'tagCanonicalizer'
+  | 'validityAgent'
+  | 'topicGate'
+  | 'health';
 
 type ModelConfig = {
   modelId: string;
@@ -48,6 +54,13 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     modelId: 'gemini-2.5-flash',
     temperature: 0,
     maxOutputTokens: 4096,
+  },
+  topicGate: {
+    // One-shot subject-domain classifier ({math, science, cs} or reject).
+    // Cheap, deterministic; runs at the HTTP boundary for off-library topics.
+    modelId: 'gemini-2.5-flash',
+    temperature: 0,
+    maxOutputTokens: 512,
   },
   health: {
     modelId: 'gemini-2.5-flash',
