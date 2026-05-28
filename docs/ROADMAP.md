@@ -49,32 +49,86 @@ Goal: a runnable Next.js scaffold + repo conventions + Vertex/Gemini proven end-
 ### Block sequence (each <300 LOC, one PR per block)
 
 - [x] **2a — Prisma schema additions.** `User` (minimal), `Subscription` (scaffold), `Path(createdBy nullable FK, input* snapshot)`, `PathItem(status, isCheckpoint, branchOnFail)`, `EnrolledPath`, `Progress`. (`Resource` table landed in Feature 1b.) PR #14.
-- [ ] **2b — Curriculum agent (library-first) + model registry.** `src/lib/models.ts` + `src/lib/curriculum-agent.ts` doing library-first matching against `Resource` (filters on topic, difficulty, prerequisite/taught concepts), Gemini sequencing + per-item `rationale`. Refactor `/api/health` onto the registry. No web fallback, no DB writes yet. Driven via throwaway `scripts/try-agent.ts`.
-- [ ] **2c — Web fallback + cache-back + tag canonicalization.** Vertex-grounded Google Search when topic ∉ seeded set or library candidates < threshold. LLM tag canonicalization against existing topic vocab. Upsert finds as `Resource(origin='agent', status='pending_review')`. Per-topic ≥10 active gate.
-- [ ] **2d — `POST /api/generate-path` route.** Thin wrapper: validates body → calls agent → creates `Path` + `PathItem` rows in a single transaction.
-- [ ] **2e — Agent playground (`/playground`).** Internal-only, `DEV_AUTH`-gated. Free-text form posts to `/api/generate-path`; detail page renders the persisted Path with items + clickable resource URLs and a raw-JSON inspector. Index page lists recent paths for browsing. No public surface; pure dev tool for exercising the curriculum agent end-to-end. Pages server-render via Prisma directly — no public read API in this block.
-- [ ] **2f — Landing page `app/page.tsx`.** Dual-audience hero, form (7-topic dropdown, prior knowledge, timeframe), submit → redirect to `/path/[id]`.
-- [ ] **2g — `app/path/[id]/page.tsx`.** Read-only outline with per-item rationale. Introduces the public `GET /api/paths/[id]` endpoint.
+- [x] **2b — Curriculum agent (library-first) + model registry.** `src/lib/models.ts` + `src/lib/curriculum-agent.ts` doing library-first matching against `Resource` (filters on topic, difficulty, prerequisite/taught concepts), Gemini sequencing + per-item `rationale`. Refactored `/api/health` onto the registry. PR #17.
+- [x] **2c — Web fallback + cache-back + tag canonicalization.** Vertex-grounded Google Search when topic ∉ seeded set or library candidates < threshold. LLM tag canonicalization against existing topic vocab. Upserts finds as `Resource(origin='agent', status='pending_review')`. Per-topic ≥10 active gate. Includes 2c.5 validity loop (discover/validate). PRs #18, #19.
+- [x] **2d — `POST /api/generate-path` route + `PathService`.** Validates body → calls agent → creates `Path` + `PathItem` rows in a single transaction. Hardens against agent cuid hallucination. PRs #20, #21.
+- [x] **2e — Agent playground (`/playground`).** Internal-only, `DEV_AUTH`-gated. Free-text form posts to `/api/generate-path`; detail page renders the persisted Path with items + clickable resource URLs and a raw-JSON inspector. Index lists recent paths. PR #22.
 
-**Exit criteria:** stranger fills form → sees a real sequenced path with per-item rationales. Requesting an off-library topic (Go / ML / Statistics) visibly grows the `Resource` table. Re-running the same off-library topic reuses cached agent-found resources.
+**Exit criteria (met):** stranger fills the playground form → sees a real sequenced path with per-item rationales. Off-library topics (Go / ML / Statistics) visibly grow the `Resource` table via the web-fallback + cache-back loop.
 
-## Phase 2.5 — Content-generating agent
+### Discoveries during 2e that reshape what's next
 
-Sits between Phase 2 and Phase 3. Not the headline feature, but a real differentiator: while learners walk through a path, selected items get **agent-generated exercises and Jupyter notebooks** attached, so the path isn't just a curated link list.
+The playground surfaced two problems with treating a Path as a flat resource list:
 
-- [ ] **2.5a — `Exercise` schema + migration; storage bucket provisioned.** `Exercise(resourceId, pathItemId?, prompt, answer, rubric, kind, origin)`. Storage backend TBD between Supabase Storage and Google Cloud Storage (GCS adds a 2nd GCP product and uses credits — decide at phase start).
-- [ ] **2.5b — `lib/content-agent.ts`.** Generates `Exercise` records (text/MCQ first; cheapest, fastest).
-- [ ] **2.5c — Notebook generation.** Agent emits `.ipynb` JSON via Gemini, uploaded to storage, registered as a `Resource(type='interactive', origin='agent', status='pending_review')` with a Colab deeplink.
-- [ ] **2.5d — Wire curriculum-agent → content-agent inside `/api/generate-path`.** Curriculum agent decides *which* items deserve generated content (gap-driven), then fans out in parallel.
-- [ ] **2.5e — `/path/[id]` UI updates.** Render exercises inline; notebook items show "Open in Colab".
+1. **Whole-course resources overlap.** When two PathItems are themselves multi-topic courses (e.g. two Python courses), they cover the same concepts (loops, functions, etc.). The Path becomes redundant.
+2. **Leaky delivery.** Items that link out to YouTube playlists, full courses, or doc trees expect the learner to navigate inside the external site. That kills our progress tracking, our future tutor agent's context, and our retention.
 
-**Exit criteria:** generating a path on an off-library topic produces at least one auto-generated exercise and one auto-generated notebook, both linked from `/path/[id]`.
+Conclusion: a `Path` of curated links is the right *generation* artifact, but not the right *delivery* artifact. We need a layer above PathItem that turns curated resources into a structured, lesson-by-lesson experience — closer to Khan Academy / Coursera in shape, but built from heterogeneous web resources. That is Phase 2.5 below (rescoped from "content-generating agent").
+
+## Phase 2.5 — Structured Track Agent (rescoped)
+
+Originally scoped as "agent-generated exercises and notebooks." Rescoped after the 2e discoveries above: the lesson layer is the missing primitive; exercises and notebooks **attach to lessons**, not directly to PathItems.
+
+Two distinct concerns, both belong to this phase:
+
+1. **Decomposition is a *library* concern, not a track concern.** Container resources (YouTube playlists, doc trees, whole courses) are decomposed into atomic child Resources **at discovery time**, once, and cached. The curriculum agent only picks atomic, pickable Resources. This means our resource library grows in atomic units over time, and decomposition becomes less of a problem as the library matures.
+2. **Track creation composes, dedups, and classifies.** Given a `Path` of atomic PathItems, the Track agent produces a `Track` of ordered `Lesson`s, surfaces cross-resource concept duplicates as Lessons-with-alternates, classifies per-resource delivery mode (embed vs new-tab vs native), and triggers exercise/notebook generation for gap-prone Lessons. **No decomposition at track time.**
+
+### Locked decisions
+
+| Decision | Choice |
+|---|---|
+| Naming | `Track` for the structured wrapper; `Lesson` for the unit. Avoids collision with "course" as a resource type. |
+| Where decomposition lives | **Resource-discovery time, not track-creation time.** Decomposed once, cached on Resource forever. Inside the 2c discovery flow: classify type → if container, fetch outline + decompose → upsert parent + N children in one transaction. Discoverer pays the cost; future track generations are free. |
+| Container resources | `course`-typed Resources still exist but are **container-only** — never picked by the curriculum agent. Atomic children link via `Resource.parentResourceId` + `Resource.orderInParent`. Containers carry overall arc metadata (title, summary, author intent) that gives the curriculum agent a cohesion signal. |
+| Decomposition router | Ship **YouTube playlists (Data API) + doc-site TOC scrape + "single = atomic" fast-path** first. Paid platforms (Coursera/Udemy/edX) deliberately out of scope — login/paywall problems aren't worth solving. Unsupported types fall back to `human_review` queue; container row exists but is unpickable until curated. |
+| Decomposition status | Single field: `Resource.decompositionStatus ∈ {atomic, decomposed, pending, unsupported, human_review}`. Atomic + decomposed-children are pickable; the rest aren't. Replaces a separate `pickable` flag. |
+| Concept re-derivation on decompose | Children re-derive `conceptsTaught` from their own title/transcript, not inherited slices of the parent's concepts. Dedup accuracy depends on it. |
+| Duplicate handling | **Detection at track time, not prevention.** Two atomic Resources covering the same concept → collapsed into one Lesson with `primary` + `alternate` `LessonResource`s. Alternate explanations on the same concept are a learner-value feature. |
+| Non-embeddable delivery | **Open in new tab + "mark complete" return-flow.** Iframe where allowed (YouTube embeds, most docs); new-tab where blocked. Revisit later for proxying / summaries / reader-mode — all have tradeoffs to weigh then. |
+| `deliveryMode` location | On **`LessonResource`**, not `Lesson`. A single Lesson can mix embeddable video + new-tab article + native exercise; mode is per-resource-in-this-context. |
+| PathItem's role under Tracks | PathItem stays as the **curriculum-agent's record of intent** — what it picked and why. Rationale is preserved and visible. The Track agent reads PathItem rationales when composing Lessons; LessonResource references Resource directly (not via PathItem). PathItem becomes effectively an audit log. |
+| Track ↔ Path relationship | `Track.pathId` unique (1:1). `Track.status ∈ {pending, building, ready, failed}` for sync-lazy generation. |
+| Generation timing | **Sync-lazy.** `/api/generate-path` still returns the Path immediately (unchanged). Track building happens on first visit to `/playground/path/[id]` (later `/path/[id]`), with a visible progress UI. Exercises/notebooks lazy-load per Lesson within that. |
+| Where exercises live | `Exercise` attaches to `Lesson`, not `PathItem` or `Resource`. Notebooks become Resources of `type='interactive'`, `origin='agent'`, linked from a Lesson via LessonResource. |
+
+### Block sequence (each <300 LOC, one PR per block)
+
+- [ ] **2.5a — Schema additions.** Migration only.
+  - `Resource` adds: `parentResourceId` (self-FK), `orderInParent`, `decompositionStatus`.
+  - `Track(id, pathId unique, status, …)`
+  - `Lesson(id, trackId, orderInTrack, title, summary, conceptsTaught[], estMinutes)`
+  - `LessonResource(lessonId, resourceId, role: 'primary'|'alternate', deliveryMode: 'embed'|'newtab'|'native', segmentRef?)` — `segmentRef` carries YouTube timestamps / doc anchors when a Lesson uses only part of a resource.
+  - `Exercise(lessonId, prompt, answer, rubric, kind, origin)`.
+- [ ] **2.5b — Decomposition pipeline at discovery + seed backfill.** `lib/decomposition-agent.ts` with a router: YouTube playlists via Data API, doc-site TOC scrape, atomic fast-path, fallback → `human_review`. Wired into 2c's discovery flow synchronously: classify → decompose → commit parent + children in one transaction. Includes `scripts/decompose-seed-library.ts` to migrate existing course-type rows from 1b. Also: extend curriculum agent to skip non-pickable Resources and prefer same-parent cohesion. Playground gains a `/playground/decomposition-queue` view for the `human_review` queue.
+- [ ] **2.5c — Track agent (composition + dedup).** `lib/track-agent.ts` takes a persisted Path → groups PathItems' Resources into ordered Lessons (factoring in each PathItem's rationale), detects cross-resource concept overlap, collapses duplicates into Lessons-with-alternates with `primary` selected by trust score + path order. Writes a `Track` with `status='building'` → `'ready'`. Triggered lazily on first `/playground/path/[id]` visit.
+- [ ] **2.5d — Delivery-mode classifier.** Per `LessonResource`, set `deliveryMode`. Known-good embed allowlist (YouTube, MDN, Python docs, etc.) + runtime header probe (`X-Frame-Options` / `CSP: frame-ancestors`) cached on `Resource`. Native = agent-generated content we host.
+- [ ] **2.5e — Content agent: exercises.** `lib/content-agent.ts` generates `Exercise` records (text/MCQ first) for Lessons flagged gap-prone (source resource has no native exercises, concept is foundational). Fans out in parallel during track building.
+- [ ] **2.5f — Content agent: notebooks.** Agent emits `.ipynb` JSON via Gemini, uploaded to storage, registered as `Resource(type='interactive', origin='agent', status='pending_review')`, linked into a Lesson via LessonResource. Storage backend (Supabase Storage vs GCS) decided at start of block.
+- [ ] **2.5g — Playground updates.** `/playground/path/[id]` renders the Track/Lesson structure: ordered Lessons, primary + alternate resources, per-LessonResource delivery mode, embedded iframe where applicable, inline exercises, "Open in Colab" for notebooks. Track-building progress UI for sync-lazy generation. Raw-JSON inspector extended to Track/Lesson.
+
+**Exit criteria:** running the playground on a topic that pulls in a YouTube playlist or doc tree produces a Track where (a) the container is decomposed into atomic child Resources in the library, (b) overlapping concepts across different source resources are visibly surfaced as alternates on a shared Lesson, (c) LessonResources have a delivery mode and embed where allowed, (d) at least one Lesson has an agent-generated exercise and one has an agent-generated notebook, and (e) the `human_review` queue is observable in the playground.
 
 ### Open items for Phase 2.5
 
-- Storage backend: Supabase Storage vs Google Cloud Storage.
-- How to grade exercises (reveal-only in 2.5, or wait for Phase 4 tutor to grade?).
-- Cost ceiling per `generate-path` request — may need to cap generated content to N items per path.
+- **Segment refs for non-YouTube resources.** YouTube timestamps are clean. Doc anchors require fetching + parsing HTML headings. May need a fallback "describe the segment in prose" when no addressable anchor exists.
+- **How "alternate" surfaces in UI.** Tabs? Stacked cards? "Try a different explanation" button? Decide during 2.5g; shapes 2.5c data model only lightly.
+- **Lesson concept-purity vs multi-concept.** Smaller Lessons dedup better but fragment pacing. Decide empirically during 2.5c.
+- **Exercise grading.** Reveal-only in 2.5, or wait for Phase 4 tutor to grade? Lean reveal-only here.
+- **Cost ceiling per track build.** Exercises + notebooks fanned out per Lesson can be expensive. Cap generated content (notebooks especially) to N per Track.
+- **Idempotency of track regen.** Track failures shouldn't poison the Path. `Track.status='failed'` with diagnostic; regen replaces.
+- **Decomposition failure during discovery.** Transient YouTube API / scrape failures shouldn't nuke the discovery. Commit parent with `decompositionStatus='pending'`, retry via `scripts/retry-decomposition.ts` or on next touch. Parent stays unpickable until decomposed.
+- **Discovery latency.** First user to trigger an off-library topic that finds a container pays the decomposition cost (~30s for a 30-video playlist). Accepted for now; revisit in 2.6 if it becomes a UX problem.
+- **Non-embeddable circumvention (revisit).** Options to weigh later: server-side proxy + rewrite (legal risk), agent-generated summaries (quality risk), reader-mode extraction.
+
+## Phase 2.6 — Frontend (was 2f/2g)
+
+Public-facing surfaces. Deferred until after 2.5 because rendering Path-as-flat-list would be throwaway once the Lesson layer exists.
+
+- [ ] **2.6a — Landing page `app/page.tsx`.** Dual-audience hero, form (7-topic dropdown, prior knowledge, timeframe), submit → redirect to `/path/[id]`.
+- [ ] **2.6b — `app/path/[id]/page.tsx`.** Public read-only Track view: ordered Lessons with per-LessonResource delivery, primary + alternate resources, inline exercises, mark-complete (anonymous-friendly via local storage; migrates to DB on auth in Phase 3). Introduces public `GET /api/paths/[id]` returning the Track/Lesson projection.
+
+**Exit criteria:** stranger from the landing page generates a path, lands on `/path/[id]`, sees the structured Track (not a flat link list), and can iframe-or-open Lessons and reveal exercises.
 
 ## Phase 2.75 — Multi-topic Programs (the differentiator)
 
