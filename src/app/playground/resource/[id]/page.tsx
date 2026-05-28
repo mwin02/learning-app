@@ -16,7 +16,14 @@ export default async function ResourceDetailPage({
 
   const resource = await prisma.resource.findUnique({
     where: { id },
-    include: { source: true },
+    include: {
+      source: true,
+      parent: { select: { id: true, title: true } },
+      children: {
+        orderBy: { orderInParent: 'asc' },
+        select: { id: true, title: true, orderInParent: true, decompositionStatus: true },
+      },
+    },
   });
 
   if (!resource) notFound();
@@ -70,8 +77,45 @@ export default async function ResourceDetailPage({
           <dd>{String(resource.requiresPurchase)}</dd>
           <dt className="font-medium">attribution</dt>
           <dd>{resource.attribution ?? '—'}</dd>
+          <dt className="font-medium">decompositionStatus</dt>
+          <dd>{resource.decompositionStatus}</dd>
+          <dt className="font-medium">orderInParent</dt>
+          <dd>{resource.orderInParent ?? '—'}</dd>
           <dt className="font-medium">createdAt</dt>
           <dd>{resource.createdAt.toISOString()}</dd>
+        </dl>
+      </section>
+
+      <section>
+        <h2 className="text-lg font-semibold mb-1">Decomposition</h2>
+        <dl className="text-sm grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1">
+          <dt className="font-medium">parent</dt>
+          <dd>
+            {resource.parent ? (
+              <Link href={`/playground/resource/${resource.parent.id}`} className="underline">
+                {resource.parent.title}
+              </Link>
+            ) : (
+              '—'
+            )}
+          </dd>
+          <dt className="font-medium">children</dt>
+          <dd>
+            {resource.children.length === 0 ? (
+              '—'
+            ) : (
+              <ol className="list-decimal pl-5">
+                {resource.children.map((c) => (
+                  <li key={c.id}>
+                    <Link href={`/playground/resource/${c.id}`} className="underline">
+                      {c.title}
+                    </Link>
+                    <span className="text-xs text-gray-500"> ({c.decompositionStatus})</span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </dd>
         </dl>
       </section>
 
