@@ -102,6 +102,12 @@ export default async function PathDetailPage({
                   <span>trust: {r.trustScore.toFixed(2)}</span>
                   {' · '}
                   <span>origin: {r.origin}</span>
+                  {r.decompositionStatus !== 'atomic' && (
+                    <>
+                      {' · '}
+                      <span>decomp: {r.decompositionStatus}</span>
+                    </>
+                  )}
                 </div>
                 <p className="mt-2 text-sm">
                   <span className="font-medium">rationale:</span> {item.rationale}
