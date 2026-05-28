@@ -37,13 +37,19 @@ export class CurriculumAgentError extends Error {
   }
 }
 
+// The model references candidates by 1-based positional index (`candidateIdx`)
+// rather than by the real Resource.id cuid. cuids are high-entropy strings;
+// Gemini Flash will happily fabricate plausible-looking ones if it doesn't
+// copy carefully from the candidate list. Positional integers are
+// low-entropy and bounded, so a hallucination either lands on a real
+// candidate (still useful) or falls out of range (cheaply rejected).
 const ResponseSchema = z.object({
   title: z.string().min(3),
   summary: z.string().min(10),
   items: z
     .array(
       z.object({
-        resourceId: z.string().min(1),
+        candidateIdx: z.number().int().min(1),
         order: z.number().int().min(1),
         rationale: z.string().min(10),
       }),
@@ -96,16 +102,22 @@ export async function generateCurriculum(
   });
 
   const parsed = result.experimental_output;
-  const validIds = new Set(candidates.map((c) => c.id));
+  const mapped: CurriculumItem[] = [];
   for (const item of parsed.items) {
-    if (!validIds.has(item.resourceId)) {
+    const idx = item.candidateIdx;
+    if (idx < 1 || idx > candidates.length) {
       throw new CurriculumAgentError(
-        `Model returned unknown resourceId '${item.resourceId}'.`,
+        `Model returned out-of-range candidateIdx ${idx} (have ${candidates.length} candidates).`,
       );
     }
+    mapped.push({
+      resourceId: candidates[idx - 1].id,
+      order: item.order,
+      rationale: item.rationale,
+    });
   }
-  const sorted = [...parsed.items].sort((a, b) => a.order - b.order);
-  return { ...parsed, items: sorted };
+  const sorted = [...mapped].sort((a, b) => a.order - b.order);
+  return { title: parsed.title, summary: parsed.summary, items: sorted };
 }
 
 async function loadCandidates(topic: string): Promise<Resource[]> {
@@ -139,7 +151,7 @@ const SYSTEM_PROMPT = `You are a curriculum agent that sequences learning resour
 
 Rules:
 - Use ONLY the resources provided in the candidate list. Do not invent resources.
-- Reference each chosen resource by its exact \`id\`.
+- Reference each chosen resource by its 1-based \`idx\` (a small positive integer matching its position in the candidate list). Do not invent or transform indices.
 - Order resources so prerequisites are taught before they are required by later items. Use each candidate's \`conceptsTaught\` and \`prerequisiteConcepts\` to decide order.
 - Skip resources whose teaching is redundant given the learner's stated prior knowledge.
 - Total \`durationMin\` of selected items should fit close to but not exceed the learner's time budget.
@@ -158,8 +170,8 @@ function buildUserPrompt(args: {
   candidates: Resource[];
 }): string {
   const { topic, difficulty, priorKnowledge, timeframeWeeks, hoursPerWeek, totalMinutes, candidates } = args;
-  const learnerCandidates = candidates.map((r) => ({
-    id: r.id,
+  const learnerCandidates = candidates.map((r, i) => ({
+    idx: i + 1,
     title: r.title,
     type: r.type,
     tier: r.tier,
