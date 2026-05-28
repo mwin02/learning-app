@@ -1,20 +1,28 @@
 // Web fallback for the curriculum agent.
 //
 // Triggered by `loadCandidates` in curriculum-agent.ts when a topic's active
-// Resource count is below FALLBACK_THRESHOLD. Runs one grounded Vertex call
-// to discover learning resources for the topic, one ungrounded canonicalization
-// call to fold raw concept tags into the topic's existing vocab, then upserts
-// the finds as `Resource(origin='agent', status='pending_review')`.
+// Resource count is below FALLBACK_THRESHOLD. Loops Vertex-grounded discovery
+// against the validation pipeline (liveness + rules-agent) with a growing
+// deny-list until either FALLBACK_TARGET_COUNT survivors are collected or
+// FALLBACK_MAX_DISCOVERY_ITERATIONS is hit. Survivors get canonicalized tags
+// and are upserted as Resource(origin='agent', status='pending_review').
 //
-// Locked by ROADMAP: single grounded call + single canonicalization call. Not
-// an agent-with-tools loop. Per-topic vocab. URL collisions across topics are
-// skipped (Resource.url is @unique and Resource.topic is a single column).
+// Locked by ROADMAP: grounded search via Vertex's googleSearch tool, NOT an
+// agent-with-tools loop. The "loop" here is in the application layer
+// (discover → validate → maybe re-discover), not handed to the model.
 
 import { generateText, generateObject } from 'ai';
 import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { getModel } from '@/lib/models';
 import { vertex } from '@/lib/vertex';
+import {
+  FALLBACK_DISCOVERY_OVERSAMPLE,
+  FALLBACK_MAX_DISCOVERY_ITERATIONS,
+} from '@/lib/config';
+import { runValidationPipeline } from '@/lib/validation';
+import { livenessValidator } from '@/lib/validation/validators/liveness';
+import { rulesAgentValidator } from '@/lib/validation/validators/rules-agent';
 import type { ResourceType, Difficulty } from '@prisma/client';
 
 const RAW_RESOURCE_TYPES = ['article', 'video', 'course', 'interactive', 'docs', 'book'] as const;
@@ -49,7 +57,10 @@ export type WebFallbackResult = {
   insertedCount: number;
   skippedCount: number;
   discoveredCount: number;
+  iterations: number;
 };
+
+const VALIDATORS = [livenessValidator, rulesAgentValidator];
 
 export async function runWebFallback({
   topic,
@@ -58,29 +69,64 @@ export async function runWebFallback({
   topic: string;
   targetCount: number;
 }): Promise<WebFallbackResult> {
-  const discoveredRaw = await discoverResources(topic, targetCount);
-  if (discoveredRaw.length === 0) {
-    console.log('[web-fallback] no resources discovered', { topic });
-    return { insertedCount: 0, skippedCount: 0, discoveredCount: 0 };
+  const survivors = new Map<string, DiscoveredResource>();
+  const denyList = new Set<string>();
+  let iterations = 0;
+  let totalDiscovered = 0;
+
+  while (survivors.size < targetCount && iterations < FALLBACK_MAX_DISCOVERY_ITERATIONS) {
+    iterations += 1;
+    const need = targetCount - survivors.size;
+
+    const discovered = await discoverResources(topic, FALLBACK_DISCOVERY_OVERSAMPLE, [...denyList]);
+    totalDiscovered += discovered.length;
+
+    // Always block URLs we've already seen this run from re-discovery, even
+    // if validation drops them — no point spending tokens twice.
+    for (const r of discovered) denyList.add(r.url);
+
+    // Skip rows already-known-good in this loop (model could re-surface them
+    // in iteration 2+ if Google Search returns them).
+    const fresh = discovered.filter((r) => !survivors.has(r.url));
+    if (fresh.length === 0) {
+      console.log('[web-fallback] iteration produced no fresh URLs', { topic, iteration: iterations });
+      continue;
+    }
+
+    const { valid, rejected } = await runValidationPipeline<DiscoveredResource>(fresh, VALIDATORS);
+
+    for (const r of rejected) {
+      console.log('[web-fallback] rejected', { url: r.row.url, validator: r.validator, reason: r.reason });
+    }
+
+    for (const r of valid) {
+      if (survivors.size >= targetCount) break;
+      survivors.set(r.url, r);
+    }
+
+    console.log('[web-fallback] iteration', {
+      topic,
+      iteration: iterations,
+      discovered: discovered.length,
+      fresh: fresh.length,
+      valid: valid.length,
+      survivors: survivors.size,
+      need,
+    });
   }
 
-  const discovered = await filterLiveUrls(discoveredRaw);
-  console.log('[web-fallback] liveness filter', {
-    topic,
-    before: discoveredRaw.length,
-    after: discovered.length,
-    dropped: discoveredRaw.length - discovered.length,
-  });
-  if (discovered.length === 0) {
-    return { insertedCount: 0, skippedCount: 0, discoveredCount: 0 };
+  const finalRows = [...survivors.values()];
+  if (finalRows.length === 0) {
+    console.log('[web-fallback] no survivors', { topic, iterations, totalDiscovered });
+    return { insertedCount: 0, skippedCount: 0, discoveredCount: totalDiscovered, iterations };
   }
 
   const vocab = await loadTopicVocab(topic);
-  const canonical = await canonicalizeTags(discovered, vocab);
+  const canonical = await canonicalizeTags(finalRows, vocab);
 
   let insertedCount = 0;
   let skippedCount = 0;
-  for (const row of discovered) {
+  for (const row of finalRows) {
     const tags = canonical.get(row.url) ?? {
       prerequisiteConcepts: row.rawPrerequisiteConcepts,
       conceptsTaught: row.rawConceptsTaught,
@@ -90,13 +136,25 @@ export async function runWebFallback({
     else skippedCount += 1;
   }
 
-  console.log('[web-fallback] done', { topic, discoveredCount: discovered.length, insertedCount, skippedCount });
-  return { insertedCount, skippedCount, discoveredCount: discovered.length };
+  console.log('[web-fallback] summary', {
+    topic,
+    iterations,
+    discoveredCount: totalDiscovered,
+    survivors: finalRows.length,
+    insertedCount,
+    skippedCount,
+    targetMet: finalRows.length >= targetCount,
+  });
+  return { insertedCount, skippedCount, discoveredCount: totalDiscovered, iterations };
 }
 
 // ── discovery ───────────────────────────────────────────────────────────────
 
-async function discoverResources(topic: string, targetCount: number): Promise<DiscoveredResource[]> {
+async function discoverResources(
+  topic: string,
+  oversample: number,
+  denyList: string[],
+): Promise<DiscoveredResource[]> {
   const { model, temperature, maxOutputTokens } = getModel('curriculumFallback');
 
   // Grounded search + structured output don't compose in the AI SDK today —
@@ -107,12 +165,13 @@ async function discoverResources(topic: string, targetCount: number): Promise<Di
     maxOutputTokens,
     tools: { google_search: vertex.tools.googleSearch({}) },
     system: DISCOVERY_SYSTEM_PROMPT,
-    prompt: buildDiscoveryPrompt(topic, targetCount),
+    prompt: buildDiscoveryPrompt(topic, oversample, denyList),
   });
 
   console.log('[web-fallback] discovery call', {
     topic,
-    targetCount,
+    oversample,
+    denyListSize: denyList.length,
     sourceCount: result.sources?.length ?? 0,
     usage: result.usage,
     finishReason: result.finishReason,
@@ -131,9 +190,11 @@ const DISCOVERY_SYSTEM_PROMPT = `You are a learning-resource scout. Given a topi
 
 Rules:
 - Use Google Search to find real, currently-reachable URLs. Do NOT invent URLs.
-- Prefer official documentation, well-known educators, university courseware, and recognized textbook sites.
+- Prefer official documentation, well-known educators, university courseware (MIT OCW, Stanford CS, etc.), and recognized free textbook sites.
+- AVOID sites that require login or paid signup for the main content (Coursera, DataCamp, Udemy, LinkedIn Learning, edX verified-track, Pluralsight).
+- AVOID listicles, link aggregators, and "Top 10 X" roundup pages. The resource itself must teach the topic.
+- AVOID marketing pages, course sales pages, and signup landing pages.
 - Cover a range of difficulties (beginner through advanced) and resource types (docs, video, article, course, book) where possible.
-- Each resource must teach the topic directly — exclude marketing pages, paywalled landing pages with no preview, and link aggregators.
 - conceptsTaught and rawConceptsTaught are the agent's first-pass tags; concise, lowercase, hyphen-separated (e.g. "linear-regression", "list-comprehensions"). 3-8 per resource.
 - prerequisiteConcepts use the same vocabulary style; 0-5 per resource.
 - durationMin is your best estimate of time to consume end-to-end in minutes.
@@ -150,12 +211,18 @@ Output: a single JSON array in a \`\`\`json fenced block. No prose before or aft
   "rawConceptsTaught": string[]
 }`;
 
-function buildDiscoveryPrompt(topic: string, targetCount: number): string {
-  return [
+function buildDiscoveryPrompt(topic: string, oversample: number, denyList: string[]): string {
+  const lines = [
     `Topic: ${topic}`,
-    `Target count: ${targetCount} resources.`,
+    `Target count: ${oversample} resources.`,
     `Find a balanced spread across difficulty and resource type. Use Google Search.`,
-  ].join('\n');
+  ];
+  if (denyList.length > 0) {
+    lines.push('');
+    lines.push('Do NOT return any of the following URLs (already tried this run):');
+    lines.push(JSON.stringify(denyList));
+  }
+  return lines.join('\n');
 }
 
 // ── canonicalization ────────────────────────────────────────────────────────
@@ -307,71 +374,6 @@ async function uniqueSlug(title: string, url: string): Promise<string> {
   let hash = 0;
   for (let i = 0; i < url.length; i++) hash = (hash * 31 + url.charCodeAt(i)) | 0;
   return `${candidate}-${(hash >>> 0).toString(36).slice(0, 6)}`;
-}
-
-// ── liveness ────────────────────────────────────────────────────────────────
-
-// Drop URLs that don't resolve to a live page. The discovery model occasionally
-// returns links to deleted YouTube videos, moved docs, or hallucinated paths
-// on real domains; without this gate those land in pending_review and the
-// sequencer happily includes them in paths.
-
-const LIVENESS_TIMEOUT_MS = 6000;
-
-async function filterLiveUrls(rows: DiscoveredResource[]): Promise<DiscoveredResource[]> {
-  const checks = await Promise.all(rows.map(async (r) => ({ row: r, alive: await isUrlLive(r.url) })));
-  return checks.filter((c) => c.alive).map((c) => c.row);
-}
-
-async function isUrlLive(url: string): Promise<boolean> {
-  let host: string;
-  try {
-    host = new URL(url).hostname.replace(/^www\./, '');
-  } catch {
-    return false;
-  }
-
-  // YouTube returns 200 with HTML even for removed videos. Use the oEmbed
-  // endpoint, which returns 404 for unavailable videos.
-  if (host === 'youtube.com' || host === 'youtu.be' || host.endsWith('.youtube.com')) {
-    return checkYouTube(url);
-  }
-
-  return checkHttp(url);
-}
-
-async function checkHttp(url: string): Promise<boolean> {
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), LIVENESS_TIMEOUT_MS);
-  try {
-    const head = await fetch(url, { method: 'HEAD', redirect: 'follow', signal: ctl.signal });
-    if (head.ok) return true;
-    // Some servers (incl. many docs hosts) reject HEAD with 403/405/501. Retry
-    // with a Range GET that pulls a single byte.
-    if ([403, 405, 501].includes(head.status)) {
-      const get = await fetch(url, { method: 'GET', redirect: 'follow', signal: ctl.signal, headers: { Range: 'bytes=0-0' } });
-      return get.ok || get.status === 206;
-    }
-    return false;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function checkYouTube(url: string): Promise<boolean> {
-  const oembed = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), LIVENESS_TIMEOUT_MS);
-  try {
-    const res = await fetch(oembed, { signal: ctl.signal });
-    return res.ok;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────

@@ -7,7 +7,7 @@ import { vertex } from '@/lib/vertex';
 // (`MODEL_<AGENT>`), so a deployment can swap models without a redeploy
 // but can't silently change generation behavior.
 
-type AgentName = 'curriculum' | 'curriculumFallback' | 'tagCanonicalizer' | 'health';
+type AgentName = 'curriculum' | 'curriculumFallback' | 'tagCanonicalizer' | 'validityAgent' | 'health';
 
 type ModelConfig = {
   modelId: string;
@@ -26,15 +26,25 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     maxOutputTokens: 16384,
   },
   curriculumFallback: {
-    // Grounded Google Search discovery call. Temperature low-ish so the model
-    // sticks to authoritative URLs from the search citations instead of
-    // free-styling, but not zero — we want variety across re-runs.
-    modelId: 'gemini-2.5-flash',
+    // Grounded Google Search discovery call. Upgraded to Pro for 2c.5 — this
+    // is the rare-but-important call that compounds the library; spending
+    // tokens here saves them on every future request for the same topic.
+    // Temperature low-ish so the model sticks to authoritative URLs from the
+    // search citations instead of free-styling, but not zero — we want
+    // variety across deny-list retries inside one fallback loop.
+    modelId: 'gemini-2.5-pro',
     temperature: 0.3,
-    maxOutputTokens: 16384,
+    maxOutputTokens: 32768,
   },
   tagCanonicalizer: {
     // Plain JSON shape, no grounding. Deterministic mapping job.
+    modelId: 'gemini-2.5-flash',
+    temperature: 0,
+    maxOutputTokens: 4096,
+  },
+  validityAgent: {
+    // Content-rule check over a batch of ~12 URLs at a time. Flash + a sharp
+    // prompt is the right tier — this is rule application, not reasoning.
     modelId: 'gemini-2.5-flash',
     temperature: 0,
     maxOutputTokens: 4096,
