@@ -176,4 +176,17 @@ export const seedSources: SourceSeedInput[] = [
     kind: 'textbook',
     trustScore: 0.7,
   },
+
+  // ── community (blanket bucket for agent-discovered web resources) ───────
+  // The web-fallback agent attributes finds to a specific seeded Source when
+  // the URL's domain matches one above; otherwise it falls back to this row.
+  // trustScore deliberately below the 0.5 default so the sequencer prefers
+  // curated resources when both are available for the same topic.
+  {
+    slug: 'web',
+    name: 'Open web (agent-discovered)',
+    url: 'https://',
+    kind: 'community',
+    trustScore: 0.4,
+  },
 ];
