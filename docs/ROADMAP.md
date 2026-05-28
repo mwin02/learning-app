@@ -52,8 +52,9 @@ Goal: a runnable Next.js scaffold + repo conventions + Vertex/Gemini proven end-
 - [ ] **2b — Curriculum agent (library-first) + model registry.** `src/lib/models.ts` + `src/lib/curriculum-agent.ts` doing library-first matching against `Resource` (filters on topic, difficulty, prerequisite/taught concepts), Gemini sequencing + per-item `rationale`. Refactor `/api/health` onto the registry. No web fallback, no DB writes yet. Driven via throwaway `scripts/try-agent.ts`.
 - [ ] **2c — Web fallback + cache-back + tag canonicalization.** Vertex-grounded Google Search when topic ∉ seeded set or library candidates < threshold. LLM tag canonicalization against existing topic vocab. Upsert finds as `Resource(origin='agent', status='pending_review')`. Per-topic ≥10 active gate.
 - [ ] **2d — `POST /api/generate-path` route.** Thin wrapper: validates body → calls agent → creates `Path` + `PathItem` rows in a single transaction.
-- [ ] **2e — Landing page `app/page.tsx`.** Dual-audience hero, form (7-topic dropdown, prior knowledge, timeframe), submit → redirect to `/path/[id]`.
-- [ ] **2f — `app/path/[id]/page.tsx`.** Read-only outline with per-item rationale.
+- [ ] **2e — Agent playground (`/playground`).** Internal-only, `DEV_AUTH`-gated. Free-text form posts to `/api/generate-path`; detail page renders the persisted Path with items + clickable resource URLs and a raw-JSON inspector. Index page lists recent paths for browsing. No public surface; pure dev tool for exercising the curriculum agent end-to-end. Pages server-render via Prisma directly — no public read API in this block.
+- [ ] **2f — Landing page `app/page.tsx`.** Dual-audience hero, form (7-topic dropdown, prior knowledge, timeframe), submit → redirect to `/path/[id]`.
+- [ ] **2g — `app/path/[id]/page.tsx`.** Read-only outline with per-item rationale. Introduces the public `GET /api/paths/[id]` endpoint.
 
 **Exit criteria:** stranger fills form → sees a real sequenced path with per-item rationales. Requesting an off-library topic (Go / ML / Statistics) visibly grows the `Resource` table. Re-running the same off-library topic reuses cached agent-found resources.
 
