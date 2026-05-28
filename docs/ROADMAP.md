@@ -91,6 +91,7 @@ Two distinct concerns, both belong to this phase:
 | Track ↔ Path relationship | `Track.pathId` unique (1:1). `Track.status ∈ {pending, building, ready, failed}` for sync-lazy generation. |
 | Generation timing | **Sync-lazy.** `/api/generate-path` still returns the Path immediately (unchanged). Track building happens on first visit to `/playground/path/[id]` (later `/path/[id]`), with a visible progress UI. Exercises/notebooks lazy-load per Lesson within that. |
 | Where exercises live | `Exercise` attaches to `Lesson`, not `PathItem` or `Resource`. Notebooks become Resources of `type='interactive'`, `origin='agent'`, linked from a Lesson via LessonResource. |
+| Path/PathItem retained alongside Track/Lesson | **Keep both layers.** Path = selection record (what the curriculum agent picked + rationale). Track = delivery structure (post-processed, dedup'd, with generated content). 1:1 today but different responsibilities, costs, and lifecycles: Track can be regenerated without re-running expensive library matching + web fallback; PathItem rationales survive dedup at their source layer; Phase 2.75 Program agent needs the cheap "picked resources" tier for budget allocation before committing to Track-building. **Revisit at end of 2.5g**: if dedup rarely fires and Tracks end up structurally near-identical to Paths, collapse the two layers (the migration direction is clean). |
 
 ### Block sequence (each <300 LOC, one PR per block)
 
