@@ -31,13 +31,27 @@ model Resource {
   attribution          String?
   sourceId             String
   source               Source         @relation(fields: [sourceId], references: [id])
+  // Phase 2.5: container/atomic decomposition. Container rows are
+  // decompositionStatus='decomposed' with null parent; children are 'atomic'
+  // with a non-null parent. "Pickable" by the curriculum agent is DERIVED:
+  // status='active' AND decompositionStatus IN ('atomic','decomposed'-children-of)
+  // — i.e. decomposed containers themselves are not pickable. Do not add a
+  // pickable column.
+  parentResourceId     String?
+  parent               Resource?      @relation("ResourceDecomposition", fields: [parentResourceId], references: [id], onDelete: SetNull)
+  children             Resource[]     @relation("ResourceDecomposition")
+  orderInParent        Int?
+  decompositionStatus  DecompositionStatus @default(atomic)
   pathItems            PathItem[]
+  lessonResources      LessonResource[]
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 
   @@index([topic, status, tier])
   @@index([difficulty])
   @@index([sourceId])
+  @@index([parentResourceId])
+  @@unique([parentResourceId, orderInParent])
 }
 
 model Source {
@@ -94,6 +108,20 @@ enum ResourceStatus {
   pending_review
 }
 
+// Phase 2.5: lifecycle of a Resource w.r.t. container/atomic decomposition.
+// `atomic` — a single, pickable unit (default; all pre-2.5 rows backfilled here).
+// `decomposed` — a container whose children have been materialized; not pickable itself.
+// `pending` — discovered as a container, decomposition deferred/in-flight; not pickable.
+// `unsupported` — decomposer cannot handle this type (e.g. paywalled course); not pickable.
+// `human_review` — needs manual curation before pickable.
+enum DecompositionStatus {
+  atomic
+  decomposed
+  pending
+  unsupported
+  human_review
+}
+
 // Phase 2 keeps User minimal. Auth fields (email, supabaseId, etc.) land in
 // Phase 3 with Supabase Google OAuth. Paid status is derived from Subscription.
 model User {
@@ -140,6 +168,7 @@ model Path {
   createdById          String?
   createdBy            User?          @relation(fields: [createdById], references: [id], onDelete: SetNull)
   items                PathItem[]
+  track                Track?
   enrollments          EnrolledPath[]
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
@@ -196,4 +225,97 @@ model Progress {
 
   @@id([userId, pathItemId])
   @@index([pathItemId])
+}
+
+// Phase 2.5 — delivery structure built on top of a Path.
+// 1:1 with Path today but kept as a separate aggregate: Path is the curriculum
+// agent's selection record (what + why); Track is the post-processed, dedup'd
+// delivery shape with generated content. Regenerable without re-running
+// expensive library matching + web fallback.
+model Track {
+  id        String      @id @default(cuid())
+  pathId    String      @unique
+  path      Path        @relation(fields: [pathId], references: [id], onDelete: Cascade)
+  status    TrackStatus @default(pending)
+  lessons   Lesson[]
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+}
+
+enum TrackStatus {
+  pending
+  building
+  ready
+  failed
+}
+
+model Lesson {
+  id              String           @id @default(cuid())
+  trackId         String
+  track           Track            @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  orderInTrack    Int
+  title           String
+  summary         String
+  conceptsTaught  String[]
+  estMinutes      Int
+  resources       LessonResource[]
+  exercises       Exercise[]
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@unique([trackId, orderInTrack])
+}
+
+// Join row between a Lesson and a Resource. `role` distinguishes the canonical
+// resource from alternates surfaced via cross-resource concept dedup.
+// `deliveryMode` is per-resource-in-this-context (a single Lesson may mix an
+// embeddable video, a new-tab article, and a native exercise). `segmentRef`
+// carries YouTube timestamps / doc anchors when only part of a resource is used.
+model LessonResource {
+  id           String             @id @default(cuid())
+  lessonId     String
+  lesson       Lesson             @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  resourceId   String
+  resource     Resource           @relation(fields: [resourceId], references: [id])
+  role         LessonResourceRole @default(primary)
+  deliveryMode DeliveryMode
+  segmentRef   Json?
+  createdAt    DateTime           @default(now())
+
+  @@unique([lessonId, resourceId])
+  @@index([lessonId])
+  @@index([resourceId])
+}
+
+enum LessonResourceRole {
+  primary
+  alternate
+}
+
+enum DeliveryMode {
+  embed
+  newtab
+  native
+}
+
+// Agent-generated practice attached to a Lesson. `kind` is intentionally narrow
+// for 2.5e (text/MCQ); broaden when later kinds (code, etc.) ship.
+model Exercise {
+  id        String       @id @default(cuid())
+  lessonId  String
+  lesson    Lesson       @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  prompt    String
+  answer    String
+  rubric    String
+  kind      ExerciseKind
+  origin    Origin       @default(agent)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@index([lessonId])
+}
+
+enum ExerciseKind {
+  text
+  mcq
 }
