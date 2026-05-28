@@ -15,7 +15,16 @@ export const PENDING_REVIEW_GATE_PER_TOPIC = 10;
 // fallback fires.
 export const FALLBACK_THRESHOLD = 5;
 
-// How many resources the discovery prompt asks Gemini to return per fallback
-// invocation. ~8 fits a typical path and seeds the library for next time
-// without flooding pending_review.
+// How many *surviving-validation* resources the fallback aims to land per
+// invocation. Loop retries discovery (with a growing deny-list) until either
+// this many survive or FALLBACK_MAX_DISCOVERY_ITERATIONS is hit.
 export const FALLBACK_TARGET_COUNT = 8;
+
+// Per-discovery-call ask. Oversampled above FALLBACK_TARGET_COUNT to absorb
+// rejections from the validation pipeline.
+export const FALLBACK_DISCOVERY_OVERSAMPLE = 12;
+
+// Hard ceiling on discovery calls per single fallback invocation. The
+// fallback is the most expensive operation in the app (Pro + grounded
+// search); this is the belt-and-suspenders cost guard.
+export const FALLBACK_MAX_DISCOVERY_ITERATIONS = 3;
