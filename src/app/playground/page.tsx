@@ -25,7 +25,12 @@ export default async function PlaygroundPage() {
   return (
     <main className="p-6 flex flex-col gap-8">
       <section>
-        <h1 className="text-2xl font-bold mb-2">Agent playground</h1>
+        <div className="flex items-center justify-between mb-2">
+          <h1 className="text-2xl font-bold">Agent playground</h1>
+          <Link href="/playground/search" className="text-sm underline">
+            resource search →
+          </Link>
+        </div>
         <p className="text-sm text-gray-600 mb-4">
           Internal tool. POSTs to <code>/api/generate-path</code> with whatever you type — Zod and
           the topic gate run server-side, so invalid input shows up as a structured error below.

@@ -28,3 +28,14 @@ export const FALLBACK_DISCOVERY_OVERSAMPLE = 12;
 // fallback is the most expensive operation in the app (Pro + grounded
 // search); this is the belt-and-suspenders cost guard.
 export const FALLBACK_MAX_DISCOVERY_ITERATIONS = 3;
+
+// Phase 2.5-AR: `searchResources` only spends an embedding call to rank when a
+// topic's matching candidate set exceeds this size. At or below it, the set is
+// small enough to hand to the agent wholesale (today's load-all behavior), so
+// semantic ranking buys nothing and we skip the embed.
+export const SEARCH_RANK_THRESHOLD = 30;
+
+// Default cap on how many resources `searchResources` returns on the ranked /
+// large-set paths. The fast-path (≤ SEARCH_RANK_THRESHOLD) ignores this and
+// returns the whole matching set.
+export const SEARCH_DEFAULT_LIMIT = 30;
