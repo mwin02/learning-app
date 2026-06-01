@@ -51,6 +51,14 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
   return embeddings;
 }
 
+// Embed a single search query into the same space as Resource embeddings, for
+// the ranked path of `searchResources`. Thin wrapper over embedTexts so query
+// and corpus go through identical model + dimension checks.
+export async function embedQuery(text: string): Promise<number[]> {
+  const [vec] = await embedTexts([text]);
+  return vec;
+}
+
 // pgvector accepts a text literal of the form `[0.1,0.2,...]` cast to ::vector.
 async function storeEmbedding(id: string, vec: number[]): Promise<void> {
   const literal = `[${vec.join(',')}]`;
