@@ -17,6 +17,7 @@ import { prisma } from '@/lib/db';
 import { getModel } from '@/lib/models';
 import { searchResources, type SearchResult } from '@/lib/search-resources';
 import { runWebFallback } from '@/lib/web-fallback';
+import type { OnTrace } from '@/lib/agent-trace';
 import type { CurriculumInput } from '@/lib/curriculum-agent';
 import {
   FALLBACK_THRESHOLD,
@@ -97,7 +98,12 @@ class RetrievalSession {
   }
 }
 
-function makeTools(session: RetrievalSession, input: CurriculumInput, budget: { fallbacks: number }) {
+function makeTools(
+  session: RetrievalSession,
+  input: CurriculumInput,
+  budget: { fallbacks: number },
+  onTrace: OnTrace,
+) {
   return {
     searchResources: tool({
       description:
@@ -122,6 +128,7 @@ function makeTools(session: RetrievalSession, input: CurriculumInput, budget: { 
           limit,
           pickableOnly: true,
         });
+        onTrace({ kind: 'tool', label: 'searchResources', detail: { query, difficulty, results: rows.length } });
         return rows.map((r) => session.view(r));
       },
     }),
@@ -135,6 +142,7 @@ function makeTools(session: RetrievalSession, input: CurriculumInput, budget: { 
       }),
       execute: async ({ handle }) => {
         const row = session.resolve(handle);
+        onTrace({ kind: 'tool', label: 'getResourceDetails', detail: { handle, found: Boolean(row) } });
         if (!row) return { error: `Unknown handle "${handle}". Use one returned by searchResources.` };
         const full = await prisma.resource.findUnique({
           where: { id: row.id },
@@ -174,11 +182,13 @@ function makeTools(session: RetrievalSession, input: CurriculumInput, budget: { 
       }),
       execute: async ({ reason }) => {
         if (budget.fallbacks <= 0) {
+          onTrace({ kind: 'fallback', label: 'triggerWebFallback skipped', detail: { reason, why: 'budget exhausted' } });
           return { error: 'Web-fallback budget for this session is exhausted. Work with the resources already found.' };
         }
         budget.fallbacks -= 1;
         console.log('[curriculum-retrieval] triggerWebFallback', { topic: input.topic, reason });
         const r = await runWebFallback({ topic: input.topic, targetCount: FALLBACK_TARGET_COUNT });
+        onTrace({ kind: 'fallback', label: 'triggerWebFallback', detail: { reason, inserted: r.insertedCount, discovered: r.discoveredCount } });
         return {
           insertedCount: r.insertedCount,
           discoveredCount: r.discoveredCount,
@@ -215,18 +225,25 @@ function buildPrompt(input: CurriculumInput): string {
 
 // Deterministic floor: guarantee the loop starts with a non-empty library on a
 // cold topic, independent of whether the model later chooses to call fallback.
-async function ensureFloor(topic: string): Promise<void> {
+async function ensureFloor(topic: string, onTrace: OnTrace): Promise<void> {
   const active = await prisma.resource.count({
     where: { topic, status: 'active', decompositionStatus: 'atomic' },
   });
   if (active < FALLBACK_THRESHOLD) {
     console.log('[curriculum-retrieval] floor fallback', { topic, active, threshold: FALLBACK_THRESHOLD });
-    await runWebFallback({ topic, targetCount: FALLBACK_TARGET_COUNT });
+    const r = await runWebFallback({ topic, targetCount: FALLBACK_TARGET_COUNT });
+    onTrace({ kind: 'fallback', label: 'floor fallback', detail: { active, threshold: FALLBACK_THRESHOLD, inserted: r.insertedCount } });
   }
 }
 
-export async function runRetrieval(input: CurriculumInput): Promise<RetrievalResult> {
-  await ensureFloor(input.topic);
+export async function runRetrieval(
+  input: CurriculumInput,
+  opts: { onTrace?: OnTrace } = {},
+): Promise<RetrievalResult> {
+  const onTrace: OnTrace = opts.onTrace ?? (() => {});
+
+  onTrace({ kind: 'stage', label: 'retrieval started', detail: { topic: input.topic, difficulty: input.difficulty } });
+  await ensureFloor(input.topic, onTrace);
 
   const session = new RetrievalSession();
   const budget = { fallbacks: RETRIEVAL_MAX_FALLBACKS };
@@ -236,26 +253,44 @@ export async function runRetrieval(input: CurriculumInput): Promise<RetrievalRes
     model,
     temperature,
     maxOutputTokens,
-    tools: makeTools(session, input, budget),
+    tools: makeTools(session, input, budget, onTrace),
     stopWhen: stepCountIs(RETRIEVAL_MAX_STEPS),
     system: SYSTEM_PROMPT,
     prompt: buildPrompt(input),
+    onStepFinish: (step) => {
+      onTrace({
+        kind: 'stage',
+        label: `model step ${step.stepNumber + 1}`,
+        detail: { toolCalls: step.toolCalls.map((c) => c.toolName), finishReason: step.finishReason },
+      });
+    },
   });
 
   const candidates = session.all();
+  const fallbackCalls = RETRIEVAL_MAX_FALLBACKS - budget.fallbacks;
   console.log('[curriculum-retrieval] done', {
     topic: input.topic,
     steps: result.steps.length,
     candidateCount: candidates.length,
-    fallbackCalls: RETRIEVAL_MAX_FALLBACKS - budget.fallbacks,
+    fallbackCalls,
     usage: result.totalUsage,
+  });
+  onTrace({
+    kind: 'stage',
+    label: 'retrieval done',
+    detail: {
+      steps: result.steps.length,
+      candidates: candidates.length,
+      fallbackCalls,
+      totalTokens: result.totalUsage?.totalTokens,
+    },
   });
 
   return {
     candidates,
     resolve: (handle) => session.resolve(handle),
     steps: result.steps.length,
-    fallbackCalls: RETRIEVAL_MAX_FALLBACKS - budget.fallbacks,
+    fallbackCalls,
     notes: result.text,
   };
 }

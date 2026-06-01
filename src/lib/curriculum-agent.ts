@@ -9,6 +9,7 @@ import {
   type CritiqueVerdict,
 } from '@/lib/curriculum-critic';
 import { CRITIC_MAX_REVISIONS } from '@/lib/config';
+import type { OnTrace } from '@/lib/agent-trace';
 import type { Difficulty } from '@prisma/client';
 
 export type CurriculumInput = {
@@ -73,8 +74,11 @@ const SelectSchema = z.object({
 
 export async function generateCurriculum(
   input: CurriculumInput,
+  opts: { onTrace?: OnTrace } = {},
 ): Promise<CurriculumOutput> {
-  const { candidates, resolve } = await runRetrieval(input);
+  const onTrace: OnTrace = opts.onTrace ?? (() => {});
+
+  const { candidates, resolve } = await runRetrieval(input, { onTrace });
   if (candidates.length === 0) {
     throw new CurriculumAgentError(
       `Retrieval gathered no candidates for topic '${input.topic}'. The library is empty and web fallback returned nothing usable.`,
@@ -98,9 +102,11 @@ export async function generateCurriculum(
       resolve,
       feedback,
       revision,
+      onTrace,
     });
     output = selected.output;
 
+    onTrace({ kind: 'stage', label: 'critique started', detail: { revision } });
     const verdict = await critiqueCurriculum({
       input,
       totalMinutes,
@@ -110,9 +116,32 @@ export async function generateCurriculum(
     });
 
     logVerdict(input, revision, verdict);
+    onTrace({
+      kind: 'stage',
+      label: verdict.pass ? 'critique passed' : 'critique failed',
+      detail: {
+        revision,
+        pass: verdict.pass,
+        criteria: {
+          prerequisiteOrdering: verdict.prerequisiteOrdering.pass,
+          budgetFit: verdict.budgetFit.pass,
+          noRedundancy: verdict.noRedundancy.pass,
+          difficultyMatch: verdict.difficultyMatch.pass,
+          rationaleSpecificity: verdict.rationaleSpecificity.pass,
+        },
+        feedback: verdict.feedback,
+      },
+    });
 
     if (verdict.pass) return selected.output;
     feedback = revisionInstruction(verdict);
+    if (revision < CRITIC_MAX_REVISIONS) {
+      onTrace({
+        kind: 'stage',
+        label: 'revision requested',
+        detail: { nextRevision: revision + 1, feedback },
+      });
+    }
   }
 
   // Exhausted the revision budget without a pass. Return the best-effort path
@@ -120,6 +149,11 @@ export async function generateCurriculum(
   console.log('[curriculum-agent] critic budget exhausted', {
     topic: input.topic,
     revisions: CRITIC_MAX_REVISIONS,
+  });
+  onTrace({
+    kind: 'info',
+    label: 'critic budget exhausted',
+    detail: { revisions: CRITIC_MAX_REVISIONS },
   });
   // `output` is always set: the loop runs at least once (revision 0).
   return output as CurriculumOutput;
@@ -134,10 +168,16 @@ async function runSelect(args: {
   resolve: (handle: string) => { id: string } | undefined;
   feedback: string | undefined;
   revision: number;
+  onTrace: OnTrace;
 }): Promise<{ output: CurriculumOutput; criticItems: CriticPathItem[] }> {
-  const { input, totalMinutes, candidates, resolve, feedback, revision } = args;
+  const { input, totalMinutes, candidates, resolve, feedback, revision, onTrace } = args;
   const byHandle = new Map(candidates.map((c) => [c.handle, c]));
   const { model, temperature, maxOutputTokens } = getModel('curriculum');
+  onTrace({
+    kind: 'stage',
+    label: 'select started',
+    detail: { revision, candidates: candidates.length, revised: revision > 0 },
+  });
 
   const result = await generateText({
     model,
@@ -187,6 +227,16 @@ async function runSelect(args: {
     });
   }
   const sorted = [...mapped].sort((a, b) => a.order - b.order);
+  onTrace({
+    kind: 'stage',
+    label: 'select done',
+    detail: {
+      revision,
+      selected: sorted.length,
+      title: parsed.title,
+      totalTokens: result.usage?.totalTokens,
+    },
+  });
   return {
     output: { title: parsed.title, summary: parsed.summary, items: sorted },
     criticItems,
