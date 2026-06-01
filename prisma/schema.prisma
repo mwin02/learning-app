@@ -42,6 +42,15 @@ model Resource {
   children             Resource[]     @relation("ResourceDecomposition")
   orderInParent        Int?
   decompositionStatus  DecompositionStatus @default(atomic)
+  // Phase 2.5-AR: semantic search. `embedding` is a pgvector column (text-
+  // embedding-005, 768 dims) over `title + summary + conceptsTaught`. Typed
+  // Unsupported because Prisma has no native vector type — it is written and
+  // queried only via raw SQL in src/lib/embeddings.ts, never through the
+  // client. `embeddedAt` is the staleness signal: backfill re-embeds rows
+  // where it is null or older than `updatedAt`. The hnsw index lives in the
+  // migration SQL (Prisma can't express it). See ROADMAP Phase 2.5-AR.
+  embedding            Unsupported("vector(768)")?
+  embeddedAt           DateTime?
   pathItems            PathItem[]
   lessonResources      LessonResource[]
   createdAt            DateTime       @default(now())

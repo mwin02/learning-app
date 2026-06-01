@@ -16,6 +16,7 @@ import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { getModel } from '@/lib/models';
 import { vertex } from '@/lib/vertex';
+import { safeEmbedResource } from '@/lib/embeddings';
 import {
   FALLBACK_DISCOVERY_OVERSAMPLE,
   FALLBACK_MAX_DISCOVERY_ITERATIONS,
@@ -304,7 +305,7 @@ async function upsertResource(
   const slug = await uniqueSlug(row.title, row.url);
 
   try {
-    await prisma.resource.create({
+    const created = await prisma.resource.create({
       data: {
         slug,
         topic,
@@ -321,6 +322,14 @@ async function upsertResource(
         trustScore: source.trustScore,
         sourceId: source.id,
       },
+      select: { id: true },
+    });
+    // Best-effort: a failed embed here logs but leaves the row inserted; the
+    // next backfill picks it up via embeddedAt < updatedAt.
+    await safeEmbedResource(created.id, {
+      title: row.title,
+      summary: row.summary,
+      conceptsTaught: tags.conceptsTaught,
     });
     return true;
   } catch (err) {

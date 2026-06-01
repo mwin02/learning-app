@@ -16,9 +16,17 @@ it's free.
    ```bash
    docker compose up -d
    ```
-   Starts Postgres 17 on `localhost:55432` with an empty `learning_app`
-   database. Data persists in the `learning_app_pgdata` named volume across
-   restarts.
+   Starts Postgres 17 (the `pgvector/pgvector:pg17` image, which bundles the
+   `vector` extension that Phase 2.5-AR's migration enables) on
+   `localhost:55432` with an empty `learning_app` database. Data persists in
+   the `learning_app_pgdata` named volume across restarts.
+
+   > If you have an existing volume created under the old stock `postgres:17`
+   > image, swapping to the pgvector image can raise a glibc collation-version
+   > warning. Clear it once with
+   > `ALTER DATABASE <db> REFRESH COLLATION VERSION;` on `learning_app`,
+   > `template1`, and `postgres`, or just reset the volume
+   > (`docker compose down -v && docker compose up -d`).
 3. In `.env.local`, set:
    ```
    DIRECT_URL=postgresql://postgres:postgres@localhost:55432/learning_app
