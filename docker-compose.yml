@@ -1,6 +1,10 @@
 services:
   db:
-    image: postgres:17
+    # pgvector/pgvector:pg17 is the official pgvector image built on the stock
+    # postgres:17 — same server, plus the `vector` extension binary that
+    # Phase 2.5-AR's migration enables. Supabase ships pgvector natively, so
+    # this only matters for the local Docker DB.
+    image: pgvector/pgvector:pg17
     container_name: learning-app-db
     restart: unless-stopped
     environment:

@@ -1,6 +1,7 @@
 import { seedResources } from '../data/seed-resources';
 import { seedSources } from '../data/seed-sources';
 import { prisma } from '../src/lib/db';
+import { embedMissing } from '../src/lib/embeddings';
 
 async function main() {
   // Sources must exist before Resources can reference them.
@@ -42,6 +43,10 @@ async function main() {
   for (const [topic, n] of Object.entries(counts).sort()) {
     console.log(`  ${topic}: ${n}`);
   }
+
+  // Embed any rows that are new or whose content changed since last reseed.
+  const embedded = await embedMissing();
+  console.log(`seed: embedded ${embedded} resources`);
 }
 
 main()

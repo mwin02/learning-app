@@ -91,3 +91,23 @@ export function getModel(name: AgentName): ResolvedModel {
     maxOutputTokens: cfg.maxOutputTokens,
   };
 }
+
+// Embedding models are kept separate from the chat `REGISTRY` above: they have
+// no temperature / maxOutputTokens, and `dimensions` must match the
+// vector(N) column in the Resource migration. Overridable via MODEL_EMBEDDING,
+// but a swap that changes dimensions also needs a migration + full re-embed.
+const EMBEDDING_MODEL = {
+  modelId: 'text-embedding-005',
+  dimensions: 768,
+};
+
+export function getEmbeddingModel() {
+  const override = process.env.MODEL_EMBEDDING?.trim();
+  const modelId =
+    override && override.length > 0 ? override : EMBEDDING_MODEL.modelId;
+  return {
+    model: vertex.textEmbeddingModel(modelId),
+    modelId,
+    dimensions: EMBEDDING_MODEL.dimensions,
+  };
+}

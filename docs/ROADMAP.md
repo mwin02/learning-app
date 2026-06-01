@@ -36,9 +36,9 @@ Goal: a runnable Next.js scaffold + repo conventions + Vertex/Gemini proven end-
 | Path ↔ User relation | `Path.createdBy` is a **nullable FK** to `User`. Separate `EnrolledPath` join table links users to paths they're working through. In Phase 2 (no auth) `createdBy` stays null. |
 | Path access | Paths are public resources. Subscribed users access any path; seeded "root" paths public to all. URL-based access in Phase 2 (no auth gate yet). |
 | `pending_review` visibility | Show immediately in generated paths for now. **Per-topic gate**: once a topic has ≥ N `active` Resources, exclude `pending_review` from that topic's generation. N starts at 10 in `src/lib/config.ts` and is tunable. |
-| Web fallback | Vertex Gemini with grounded Google Search (single call, built-in citations). Not an agent-with-tools loop. |
+| Web fallback | Vertex Gemini with grounded Google Search (single call, built-in citations). Not an agent-with-tools loop. **Superseded by Phase 2.5-AR**: the discovery call stays a single grounded-search call, but it becomes a *tool* the redesigned curriculum agent's retrieval loop can invoke (`triggerWebFallback`), rather than being driven only by app-layer code. |
 | Topic dropdown | 4 seeded + **Machine Learning, Statistics, Go** = 7 options. The last three deliberately stress the web-fallback + cache-back loop. |
-| Concept-tag normalization | LLM canonicalization at insert time. No embeddings/pgvector in Phase 2. |
+| Concept-tag normalization | LLM canonicalization at insert time. No embeddings/pgvector in Phase 2. **Superseded by Phase 2.5-AR**: pgvector + Vertex embeddings land in AR-1 as the enabling primitive for scaled retrieval and 2.5c dedup. Canonicalization stays; embeddings are added alongside it. |
 | Phase-5 columns | `PathItem.isCheckpoint`, `PathItem.branchOnFail` get created in 2a but stay inert. |
 | Path regeneration | Same input = fresh path each time. No caching. |
 | Model selection | Central agent → model registry at `src/lib/models.ts`. Each agent has a default `{ modelId, temperature, maxTokens }`, overridable by env var (e.g. `MODEL_CURRICULUM=…`). Phase 2 wires Gemini 2.5 Flash everywhere; abstraction ships so model swaps are config, not refactor. |
@@ -101,7 +101,44 @@ Two distinct concerns, both belong to this phase:
   - `Lesson(id, trackId, orderInTrack, title, summary, conceptsTaught[], estMinutes)`
   - `LessonResource(lessonId, resourceId, role: 'primary'|'alternate', deliveryMode: 'embed'|'newtab'|'native', segmentRef?)` — `segmentRef` carries YouTube timestamps / doc anchors when a Lesson uses only part of a resource.
   - `Exercise(lessonId, prompt, answer, rubric, kind, origin)`.
-- [ ] **2.5b — Decomposition pipeline at discovery + seed backfill.** `lib/decomposition-agent.ts` with a router: YouTube playlists via Data API, doc-site TOC scrape, atomic fast-path, fallback → `human_review`. Wired into 2c's discovery flow synchronously: classify → decompose → commit parent + children in one transaction. Includes `scripts/decompose-seed-library.ts` to migrate existing course-type rows from 1b. Also: extend curriculum agent to skip non-pickable Resources and prefer same-parent cohesion. Playground gains a `/playground/decomposition-queue` view for the `human_review` queue.
+  
+#### Phase 2.5-AR — Curriculum Agent Redesign (lands after 2.5a, before 2.5b)
+
+The 2b curriculum agent is a **single `generateText` call**: `loadCandidates(topic)` does an exact-match `WHERE topic = ? AND status = 'active'`, serializes every candidate into the prompt, and the model picks by 1-based positional index. That holds while per-topic libraries are small, but **2.5b breaks it** — decomposition explodes containers into dozens of atomic child Resources, so a topic can no longer be dumped wholesale into context. The agent also can't search the library, can't decide its own retrieval moves, and can't review its own output. AR turns it into a real multi-step, tool-calling agent before the Track agent (2.5c) inherits the pattern.
+
+**Architecture: Hybrid.** An autonomous tool-calling *retrieval loop* (the model decides when to search, broaden, or fall back) hands a fixed candidate set to a *deterministic* select → critic → revise pipeline that produces the customer-facing artifact. Agentic where flexibility pays; auditable and verifiable where correctness matters. This shape becomes the template for the Track (2.5c), Content (2.5e/f), and Program (2.75b) agents.
+
+##### Locked decisions
+
+| Decision | Choice |
+|---|---|
+| Control flow | Hybrid: autonomous loop for retrieval only; deterministic select → critic → revise for output. Not a single fully-autonomous loop (cost/latency/verifiability) and not a pure deterministic workflow (retrieval needs to be agentic). |
+| Retrieval primitive | **pgvector + Vertex embeddings.** Reverses "no embeddings/pgvector in Phase 2." Justified as the primitive for scaled retrieval *and* 2.5c concept-dedup, not a curriculum-only nicety. |
+| Search shape | **Hybrid, never pure vector.** Structured filters first (`topic`, `status`, pickability via `decompositionStatus`), then vector rank within that set. |
+| Cost threshold | If a topic has ≤ ~30 pickable candidates, return them all (today's load-all behavior); vector ranking only engages above that. Keeps the common case cheap. |
+| What gets embedded | `title + summary + conceptsTaught`, one embedding per Resource, embedded at insert time. |
+| Web fallback | Becomes a tool (`triggerWebFallback`) the retrieval loop can call; the call itself stays a single grounded-search call (unchanged internally). |
+| Anti-hallucination | Positional-index trick doesn't survive tool-based retrieval (resources arrive as tool results, not a numbered prompt list). Replaced by **opaque handles**: tools return short session-scoped IDs; any submitted ID is validated against what was actually returned this session. |
+| Self-review | **Separate** critic call (not self-grading in the same context) against an explicit rubric, returning structured findings, feeding a **bounded** revise loop (max 2 retries). New `criticAgent` entry in the model registry. |
+| Emit mechanism | Gemini/Vertex may reject `tools` + JSON `responseSchema` in one request. Final emit is therefore a `submitPath` tool (Zod args) or a separate structured call after the loop closes — **not** `Output.object` alongside tools. Verified against the installed SDK during AR-3. |
+
+##### Block sequence (each <300 LOC, one PR per block)
+
+- [ ] **AR-1 — pgvector + embeddings + backfill.** Migration: enable the `vector` extension, add `Resource.embedding` (+ ivfflat/hnsw index). Embed-on-insert wired into the 1b seed path and the 2c discovery upsert via a Vertex embedding model added to the model registry. `scripts/embed-resources.ts` backfills existing rows. Migration + embedding plumbing only; no agent changes yet.
+- [ ] **AR-2 — `searchResources` hybrid search + tool wrapper.** Pure function: structured filters → vector rank, with the ≤30 fast-path. Wrapped as an AI SDK `tool()`. Unit-testable in isolation.
+- [ ] **AR-3 — Retrieval loop (autonomous half).** Bounded tool-calling loop with `searchResources`, `getResourceDetails`, `triggerWebFallback`; returns an assembled candidate set keyed by opaque handles. Confirms the SDK's tools + structured-output behavior to lock AR-4's emit mechanism.
+- [ ] **AR-4 — Deterministic select → emit.** Consumes AR-3's candidate set, sequences + writes per-item rationale, emits via the AR-3-confirmed mechanism. Replaces today's single `generateCurriculum` call while preserving its `CurriculumInput`/`CurriculumOutput` contract so `/api/generate-path` and `PathService` are untouched.
+- [ ] **AR-5 — Rubric critic + revise loop.** Separate `criticAgent` scores the emitted path (prerequisite ordering, budget fit, whole-course redundancy, difficulty match, rationale specificity) → structured findings → bounded revise. Surfaced in the playground's raw-JSON inspector.
+
+**Exit criteria:** the curriculum agent issues multiple `searchResources` calls against a topic whose library exceeds the load-all threshold, picks only pickable Resources by opaque handle (no fabricated IDs), triggers web fallback as a tool when the library is thin, and emits a path that has visibly passed (or been revised by) the rubric critic — all while keeping the `CurriculumInput → CurriculumOutput` contract so downstream routes are unchanged.
+
+##### Open items for Phase 2.5-AR
+
+- **Embedding model + dimensions.** Which Vertex `text-embedding` model, and the resulting vector dimension (fixes the migration column + index). Decide at AR-1.
+- **Index type.** ivfflat (needs `lists` tuning + a populated table to train) vs hnsw (better recall, heavier build). Library is small now; revisit as it grows.
+- **Loop step ceiling + token budget.** `stopWhen: stepCountIs(N)` value, and per-call token accounting now that one generation fans into many calls. Tie into the observability TODO already in `curriculum-agent.ts`.
+- **Critic-triggered re-retrieval.** If the critic finds a gap that needs a *different* resource (not just reordering), does AR-5 loop back into AR-3's retrieval, or only re-run AR-4 select over the existing set? Lean re-select only in v1; note the limit.
+
 - [ ] **2.5c — Track agent (composition + dedup).** `lib/track-agent.ts` takes a persisted Path → groups PathItems' Resources into ordered Lessons (factoring in each PathItem's rationale), detects cross-resource concept overlap, collapses duplicates into Lessons-with-alternates with `primary` selected by trust score + path order. Writes a `Track` with `status='building'` → `'ready'`. Triggered lazily on first `/playground/path/[id]` visit.
 - [ ] **2.5d — Delivery-mode classifier.** Per `LessonResource`, set `deliveryMode`. Known-good embed allowlist (YouTube, MDN, Python docs, etc.) + runtime header probe (`X-Frame-Options` / `CSP: frame-ancestors`) cached on `Resource`. Native = agent-generated content we host.
 - [ ] **2.5e — Content agent: exercises.** `lib/content-agent.ts` generates `Exercise` records (text/MCQ first) for Lessons flagged gap-prone (source resource has no native exercises, concept is foundational). Fans out in parallel during track building.
@@ -109,6 +146,8 @@ Two distinct concerns, both belong to this phase:
 - [ ] **2.5g — Playground updates.** `/playground/path/[id]` renders the Track/Lesson structure: ordered Lessons, primary + alternate resources, per-LessonResource delivery mode, embedded iframe where applicable, inline exercises, "Open in Colab" for notebooks. Track-building progress UI for sync-lazy generation. Raw-JSON inspector extended to Track/Lesson.
 
 **Exit criteria:** running the playground on a topic that pulls in a YouTube playlist or doc tree produces a Track where (a) the container is decomposed into atomic child Resources in the library, (b) overlapping concepts across different source resources are visibly surfaced as alternates on a shared Lesson, (c) LessonResources have a delivery mode and embed where allowed, (d) at least one Lesson has an agent-generated exercise and one has an agent-generated notebook, and (e) the `human_review` queue is observable in the playground.
+
+- [ ] **2.5b — Decomposition pipeline at discovery + seed backfill.** `lib/decomposition-agent.ts` with a router: YouTube playlists via Data API, doc-site TOC scrape, atomic fast-path, fallback → `human_review`. Wired into 2c's discovery flow synchronously: classify → decompose → commit parent + children in one transaction. Includes `scripts/decompose-seed-library.ts` to migrate existing course-type rows from 1b. Also: extend curriculum agent to skip non-pickable Resources and prefer same-parent cohesion. Playground gains a `/playground/decomposition-queue` view for the `human_review` queue.
 
 ### Open items for Phase 2.5
 
