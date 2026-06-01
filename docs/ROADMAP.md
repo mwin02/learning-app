@@ -120,7 +120,7 @@ The 2b curriculum agent is a **single `generateText` call**: `loadCandidates(top
 | Web fallback | Becomes a tool (`triggerWebFallback`) the retrieval loop can call; the call itself stays a single grounded-search call (unchanged internally). |
 | Anti-hallucination | Positional-index trick doesn't survive tool-based retrieval (resources arrive as tool results, not a numbered prompt list). Replaced by **opaque handles**: tools return short session-scoped IDs; any submitted ID is validated against what was actually returned this session. |
 | Self-review | **Separate** critic call (not self-grading in the same context) against an explicit rubric, returning structured findings, feeding a **bounded** revise loop (max 2 retries). New `criticAgent` entry in the model registry. |
-| Emit mechanism | Gemini/Vertex may reject `tools` + JSON `responseSchema` in one request. Final emit is therefore a `submitPath` tool (Zod args) or a separate structured call after the loop closes — **not** `Output.object` alongside tools. Verified against the installed SDK during AR-3. |
+| Emit mechanism | **Confirmed in AR-3** (throwaway probe): combining `tools` + `Output.object` in one `generateText` call does *not* throw, but produces **no structured output** (`experimental_output` getter throws "No output generated") — the provider drops the response schema when tools are present. AR-4 therefore emits via a **separate `Output.object` call with no tools** over AR-3's gathered candidate set (the path `curriculum-agent.ts` already uses). Hybrid C isolates retrieval from emit, so the conflict never arises in practice. |
 
 ##### Block sequence (each <300 LOC, one PR per block)
 
