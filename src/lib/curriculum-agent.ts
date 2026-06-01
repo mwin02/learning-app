@@ -1,10 +1,8 @@
 import { Output, generateText } from 'ai';
 import { z } from 'zod';
-import { prisma } from '@/lib/db';
 import { getModel } from '@/lib/models';
-import { FALLBACK_THRESHOLD, FALLBACK_TARGET_COUNT, PENDING_REVIEW_GATE_PER_TOPIC } from '@/lib/config';
-import { runWebFallback } from '@/lib/web-fallback';
-import type { Difficulty, Resource } from '@prisma/client';
+import { runRetrieval, type CandidateView } from '@/lib/curriculum-retrieval';
+import type { Difficulty } from '@prisma/client';
 
 export type CurriculumInput = {
   topic: string;
@@ -37,19 +35,25 @@ export class CurriculumAgentError extends Error {
   }
 }
 
-// The model references candidates by 1-based positional index (`candidateIdx`)
-// rather than by the real Resource.id cuid. cuids are high-entropy strings;
-// Gemini Flash will happily fabricate plausible-looking ones if it doesn't
-// copy carefully from the candidate list. Positional integers are
-// low-entropy and bounded, so a hallucination either lands on a real
-// candidate (still useful) or falls out of range (cheaply rejected).
-const ResponseSchema = z.object({
+// Hybrid curriculum agent (Phase 2.5-AR). Two stages:
+//   1. AR-3 `runRetrieval` — an autonomous tool-calling loop gathers candidate
+//      resources keyed by opaque handles (r1, r2, …).
+//   2. This file (AR-4) — a deterministic, no-tools structured call selects and
+//      sequences from those candidates, referencing them by handle.
+// Keeping select tool-free sidesteps the confirmed Gemini/Vertex limitation
+// that `tools` + `Output.object` in one call yields no structured output
+// (see ROADMAP Phase 2.5-AR "Emit mechanism").
+//
+// The model references candidates by handle, never by cuid. Each returned
+// handle is resolved against the retrieval session's registry; an unknown
+// handle is a hard error, so the model cannot smuggle in a fabricated id.
+const SelectSchema = z.object({
   title: z.string().min(3),
   summary: z.string().min(10),
   items: z
     .array(
       z.object({
-        candidateIdx: z.number().int().min(1),
+        handle: z.string().min(1),
         order: z.number().int().min(1),
         rationale: z.string().min(10),
       }),
@@ -60,41 +64,30 @@ const ResponseSchema = z.object({
 export async function generateCurriculum(
   input: CurriculumInput,
 ): Promise<CurriculumOutput> {
-  const { topic, difficulty, priorKnowledge, timeframeWeeks, hoursPerWeek } = input;
-
-  const candidates = await loadCandidates(topic);
+  const { candidates, resolve } = await runRetrieval(input);
   if (candidates.length === 0) {
     throw new CurriculumAgentError(
-      `No Resources found for topic '${topic}' after web fallback. The discovery call returned nothing usable.`,
+      `Retrieval gathered no candidates for topic '${input.topic}'. The library is empty and web fallback returned nothing usable.`,
     );
   }
 
-  const totalMinutes = timeframeWeeks * hoursPerWeek * 60;
+  const totalMinutes = input.timeframeWeeks * input.hoursPerWeek * 60;
   const { model, temperature, maxOutputTokens } = getModel('curriculum');
 
   const result = await generateText({
     model,
     temperature,
     maxOutputTokens,
-    output: Output.object({ schema: ResponseSchema }),
+    output: Output.object({ schema: SelectSchema }),
     system: SYSTEM_PROMPT,
-    prompt: buildUserPrompt({
-      topic,
-      difficulty,
-      priorKnowledge,
-      timeframeWeeks,
-      hoursPerWeek,
-      totalMinutes,
-      candidates,
-    }),
+    prompt: buildSelectPrompt({ input, totalMinutes, candidates }),
   });
 
   // TODO(observability): replace these console.logs with a real logger
   // (structured logs to Cloud Logging, traces, per-agent token + $ accounting)
-  // once we have more than one agent in flight. For now console.log is enough
-  // to eyeball usage during development and in Vercel function logs.
-  console.log('[curriculum-agent] call', {
-    topic,
+  // once we have more than one agent in flight.
+  console.log('[curriculum-agent] select', {
+    topic: input.topic,
     candidateCount: candidates.length,
     totalMinutes,
     usage: result.usage,
@@ -104,54 +97,23 @@ export async function generateCurriculum(
   const parsed = result.experimental_output;
   const mapped: CurriculumItem[] = [];
   for (const item of parsed.items) {
-    const idx = item.candidateIdx;
-    if (idx < 1 || idx > candidates.length) {
+    const row = resolve(item.handle);
+    if (!row) {
       throw new CurriculumAgentError(
-        `Model returned out-of-range candidateIdx ${idx} (have ${candidates.length} candidates).`,
+        `Model selected unknown handle "${item.handle}" — not in the retrieved candidate set.`,
       );
     }
-    mapped.push({
-      resourceId: candidates[idx - 1].id,
-      order: item.order,
-      rationale: item.rationale,
-    });
+    mapped.push({ resourceId: row.id, order: item.order, rationale: item.rationale });
   }
   const sorted = [...mapped].sort((a, b) => a.order - b.order);
   return { title: parsed.title, summary: parsed.summary, items: sorted };
 }
 
-async function loadCandidates(topic: string): Promise<Resource[]> {
-  const active = await prisma.resource.findMany({
-    where: { topic, status: 'active' },
-  });
-
-  // Below the fallback threshold the library is too thin to compose a useful
-  // path on its own — run the web fallback to compound the library, then
-  // re-query. Fallback writes pending_review rows, picked up by the union
-  // below (since active < PENDING_REVIEW_GATE_PER_TOPIC strictly above
-  // FALLBACK_THRESHOLD).
-  if (active.length < FALLBACK_THRESHOLD) {
-    console.log('[curriculum-agent] fallback triggered', { topic, activeCount: active.length, threshold: FALLBACK_THRESHOLD });
-    await runWebFallback({ topic, targetCount: FALLBACK_TARGET_COUNT });
-    const refreshed = await prisma.resource.findMany({ where: { topic, status: 'active' } });
-    const pending = await prisma.resource.findMany({ where: { topic, status: 'pending_review' } });
-    return [...refreshed, ...pending];
-  }
-
-  if (active.length >= PENDING_REVIEW_GATE_PER_TOPIC) {
-    return active;
-  }
-  const pending = await prisma.resource.findMany({
-    where: { topic, status: 'pending_review' },
-  });
-  return [...active, ...pending];
-}
-
-const SYSTEM_PROMPT = `You are a curriculum agent that sequences learning resources into a path.
+const SYSTEM_PROMPT = `You are the selection stage of a curriculum agent. You are given a set of candidate resources (already gathered for this learner) and must compose them into an ordered learning path.
 
 Rules:
-- Use ONLY the resources provided in the candidate list. Do not invent resources.
-- Reference each chosen resource by its 1-based \`idx\` (a small positive integer matching its position in the candidate list). Do not invent or transform indices.
+- Use ONLY the candidates provided. Reference each chosen resource by its \`handle\` (e.g. "r3") exactly as given. Never invent a handle or transform one.
+- You do not have to use every candidate. Select the subset that best forms a coherent path; drop redundant or off-target ones.
 - Order resources so prerequisites are taught before they are required by later items. Use each candidate's \`conceptsTaught\` and \`prerequisiteConcepts\` to decide order.
 - Skip resources whose teaching is redundant given the learner's stated prior knowledge.
 - Total \`durationMin\` of selected items should fit close to but not exceed the learner's time budget.
@@ -160,35 +122,32 @@ Rules:
 - Target the requested path difficulty. Prefer candidates whose \`difficulty\` matches the target. Use adjacent-difficulty candidates only when no same-level item covers a needed concept, and call that out in the rationale.
 - \`title\` is short (max ~70 chars), goal-oriented. \`summary\` is 1–2 sentences describing the path's arc.`;
 
-function buildUserPrompt(args: {
-  topic: string;
-  difficulty: Difficulty;
-  priorKnowledge?: string;
-  timeframeWeeks: number;
-  hoursPerWeek: number;
+function buildSelectPrompt(args: {
+  input: CurriculumInput;
   totalMinutes: number;
-  candidates: Resource[];
+  candidates: CandidateView[];
 }): string {
-  const { topic, difficulty, priorKnowledge, timeframeWeeks, hoursPerWeek, totalMinutes, candidates } = args;
-  const learnerCandidates = candidates.map((r, i) => ({
-    idx: i + 1,
-    title: r.title,
-    type: r.type,
-    tier: r.tier,
-    difficulty: r.difficulty,
-    durationMin: r.durationMin,
-    prerequisiteConcepts: r.prerequisiteConcepts,
-    conceptsTaught: r.conceptsTaught,
-    summary: r.summary,
-    requiresPurchase: r.requiresPurchase,
+  const { input, totalMinutes, candidates } = args;
+  // Drop the retrieval-internal `distance` from the selector's view.
+  const list = candidates.map((c) => ({
+    handle: c.handle,
+    title: c.title,
+    type: c.type,
+    tier: c.tier,
+    difficulty: c.difficulty,
+    durationMin: c.durationMin,
+    prerequisiteConcepts: c.prerequisiteConcepts,
+    conceptsTaught: c.conceptsTaught,
+    summary: c.summary,
+    requiresPurchase: c.requiresPurchase,
   }));
   return [
-    `Topic: ${topic}`,
-    `Target difficulty: ${difficulty}`,
-    `Prior knowledge: ${priorKnowledge?.trim() ? priorKnowledge : '(none stated)'}`,
-    `Timeframe: ${timeframeWeeks} weeks at ${hoursPerWeek} hrs/week (~${totalMinutes} minutes total)`,
+    `Topic: ${input.topic}`,
+    `Target difficulty: ${input.difficulty}`,
+    `Prior knowledge: ${input.priorKnowledge?.trim() ? input.priorKnowledge : '(none stated)'}`,
+    `Timeframe: ${input.timeframeWeeks} weeks at ${input.hoursPerWeek} hrs/week (~${totalMinutes} minutes total)`,
     '',
     'Candidate resources:',
-    JSON.stringify(learnerCandidates, null, 2),
+    JSON.stringify(list, null, 2),
   ].join('\n');
 }
