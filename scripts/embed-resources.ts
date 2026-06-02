@@ -8,7 +8,7 @@
 // seed and this script stay in lockstep.
 
 import { prisma } from '../src/lib/db';
-import { embedMissing } from '../src/lib/embeddings';
+import { embedMissing } from '../src/lib/ai/embeddings';
 
 async function main() {
   const start = Date.now();

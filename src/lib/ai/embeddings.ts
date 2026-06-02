@@ -15,7 +15,7 @@
 
 import { embedMany } from 'ai';
 import { prisma } from '@/lib/db';
-import { getEmbeddingModel } from '@/lib/models';
+import { getEmbeddingModel } from '@/lib/ai/models';
 
 // Vertex text-embedding accepts large batches, but chunking bounds the blast
 // radius of a single failing call and keeps memory predictable on backfill.

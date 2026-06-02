@@ -5,7 +5,7 @@
 //   --limit   max ranked results (default: 5)
 //   --all     drop the topic filter (search the whole library)
 
-import { searchResources } from '@/lib/search-resources';
+import { searchResources } from '@/lib/agents/tools/search-resources';
 import { SEARCH_RANK_THRESHOLD } from '@/lib/config';
 import { prisma } from '@/lib/db';
 

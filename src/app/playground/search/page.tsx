@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/db';
 import { isDevAuthEnabled } from '@/lib/dev-auth';
-import { searchResources } from '@/lib/search-resources';
+import { searchResources } from '@/lib/agents/tools/search-resources';
 import { SEARCH_RANK_THRESHOLD } from '@/lib/config';
 import type { Difficulty } from '@prisma/client';
 

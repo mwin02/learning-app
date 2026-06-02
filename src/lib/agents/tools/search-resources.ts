@@ -20,7 +20,7 @@ import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import type { Difficulty, ResourceStatus } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import { embedQuery } from '@/lib/embeddings';
+import { embedQuery } from '@/lib/ai/embeddings';
 import { SEARCH_RANK_THRESHOLD, SEARCH_DEFAULT_LIMIT } from '@/lib/config';
 
 export type SearchParams = {

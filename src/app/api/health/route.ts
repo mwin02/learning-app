@@ -1,5 +1,5 @@
 import { generateText } from 'ai';
-import { getModel } from '@/lib/models';
+import { getModel } from '@/lib/ai/models';
 
 export async function GET(request: Request) {
   const probe = new URL(request.url).searchParams.get('probe');

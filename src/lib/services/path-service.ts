@@ -14,10 +14,10 @@
 // throwables → mapped to 500 at the route.
 
 import { prisma } from '@/lib/db';
-import { generateCurriculum } from '@/lib/curriculum-agent';
+import { generateCurriculum } from '@/lib/agents/curriculum/curriculum-agent';
 import type { GeneratePathInput } from '@/lib/api/generate-path-schema';
 import type { Session } from '@/lib/api/with-auth';
-import type { OnTrace } from '@/lib/agent-trace';
+import type { OnTrace } from '@/lib/agents/agent-trace';
 
 export type CreatePathResult = {
   pathId: string;

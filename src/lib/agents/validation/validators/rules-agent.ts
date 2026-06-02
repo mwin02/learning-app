@@ -6,7 +6,7 @@
 
 import { generateObject } from 'ai';
 import { z } from 'zod';
-import { getModel } from '@/lib/models';
+import { getModel } from '@/lib/ai/models';
 import { RESOURCE_RULES } from '../rules';
 import type { Validator, ValidatorVerdict, ValidatableResource } from '../types';
 
