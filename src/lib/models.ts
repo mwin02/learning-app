@@ -9,6 +9,7 @@ import { vertex } from '@/lib/vertex';
 
 type AgentName =
   | 'curriculum'
+  | 'curriculumRetrieval'
   | 'curriculumFallback'
   | 'tagCanonicalizer'
   | 'validityAgent'
@@ -30,6 +31,16 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // with many candidates. 16k leaves headroom for thinking + a path of
     // ~10 items with verbose rationales.
     maxOutputTokens: 16384,
+  },
+  curriculumRetrieval: {
+    // AR-3 retrieval loop: a tool-calling Flash agent that gathers candidate
+    // resources (searchResources / getResourceDetails / triggerWebFallback).
+    // Slightly above zero so successive searches vary their queries rather
+    // than repeating; output budget covers per-step thinking + tool-call args
+    // across several steps.
+    modelId: 'gemini-2.5-flash',
+    temperature: 0.3,
+    maxOutputTokens: 8192,
   },
   curriculumFallback: {
     // Grounded Google Search discovery call. Upgraded to Pro for 2c.5 — this

@@ -39,3 +39,15 @@ export const SEARCH_RANK_THRESHOLD = 30;
 // large-set paths. The fast-path (≤ SEARCH_RANK_THRESHOLD) ignores this and
 // returns the whole matching set.
 export const SEARCH_DEFAULT_LIMIT = 30;
+
+// Phase 2.5-AR (AR-3): hard ceiling on steps in the curriculum agent's
+// retrieval loop. One step = one model turn (which may issue several tool
+// calls). Bounds cost/latency; the model normally stops earlier by ceasing to
+// call tools once it has gathered enough candidates.
+export const RETRIEVAL_MAX_STEPS = 6;
+
+// Max times the model may call `triggerWebFallback` within one retrieval
+// session. Fallback is the app's most expensive operation (Pro + grounded
+// search), so the model gets a small budget on top of the deterministic
+// pre-loop floor that already fires for thin topics.
+export const RETRIEVAL_MAX_FALLBACKS = 1;
