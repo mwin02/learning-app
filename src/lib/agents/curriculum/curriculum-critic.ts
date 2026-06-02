@@ -1,7 +1,7 @@
 import { Output, generateText } from 'ai';
 import { z } from 'zod';
-import { getModel } from '@/lib/models';
-import type { CurriculumInput } from '@/lib/curriculum-agent';
+import { getModel } from '@/lib/ai/models';
+import type { CurriculumInput } from '@/lib/agents/curriculum/curriculum-agent';
 
 // AR-6 self-review. After AR-4 select emits a path, this separate model call
 // scores it against an explicit rubric and returns structured findings. It is a

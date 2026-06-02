@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from 'react';
 import Link from 'next/link';
-import type { TraceEvent } from '@/lib/agent-trace';
+import type { TraceEvent } from '@/lib/agents/agent-trace';
 
 type ErrorBody = {
   error: string;

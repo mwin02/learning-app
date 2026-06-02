@@ -1,5 +1,5 @@
 import type { LanguageModel } from 'ai';
-import { vertex } from '@/lib/vertex';
+import { vertex } from '@/lib/ai/vertex';
 
 // Per-agent model configuration. Each call site declares its own sampling
 // params (temperature, maxOutputTokens) because those are call-site

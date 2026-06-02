@@ -14,11 +14,11 @@
 import { generateText, stepCountIs, tool } from 'ai';
 import { z } from 'zod';
 import { prisma } from '@/lib/db';
-import { getModel } from '@/lib/models';
-import { searchResources, type SearchResult } from '@/lib/search-resources';
-import { runWebFallback } from '@/lib/web-fallback';
-import type { OnTrace } from '@/lib/agent-trace';
-import type { CurriculumInput } from '@/lib/curriculum-agent';
+import { getModel } from '@/lib/ai/models';
+import { searchResources, type SearchResult } from '@/lib/agents/tools/search-resources';
+import { runWebFallback } from '@/lib/agents/tools/web-fallback';
+import type { OnTrace } from '@/lib/agents/agent-trace';
+import type { CurriculumInput } from '@/lib/agents/curriculum/curriculum-agent';
 import {
   FALLBACK_THRESHOLD,
   FALLBACK_TARGET_COUNT,

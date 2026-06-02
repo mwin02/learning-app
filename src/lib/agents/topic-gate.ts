@@ -23,16 +23,16 @@
 
 import { generateObject } from 'ai';
 import { z } from 'zod';
-import { getModel } from '@/lib/models';
+import { getModel } from '@/lib/ai/models';
 import { TOPIC_SLUGS } from '@/types/resource';
-import type { OnTrace } from '@/lib/agent-trace';
+import type { OnTrace } from '@/lib/agents/agent-trace';
 import {
   normalizeTopic,
   lookupAlias,
   listCanonicals,
   recordCanonicalization,
   type TopicSubject,
-} from '@/lib/topic-registry';
+} from '@/lib/agents/topic-registry';
 
 export type TopicGateResult =
   | { valid: true; canonical: string; subject: 'math' | 'science' | 'cs' | 'known' }

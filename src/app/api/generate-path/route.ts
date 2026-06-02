@@ -10,10 +10,10 @@
 import { ZodError } from 'zod';
 import { generatePathInputSchema } from '@/lib/api/generate-path-schema';
 import { withAuth } from '@/lib/api/with-auth';
-import { CurriculumAgentError } from '@/lib/curriculum-agent';
+import { CurriculumAgentError } from '@/lib/agents/curriculum/curriculum-agent';
 import { createPath } from '@/lib/services/path-service';
-import { validateTopic } from '@/lib/topic-gate';
-import { createTraceCollector } from '@/lib/agent-trace';
+import { validateTopic } from '@/lib/agents/topic-gate';
+import { createTraceCollector } from '@/lib/agents/agent-trace';
 
 // Vercel Hobby allows up to 60s per function. Cold-topic runs (web fallback
 // + Pro discovery + validation) can exceed this; those will fail until we

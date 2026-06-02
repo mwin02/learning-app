@@ -14,16 +14,16 @@
 import { generateText, generateObject } from 'ai';
 import { z } from 'zod';
 import { prisma } from '@/lib/db';
-import { getModel } from '@/lib/models';
-import { vertex } from '@/lib/vertex';
-import { safeEmbedResource } from '@/lib/embeddings';
+import { getModel } from '@/lib/ai/models';
+import { vertex } from '@/lib/ai/vertex';
+import { safeEmbedResource } from '@/lib/ai/embeddings';
 import {
   FALLBACK_DISCOVERY_OVERSAMPLE,
   FALLBACK_MAX_DISCOVERY_ITERATIONS,
 } from '@/lib/config';
-import { runValidationPipeline } from '@/lib/validation';
-import { livenessValidator } from '@/lib/validation/validators/liveness';
-import { rulesAgentValidator } from '@/lib/validation/validators/rules-agent';
+import { runValidationPipeline } from '@/lib/agents/validation';
+import { livenessValidator } from '@/lib/agents/validation/validators/liveness';
+import { rulesAgentValidator } from '@/lib/agents/validation/validators/rules-agent';
 import type { ResourceType, Difficulty } from '@prisma/client';
 
 const RAW_RESOURCE_TYPES = ['article', 'video', 'course', 'interactive', 'docs', 'book'] as const;

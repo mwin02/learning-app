@@ -1,15 +1,15 @@
 import { Output, generateText } from 'ai';
 import { z } from 'zod';
-import { getModel } from '@/lib/models';
-import { runRetrieval, type CandidateView } from '@/lib/curriculum-retrieval';
+import { getModel } from '@/lib/ai/models';
+import { runRetrieval, type CandidateView } from '@/lib/agents/curriculum/curriculum-retrieval';
 import {
   critiqueCurriculum,
   revisionInstruction,
   type CriticPathItem,
   type CritiqueVerdict,
-} from '@/lib/curriculum-critic';
+} from '@/lib/agents/curriculum/curriculum-critic';
 import { CRITIC_MAX_REVISIONS } from '@/lib/config';
-import type { OnTrace } from '@/lib/agent-trace';
+import type { OnTrace } from '@/lib/agents/agent-trace';
 import type { Difficulty } from '@prisma/client';
 
 export type CurriculumInput = {

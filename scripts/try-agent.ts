@@ -14,7 +14,7 @@
 //               with DEV_AUTH=1 in the env (the route's auth gate; see
 //               src/lib/api/with-auth.ts). Port via $PORT (default 3000).
 
-import { generateCurriculum } from '@/lib/curriculum-agent';
+import { generateCurriculum } from '@/lib/agents/curriculum/curriculum-agent';
 import { prisma } from '@/lib/db';
 
 type Args = {

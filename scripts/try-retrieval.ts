@@ -5,8 +5,8 @@
 //   --difficulty  beginner | intermediate | advanced (default: beginner)
 //   --prior       prior-knowledge free text (optional)
 
-import { runRetrieval } from '@/lib/curriculum-retrieval';
-import type { CurriculumInput } from '@/lib/curriculum-agent';
+import { runRetrieval } from '@/lib/agents/curriculum/curriculum-retrieval';
+import type { CurriculumInput } from '@/lib/agents/curriculum/curriculum-agent';
 import type { Difficulty } from '@prisma/client';
 import { prisma } from '@/lib/db';
 
