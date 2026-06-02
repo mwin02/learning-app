@@ -25,6 +25,7 @@ import { generateObject } from 'ai';
 import { z } from 'zod';
 import { getModel } from '@/lib/models';
 import { TOPIC_SLUGS } from '@/types/resource';
+import type { OnTrace } from '@/lib/agent-trace';
 import {
   normalizeTopic,
   lookupAlias,
@@ -69,23 +70,36 @@ const SYSTEM_PROMPT = [
   'subject/canonical as null, and put a one-sentence explanation in `reason`.',
 ].join('\n');
 
-export async function validateTopic(topic: string): Promise<TopicGateResult> {
+export async function validateTopic(
+  topic: string,
+  opts: { onTrace?: OnTrace } = {},
+): Promise<TopicGateResult> {
+  const onTrace: OnTrace = opts.onTrace ?? (() => {});
   const normalized = normalizeTopic(topic);
+  onTrace({ kind: 'stage', label: 'topic gate started', detail: { topic, normalized } });
 
   // Tier 1: short-circuit curated slugs. No LLM call for the hot path.
   if ((TOPIC_SLUGS as readonly string[]).includes(normalized)) {
+    onTrace({ kind: 'stage', label: 'topic gate: curated match', detail: { canonical: normalized } });
     return { valid: true, canonical: normalized, subject: 'known' };
   }
 
   // Tier 2: a phrasing we've already canonicalized. Stable and LLM-free.
   const cached = await lookupAlias(normalized);
+  onTrace({ kind: 'tool', label: 'registry: lookupAlias', detail: { normalized, hit: Boolean(cached) } });
   if (cached) {
+    onTrace({
+      kind: 'stage',
+      label: 'topic gate: registry cache hit',
+      detail: { canonical: cached.canonical, subject: cached.subject },
+    });
     return { valid: true, canonical: cached.canonical, subject: cached.subject as TopicSubject };
   }
 
   // Tier 3: Gemini Flash verdict, grounded on the slugs already in use so it
   // maps onto an existing one rather than minting a near-duplicate.
   const canonicals = await listCanonicals();
+  onTrace({ kind: 'tool', label: 'registry: listCanonicals', detail: { count: canonicals.length } });
   const { model, temperature, maxOutputTokens } = getModel('topicGate');
   const result = await generateObject({
     model,
@@ -102,10 +116,26 @@ export async function validateTopic(topic: string): Promise<TopicGateResult> {
   console.log('[topic-gate] call', { topic: normalized, usage: result.usage, verdict: result.object });
 
   const v = result.object;
+  onTrace({
+    kind: 'stage',
+    label: 'topic gate: classifier verdict',
+    detail: {
+      valid: v.valid,
+      canonical: v.canonical,
+      subject: v.subject,
+      totalTokens: result.usage?.totalTokens,
+    },
+  });
   if (!v.valid) {
+    onTrace({ kind: 'stage', label: 'topic gate: rejected', detail: { reason: v.reason } });
     return { valid: false, reason: v.reason?.trim() || 'topic rejected without explanation' };
   }
   if (!v.subject || !v.canonical) {
+    onTrace({
+      kind: 'stage',
+      label: 'topic gate: rejected',
+      detail: { reason: 'valid=true without subject or canonical slug' },
+    });
     return { valid: false, reason: 'classifier returned valid=true without subject or canonical slug' };
   }
 
@@ -113,9 +143,24 @@ export async function validateTopic(topic: string): Promise<TopicGateResult> {
   // time. Best-effort: a write failure shouldn't fail an otherwise-valid topic.
   try {
     await recordCanonicalization({ alias: normalized, canonical: v.canonical, subject: v.subject });
+    onTrace({
+      kind: 'tool',
+      label: 'registry: recordCanonicalization',
+      detail: { alias: normalized, canonical: v.canonical, subject: v.subject },
+    });
   } catch (err) {
     console.error('[topic-gate] failed to persist canonicalization', { normalized, canonical: v.canonical, err });
+    onTrace({
+      kind: 'info',
+      label: 'registry: recordCanonicalization failed',
+      detail: { alias: normalized, canonical: v.canonical },
+    });
   }
 
+  onTrace({
+    kind: 'stage',
+    label: 'topic gate: minted new canonical',
+    detail: { canonical: v.canonical, subject: v.subject },
+  });
   return { valid: true, canonical: v.canonical, subject: v.subject };
 }

@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import type { TraceEvent } from '@/lib/agent-trace';
 
 type ErrorBody = {
   error: string;
@@ -12,10 +13,10 @@ type ErrorBody = {
 type SubmitState =
   | { kind: 'idle' }
   | { kind: 'loading' }
+  | { kind: 'done'; pathId: string; trace: TraceEvent[] }
   | { kind: 'error'; body: ErrorBody | { error: string; code: 'NETWORK' } };
 
 export function PlaygroundForm() {
-  const router = useRouter();
   const [state, setState] = useState<SubmitState>({ kind: 'idle' });
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
@@ -83,14 +84,15 @@ export function PlaygroundForm() {
       return;
     }
 
-    const { pathId } = json as { pathId: string };
-    router.push(`/playground/${pathId}`);
+    const { pathId, trace } = json as { pathId: string; trace?: TraceEvent[] };
+    setState({ kind: 'done', pathId, trace: trace ?? [] });
   }
 
   const disabled = state.kind === 'loading';
 
   return (
-    <form onSubmit={onSubmit} className="flex flex-col gap-3 max-w-2xl">
+    <div className="flex flex-col gap-4">
+      <form onSubmit={onSubmit} className="flex flex-col gap-3 max-w-2xl">
       <label className="flex flex-col gap-1">
         <span className="text-sm font-medium">topic</span>
         <input
@@ -166,6 +168,63 @@ export function PlaygroundForm() {
           )}
         </div>
       )}
-    </form>
+
+      </form>
+
+      {state.kind === 'done' && (
+        <div className="flex flex-col gap-3 max-w-5xl">
+          <div className="border border-green-500 bg-green-50 text-green-900 p-3 rounded text-sm">
+            Path generated.{' '}
+            <Link href={`/playground/${state.pathId}`} className="font-medium underline">
+              View path →
+            </Link>
+          </div>
+          <AgentTracePanel trace={state.trace} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+const KIND_STYLES: Record<TraceEvent['kind'], string> = {
+  stage: 'bg-blue-100 text-blue-800',
+  tool: 'bg-gray-200 text-gray-800',
+  fallback: 'bg-amber-100 text-amber-900',
+  info: 'bg-gray-100 text-gray-700',
+};
+
+function formatDetail(detail: Record<string, unknown> | undefined): string {
+  if (!detail) return '';
+  return Object.entries(detail)
+    .filter(([, v]) => v !== undefined && v !== null)
+    .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
+    .join('  ');
+}
+
+function AgentTracePanel({ trace }: { trace: TraceEvent[] }) {
+  if (trace.length === 0) {
+    return <p className="text-sm text-gray-600">No trace events were recorded.</p>;
+  }
+  const t0 = trace[0].at;
+  return (
+    <div className="border rounded">
+      <div className="px-3 py-2 border-b bg-gray-50 text-sm font-semibold">
+        Agent trace ({trace.length} events)
+      </div>
+      <ol className="max-h-80 overflow-auto p-2 text-xs font-mono flex flex-col gap-1">
+        {trace.map((e, i) => {
+          const dt = ((e.at - t0) / 1000).toFixed(2);
+          const detail = formatDetail(e.detail);
+          return (
+            <li key={i} className="flex gap-2 items-baseline">
+              <span className="text-gray-400 w-12 shrink-0 text-right">+{dt}s</span>
+              <span className={`px-1.5 rounded shrink-0 ${KIND_STYLES[e.kind]}`}>{e.kind}</span>
+              <span className="shrink-0 font-semibold">{e.label}</span>
+              {detail && <span className="text-gray-600 break-all">{detail}</span>}
+            </li>
+          );
+        })}
+      </ol>
+    </div>
   );
 }

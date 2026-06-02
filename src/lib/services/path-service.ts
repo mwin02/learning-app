@@ -17,6 +17,7 @@ import { prisma } from '@/lib/db';
 import { generateCurriculum } from '@/lib/curriculum-agent';
 import type { GeneratePathInput } from '@/lib/api/generate-path-schema';
 import type { Session } from '@/lib/api/with-auth';
+import type { OnTrace } from '@/lib/agent-trace';
 
 export type CreatePathResult = {
   pathId: string;
@@ -25,13 +26,25 @@ export type CreatePathResult = {
 export async function createPath(
   input: GeneratePathInput,
   session: Session,
+  opts: { onTrace?: OnTrace } = {},
 ): Promise<CreatePathResult> {
-  const output = await generateCurriculum({
-    topic: input.topic,
-    difficulty: input.difficulty,
-    priorKnowledge: input.priorKnowledge,
-    timeframeWeeks: input.timeframeWeeks,
-    hoursPerWeek: input.hoursPerWeek,
+  const onTrace: OnTrace = opts.onTrace ?? (() => {});
+
+  const output = await generateCurriculum(
+    {
+      topic: input.topic,
+      difficulty: input.difficulty,
+      priorKnowledge: input.priorKnowledge,
+      timeframeWeeks: input.timeframeWeeks,
+      hoursPerWeek: input.hoursPerWeek,
+    },
+    { onTrace },
+  );
+
+  onTrace({
+    kind: 'stage',
+    label: 'persisting path',
+    detail: { title: output.title, items: output.items.length },
   });
 
   // One transaction so a Path is never visible without its items. The agent
@@ -63,6 +76,11 @@ export async function createPath(
     topic: input.topic,
     itemCount: output.items.length,
     userId: session.userId,
+  });
+  onTrace({
+    kind: 'stage',
+    label: 'path created',
+    detail: { pathId: path.id, items: output.items.length },
   });
 
   return { pathId: path.id };
