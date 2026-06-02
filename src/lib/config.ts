@@ -51,3 +51,10 @@ export const RETRIEVAL_MAX_STEPS = 6;
 // search), so the model gets a small budget on top of the deterministic
 // pre-loop floor that already fires for thin topics.
 export const RETRIEVAL_MAX_FALLBACKS = 1;
+
+// Phase 2.5-AR (AR-6): max times the curriculum agent re-runs AR-4 select after
+// the rubric critic fails a path. Each revision is one extra select + critic
+// pair, so total select calls = 1 + up to this many. Bounds cost/latency; the
+// agent returns its best-effort path if the critic still fails after the last
+// revision.
+export const CRITIC_MAX_REVISIONS = 2;

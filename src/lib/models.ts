@@ -10,6 +10,7 @@ import { vertex } from '@/lib/vertex';
 type AgentName =
   | 'curriculum'
   | 'curriculumRetrieval'
+  | 'curriculumCritic'
   | 'curriculumFallback'
   | 'tagCanonicalizer'
   | 'validityAgent'
@@ -40,6 +41,20 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // across several steps.
     modelId: 'gemini-2.5-flash',
     temperature: 0.3,
+    maxOutputTokens: 8192,
+  },
+  curriculumCritic: {
+    // AR-6 self-review: a separate no-tools call that scores the emitted path
+    // against an explicit rubric (prereq ordering, budget fit, redundancy,
+    // difficulty match, rationale specificity) and returns structured findings.
+    // Rule application, not creation — temperature 0 for a stable verdict.
+    // The findings themselves are small (five short notes + consolidated
+    // feedback), but Flash 2.5 spends the budget on internal thinking FIRST and
+    // emits nothing if it caps mid-thought (NoOutputGeneratedError). Observed
+    // ~2.2k reasoning tokens on the comparable select call, so a 2k budget
+    // starved the critic; 8k leaves ample headroom for thinking + the verdict.
+    modelId: 'gemini-2.5-flash',
+    temperature: 0,
     maxOutputTokens: 8192,
   },
   curriculumFallback: {
