@@ -2,6 +2,13 @@ import { Output, generateText } from 'ai';
 import { z } from 'zod';
 import { getModel } from '@/lib/models';
 import { runRetrieval, type CandidateView } from '@/lib/curriculum-retrieval';
+import {
+  critiqueCurriculum,
+  revisionInstruction,
+  type CriticPathItem,
+  type CritiqueVerdict,
+} from '@/lib/curriculum-critic';
+import { CRITIC_MAX_REVISIONS } from '@/lib/config';
 import type { Difficulty } from '@prisma/client';
 
 export type CurriculumInput = {
@@ -35,11 +42,14 @@ export class CurriculumAgentError extends Error {
   }
 }
 
-// Hybrid curriculum agent (Phase 2.5-AR). Two stages:
+// Hybrid curriculum agent (Phase 2.5-AR). Three stages:
 //   1. AR-3 `runRetrieval` — an autonomous tool-calling loop gathers candidate
 //      resources keyed by opaque handles (r1, r2, …).
-//   2. This file (AR-4) — a deterministic, no-tools structured call selects and
+//   2. AR-4 select — a deterministic, no-tools structured call selects and
 //      sequences from those candidates, referencing them by handle.
+//   3. AR-6 critic + revise — a separate model call scores the emitted path
+//      against a rubric (`curriculum-critic.ts`); on a fail verdict, select is
+//      re-run with the critic's feedback, bounded by CRITIC_MAX_REVISIONS.
 // Keeping select tool-free sidesteps the confirmed Gemini/Vertex limitation
 // that `tools` + `Output.object` in one call yields no structured output
 // (see ROADMAP Phase 2.5-AR "Emit mechanism").
@@ -72,6 +82,61 @@ export async function generateCurriculum(
   }
 
   const totalMinutes = input.timeframeWeeks * input.hoursPerWeek * 60;
+
+  // select → critique → (maybe revise). The first pass has no feedback; each
+  // subsequent pass feeds the critic's findings back into select. We keep the
+  // last produced path as the best-effort result if the critic still fails
+  // after the final allowed revision.
+  let output: CurriculumOutput | null = null;
+  let feedback: string | undefined;
+
+  for (let revision = 0; revision <= CRITIC_MAX_REVISIONS; revision++) {
+    const selected = await runSelect({
+      input,
+      totalMinutes,
+      candidates,
+      resolve,
+      feedback,
+      revision,
+    });
+    output = selected.output;
+
+    const verdict = await critiqueCurriculum({
+      input,
+      totalMinutes,
+      title: selected.output.title,
+      summary: selected.output.summary,
+      items: selected.criticItems,
+    });
+
+    logVerdict(input, revision, verdict);
+
+    if (verdict.pass) return selected.output;
+    feedback = revisionInstruction(verdict);
+  }
+
+  // Exhausted the revision budget without a pass. Return the best-effort path
+  // rather than failing the request; the contract guarantees a CurriculumOutput.
+  console.log('[curriculum-agent] critic budget exhausted', {
+    topic: input.topic,
+    revisions: CRITIC_MAX_REVISIONS,
+  });
+  // `output` is always set: the loop runs at least once (revision 0).
+  return output as CurriculumOutput;
+}
+
+// One AR-4 select pass. Returns both the customer-facing CurriculumOutput (ids
+// resolved from handles) and the human-readable items the critic scores.
+async function runSelect(args: {
+  input: CurriculumInput;
+  totalMinutes: number;
+  candidates: CandidateView[];
+  resolve: (handle: string) => { id: string } | undefined;
+  feedback: string | undefined;
+  revision: number;
+}): Promise<{ output: CurriculumOutput; criticItems: CriticPathItem[] }> {
+  const { input, totalMinutes, candidates, resolve, feedback, revision } = args;
+  const byHandle = new Map(candidates.map((c) => [c.handle, c]));
   const { model, temperature, maxOutputTokens } = getModel('curriculum');
 
   const result = await generateText({
@@ -80,7 +145,7 @@ export async function generateCurriculum(
     maxOutputTokens,
     output: Output.object({ schema: SelectSchema }),
     system: SYSTEM_PROMPT,
-    prompt: buildSelectPrompt({ input, totalMinutes, candidates }),
+    prompt: buildSelectPrompt({ input, totalMinutes, candidates, feedback }),
   });
 
   // TODO(observability): replace these console.logs with a real logger
@@ -88,6 +153,7 @@ export async function generateCurriculum(
   // once we have more than one agent in flight.
   console.log('[curriculum-agent] select', {
     topic: input.topic,
+    revision,
     candidateCount: candidates.length,
     totalMinutes,
     usage: result.usage,
@@ -96,6 +162,7 @@ export async function generateCurriculum(
 
   const parsed = result.experimental_output;
   const mapped: CurriculumItem[] = [];
+  const criticItems: CriticPathItem[] = [];
   for (const item of parsed.items) {
     const row = resolve(item.handle);
     if (!row) {
@@ -104,9 +171,46 @@ export async function generateCurriculum(
       );
     }
     mapped.push({ resourceId: row.id, order: item.order, rationale: item.rationale });
+    // The candidate view always has this handle: `resolve` succeeded above and
+    // both maps are built from the same retrieval session.
+    const view = byHandle.get(item.handle)!;
+    criticItems.push({
+      order: item.order,
+      title: view.title,
+      type: view.type,
+      tier: view.tier,
+      difficulty: view.difficulty,
+      durationMin: view.durationMin,
+      prerequisiteConcepts: view.prerequisiteConcepts,
+      conceptsTaught: view.conceptsTaught,
+      rationale: item.rationale,
+    });
   }
   const sorted = [...mapped].sort((a, b) => a.order - b.order);
-  return { title: parsed.title, summary: parsed.summary, items: sorted };
+  return {
+    output: { title: parsed.title, summary: parsed.summary, items: sorted },
+    criticItems,
+  };
+}
+
+function logVerdict(
+  input: CurriculumInput,
+  revision: number,
+  verdict: CritiqueVerdict,
+): void {
+  console.log('[curriculum-agent] critic', {
+    topic: input.topic,
+    revision,
+    pass: verdict.pass,
+    criteria: {
+      prerequisiteOrdering: verdict.prerequisiteOrdering.pass,
+      budgetFit: verdict.budgetFit.pass,
+      noRedundancy: verdict.noRedundancy.pass,
+      difficultyMatch: verdict.difficultyMatch.pass,
+      rationaleSpecificity: verdict.rationaleSpecificity.pass,
+    },
+    feedback: verdict.feedback,
+  });
 }
 
 const SYSTEM_PROMPT = `You are the selection stage of a curriculum agent. You are given a set of candidate resources (already gathered for this learner) and must compose them into an ordered learning path.
@@ -126,8 +230,9 @@ function buildSelectPrompt(args: {
   input: CurriculumInput;
   totalMinutes: number;
   candidates: CandidateView[];
+  feedback?: string;
 }): string {
-  const { input, totalMinutes, candidates } = args;
+  const { input, totalMinutes, candidates, feedback } = args;
   // Drop the retrieval-internal `distance` from the selector's view.
   const list = candidates.map((c) => ({
     handle: c.handle,
@@ -141,7 +246,7 @@ function buildSelectPrompt(args: {
     summary: c.summary,
     requiresPurchase: c.requiresPurchase,
   }));
-  return [
+  const lines = [
     `Topic: ${input.topic}`,
     `Target difficulty: ${input.difficulty}`,
     `Prior knowledge: ${input.priorKnowledge?.trim() ? input.priorKnowledge : '(none stated)'}`,
@@ -149,5 +254,9 @@ function buildSelectPrompt(args: {
     '',
     'Candidate resources:',
     JSON.stringify(list, null, 2),
-  ].join('\n');
+  ];
+  if (feedback?.trim()) {
+    lines.push('', feedback.trim());
+  }
+  return lines.join('\n');
 }
