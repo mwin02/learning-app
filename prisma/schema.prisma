@@ -63,6 +63,25 @@ model Resource {
   @@unique([parentResourceId, orderInParent])
 }
 
+// Phase 2.5-AR (AR-5): persisted topic canonicalization registry. The topic
+// gate's LLM tier mints a canonical slug for off-library topics; without memory
+// it could map "go" one run and "golang" the next, partitioning the Resource
+// library (which keys on an exact `topic` match). Each row records a normalized
+// input phrasing (`alias`) → the canonical slug it resolved to. A repeat
+// phrasing short-circuits the LLM; the distinct set of `canonical` values (plus
+// the curated TOPIC_SLUGS) is the vocabulary the gate grounds the LLM on so new
+// phrasings collapse onto existing slugs. Curated slugs are NOT seeded here —
+// they short-circuit earlier and remain code-owned in src/types/resource.ts.
+model TopicAlias {
+  id        String   @id @default(cuid())
+  alias     String   @unique
+  canonical String
+  subject   String
+  createdAt DateTime @default(now())
+
+  @@index([canonical])
+}
+
 model Source {
   id         String     @id @default(cuid())
   slug       String     @unique
