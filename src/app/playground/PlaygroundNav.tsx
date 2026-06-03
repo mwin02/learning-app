@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 const TABS = [
   { href: '/playground/path-generation', label: 'Path generation' },
   { href: '/playground/resource', label: 'Resource' },
+  { href: '/playground/human-review', label: 'Human review' },
 ] as const;
 
 export function PlaygroundNav() {
