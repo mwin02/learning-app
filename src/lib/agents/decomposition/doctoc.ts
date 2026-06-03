@@ -34,7 +34,7 @@ import { z } from 'zod';
 import { getModel } from '@/lib/ai/models';
 import { deriveChildConcepts } from './concepts';
 import type { ChildInput } from './decompose';
-import { DOC_TOC_MAX_CHILDREN, DOC_TOC_MAX_HTML_CHARS } from '@/lib/config';
+import { DECOMPOSITION_MAX_AUTO_CHILDREN, DOC_TOC_MAX_HTML_CHARS } from '@/lib/config';
 
 const FETCH_UA =
   'Mozilla/5.0 (compatible; LearningPathBot/1.0; +https://learning-app-three-amber.vercel.app)';
@@ -42,7 +42,7 @@ const MAX_CANDIDATE_LINKS = 300;
 const BODY_SNIPPET_CHARS = 2000;
 
 export type DocTocResult =
-  | { ok: true; children: ChildInput[]; truncated: boolean }
+  | { ok: true; children: ChildInput[] }
   | { ok: false; outcome: 'atomic' | 'pending' | 'human_review'; reason: string };
 
 type CandidateLink = { url: string; text: string };
@@ -102,7 +102,7 @@ export async function decomposeDocToc(args: {
   }
 
   // Guard: keep only sections whose URL was actually one of the links we
-  // extracted (defends against any invented URL), dedup, and cap.
+  // extracted (defends against any invented URL), and dedup.
   const allowed = new Map(candidates.map((c) => [c.url, c]));
   const seen = new Set<string>();
   const valid = extraction.sections.filter((s) => {
@@ -110,22 +110,31 @@ export async function decomposeDocToc(args: {
     seen.add(s.url);
     return true;
   });
-  const truncated = valid.length > DOC_TOC_MAX_CHILDREN;
-  const chosen = valid.slice(0, DOC_TOC_MAX_CHILDREN);
 
-  if (chosen.length < 2) {
-    // Classified as an index but we couldn't pin ≥2 distinct-URL sections
+  if (valid.length < 2) {
+    // Classified as a sequence but we couldn't pin ≥2 distinct-URL sections
     // (anchors-only single page, JS-rendered, ambiguous) — needs a human.
-    return { ok: false, outcome: 'human_review', reason: `only ${chosen.length} usable section(s)` };
+    return { ok: false, outcome: 'human_review', reason: `only ${valid.length} usable section(s)` };
+  }
+
+  // Oversize gate: too many sections is usually LLM over-selection or a sprawling
+  // tree — don't auto-decompose; let a human decide. Fires BEFORE the per-child
+  // concept derivation, so the expensive half is skipped.
+  if (valid.length > DECOMPOSITION_MAX_AUTO_CHILDREN) {
+    return {
+      ok: false,
+      outcome: 'human_review',
+      reason: `${valid.length} sections (> ${DECOMPOSITION_MAX_AUTO_CHILDREN} auto-decompose limit) — needs review`,
+    };
   }
 
   const concepts = await deriveChildConcepts({
     topic,
     parentConcepts,
-    items: chosen.map((s) => ({ ref: s.url, title: s.title, description: s.summary })),
+    items: valid.map((s) => ({ ref: s.url, title: s.title, description: s.summary })),
   });
 
-  const children: ChildInput[] = chosen.map((s, idx) => {
+  const children: ChildInput[] = valid.map((s, idx) => {
     const derived = concepts.get(s.url);
     return {
       url: s.url,
@@ -140,7 +149,7 @@ export async function decomposeDocToc(args: {
     };
   });
 
-  return { ok: true, children, truncated };
+  return { ok: true, children };
 }
 
 // ── LLM selection ────────────────────────────────────────────────────────────

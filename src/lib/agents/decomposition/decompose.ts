@@ -66,11 +66,7 @@ export async function decompose(input: DecomposeInput): Promise<DecompositionRes
         parentConcepts: input.conceptsTaught,
       });
       if (result.ok) {
-        console.log('[decompose] playlist decomposed', {
-          url: input.url,
-          children: result.children.length,
-          truncated: result.truncated,
-        });
+        console.log('[decompose] playlist decomposed', { url: input.url, children: result.children.length });
         return { status: 'decomposed', children: result.children };
       }
       console.log('[decompose] playlist not decomposed', {
@@ -89,11 +85,7 @@ export async function decompose(input: DecomposeInput): Promise<DecompositionRes
         parentConcepts: input.conceptsTaught,
       });
       if (result.ok) {
-        console.log('[decompose] doc-toc decomposed', {
-          url: input.url,
-          children: result.children.length,
-          truncated: result.truncated,
-        });
+        console.log('[decompose] doc-toc decomposed', { url: input.url, children: result.children.length });
         return { status: 'decomposed', children: result.children };
       }
       // 'atomic' reroute: type=course/interactive was a mislabel — the page is a

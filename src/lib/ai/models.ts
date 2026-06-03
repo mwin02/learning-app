@@ -90,11 +90,14 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // Phase 2.5b-3: given a doc-course page's title + body snippet + the real
     // anchor links we extracted, decides whether the page is itself one lesson
     // (atomic) or an index of lessons, and SELECTS/orders the section links
-    // (it never invents URLs — it picks from the provided set). Selection over a
-    // possibly-long link list, so a roomy output budget.
+    // (it never invents URLs — it picks from the provided set). 16k, not 8k:
+    // large tables of contents (javascript.info, MDN Learn, Paul's Calc) starved
+    // an 8k budget — Flash 2.5 spends output tokens on thinking first and caps
+    // mid-object (NoObjectGeneratedError → the row parks as 'pending'). 16k
+    // leaves room for thinking + a long sections array.
     modelId: 'gemini-2.5-flash',
     temperature: 0,
-    maxOutputTokens: 8192,
+    maxOutputTokens: 16384,
   },
   validityAgent: {
     // Content-rule check over a batch of ~12 URLs at a time. Flash + a sharp

@@ -79,40 +79,55 @@ export async function deriveChildConcepts(args: {
   const vocab = await loadTopicVocab(topic);
   const grounding = [...new Set([...vocab, ...parentConcepts])].sort();
 
-  for (const batch of chunk(items, CONCEPT_DERIVATION_CHUNK_SIZE)) {
-    const { model, temperature, maxOutputTokens } = getModel('conceptDeriver');
-    try {
-      const result = await generateObject({
-        model,
-        temperature,
-        maxOutputTokens,
-        schema: DerivedSchema,
-        system: DERIVE_SYSTEM_PROMPT,
-        prompt: [
-          `Topic: ${topic}`,
-          '',
-          'Existing topic vocabulary (reuse these tags where they fit):',
-          grounding.length > 0 ? JSON.stringify(grounding) : '(none yet)',
-          '',
-          'Videos to tag:',
-          JSON.stringify(
-            batch.map((it) => ({ ref: it.ref, title: it.title, description: it.description.slice(0, 500) })),
-            null,
-            2,
-          ),
-        ].join('\n'),
-      });
-      for (const r of result.object.results) {
-        out.set(r.ref, {
-          prerequisiteConcepts: r.prerequisiteConcepts,
-          conceptsTaught: r.conceptsTaught,
-        });
-      }
-    } catch (err) {
-      console.log('[concepts] derivation batch failed', { topic, batchSize: batch.length, error: (err as Error).message });
-      // Leave this batch's refs unmapped; caller falls back to parent concepts.
-    }
+  // Batches are independent, so derive them in parallel — on the live discovery
+  // path a container decomposes synchronously, and the oversize gate caps it at
+  // DECOMPOSITION_MAX_AUTO_CHILDREN, so this fans out to at most a couple of
+  // concurrent calls (no rate-limit concern) while halving latency for >1-batch
+  // containers. A failed batch resolves to empty; the caller falls back to the
+  // parent's concepts for those refs.
+  const batches = chunk(items, CONCEPT_DERIVATION_CHUNK_SIZE);
+  const batchResults = await Promise.all(batches.map((batch) => deriveBatch(topic, grounding, batch)));
+  for (const result of batchResults) {
+    for (const [ref, concepts] of result) out.set(ref, concepts);
   }
 
+  return out;
+}
+
+async function deriveBatch(
+  topic: string,
+  grounding: string[],
+  batch: DerivableItem[],
+): Promise<Map<string, DerivedConcepts>> {
+  const out = new Map<string, DerivedConcepts>();
+  const { model, temperature, maxOutputTokens } = getModel('conceptDeriver');
+  try {
+    const result = await generateObject({
+      model,
+      temperature,
+      maxOutputTokens,
+      schema: DerivedSchema,
+      system: DERIVE_SYSTEM_PROMPT,
+      prompt: [
+        `Topic: ${topic}`,
+        '',
+        'Existing topic vocabulary (reuse these tags where they fit):',
+        grounding.length > 0 ? JSON.stringify(grounding) : '(none yet)',
+        '',
+        'Videos to tag:',
+        JSON.stringify(
+          batch.map((it) => ({ ref: it.ref, title: it.title, description: it.description.slice(0, 500) })),
+          null,
+          2,
+        ),
+      ].join('\n'),
+    });
+    for (const r of result.object.results) {
+      out.set(r.ref, { prerequisiteConcepts: r.prerequisiteConcepts, conceptsTaught: r.conceptsTaught });
+    }
+  } catch (err) {
+    console.log('[concepts] derivation batch failed', { topic, batchSize: batch.length, error: (err as Error).message });
+    // Leave this batch's refs unmapped; caller falls back to parent concepts.
+  }
   return out;
 }

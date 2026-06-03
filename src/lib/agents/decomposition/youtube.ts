@@ -11,17 +11,22 @@
 // Outcome mapping (consumed by decompose()):
 //   ok                       → status 'decomposed' (+ children)
 //   key missing / API error  → status 'pending'      (auto-retryable)
-//   playlist 404 / no usable videos → status 'human_review' (needs curation)
+//   playlist 404 / empty / OVERSIZE → status 'human_review' (needs curation)
+//
+// Oversize gate (2.5b-4): a playlist with more than DECOMPOSITION_MAX_AUTO_CHILDREN
+// videos is NOT auto-decomposed — the count comes from pageInfo.totalResults on
+// the first page, so we bail to human_review before paging the rest or running
+// the per-child concept derivation.
 
 import { deriveChildConcepts } from './concepts';
 import type { ChildInput } from './decompose';
-import { YOUTUBE_PLAYLIST_MAX_CHILDREN } from '@/lib/config';
+import { DECOMPOSITION_MAX_AUTO_CHILDREN } from '@/lib/config';
 
 const API_BASE = 'https://www.googleapis.com/youtube/v3';
 const UNAVAILABLE_TITLES = new Set(['Private video', 'Deleted video']);
 
 export type PlaylistResult =
-  | { ok: true; children: ChildInput[]; truncated: boolean }
+  | { ok: true; children: ChildInput[] }
   | { ok: false; outcome: 'pending' | 'human_review'; reason: string };
 
 type RawItem = { videoId: string; title: string; description: string; position: number };
@@ -41,12 +46,9 @@ export async function decomposePlaylist(args: {
     return { ok: false, outcome: 'pending', reason: 'YOUTUBE_API_KEY not set' };
   }
 
-  let items: RawItem[];
-  let truncated: boolean;
+  let fetched: { items: RawItem[]; totalResults: number; oversize: boolean };
   try {
-    const fetched = await fetchPlaylistItems(playlistId, key, YOUTUBE_PLAYLIST_MAX_CHILDREN);
-    items = fetched.items;
-    truncated = fetched.truncated;
+    fetched = await fetchPlaylistItems(playlistId, key, DECOMPOSITION_MAX_AUTO_CHILDREN);
   } catch (err) {
     if (err instanceof PlaylistNotFound) {
       return { ok: false, outcome: 'human_review', reason: 'playlist not found' };
@@ -54,6 +56,15 @@ export async function decomposePlaylist(args: {
     return { ok: false, outcome: 'pending', reason: `playlistItems fetch failed: ${(err as Error).message}` };
   }
 
+  if (fetched.oversize) {
+    return {
+      ok: false,
+      outcome: 'human_review',
+      reason: `playlist has ${fetched.totalResults} videos (> ${DECOMPOSITION_MAX_AUTO_CHILDREN} auto-decompose limit) — needs review`,
+    };
+  }
+
+  const items = fetched.items;
   if (items.length === 0) {
     return { ok: false, outcome: 'human_review', reason: 'playlist has no usable (public) videos' };
   }
@@ -89,19 +100,24 @@ export async function decomposePlaylist(args: {
     };
   });
 
-  return { ok: true, children, truncated };
+  return { ok: true, children };
 }
 
 // ── Data API calls ───────────────────────────────────────────────────────────
 
+// Fetches all usable playlist items, EXCEPT it bails after the first page when
+// the playlist's total size exceeds `max` (the oversize gate) — pageInfo.
+// totalResults is on every page, so we learn the size from page one and skip
+// paging the rest. `oversize` lets the caller route to human_review.
 async function fetchPlaylistItems(
   playlistId: string,
   key: string,
-  cap: number,
-): Promise<{ items: RawItem[]; truncated: boolean }> {
+  max: number,
+): Promise<{ items: RawItem[]; totalResults: number; oversize: boolean }> {
   const items: RawItem[] = [];
   let pageToken: string | undefined;
-  let sawMoreThanCap = false;
+  let totalResults = 0;
+  let firstPage = true;
 
   do {
     const url = new URL(`${API_BASE}/playlistItems`);
@@ -116,15 +132,19 @@ async function fetchPlaylistItems(
     if (!res.ok) throw new Error(`HTTP ${res.status} ${await safeBody(res)}`);
     const json = (await res.json()) as YtPlaylistItemsResponse;
 
+    if (firstPage) {
+      totalResults = json.pageInfo?.totalResults ?? 0;
+      firstPage = false;
+      // Oversize: count includes private/deleted entries (conservative), but a
+      // playlist this large is exactly the human-review case. Bail before paging.
+      if (totalResults > max) return { items: [], totalResults, oversize: true };
+    }
+
     for (const it of json.items ?? []) {
       const videoId = it.contentDetails?.videoId ?? it.snippet?.resourceId?.videoId;
       const title = it.snippet?.title?.trim() ?? '';
       // Skip private/deleted (sentinel titles) and any entry missing a video id.
       if (!videoId || UNAVAILABLE_TITLES.has(title)) continue;
-      if (items.length >= cap) {
-        sawMoreThanCap = true;
-        break;
-      }
       items.push({
         videoId,
         title: title || `Video ${it.snippet?.position ?? items.length + 1}`,
@@ -133,13 +153,10 @@ async function fetchPlaylistItems(
       });
     }
 
-    pageToken = items.length >= cap ? undefined : json.nextPageToken;
+    pageToken = json.nextPageToken;
   } while (pageToken);
 
-  if (sawMoreThanCap) {
-    console.log('[youtube] playlist truncated to cap', { playlistId, cap });
-  }
-  return { items, truncated: sawMoreThanCap };
+  return { items, totalResults, oversize: false };
 }
 
 async function fetchDurations(videoIds: string[], key: string): Promise<Map<string, number>> {
@@ -189,6 +206,7 @@ async function safeBody(res: Response): Promise<string> {
 // Minimal shapes for the fields we read from the Data API responses.
 type YtPlaylistItemsResponse = {
   nextPageToken?: string;
+  pageInfo?: { totalResults?: number };
   items?: Array<{
     contentDetails?: { videoId?: string };
     snippet?: {

@@ -62,20 +62,21 @@ function matchPaywalled(host: string): string | null {
   return null;
 }
 
+const YOUTUBE_HOSTS = new Set(['youtube.com', 'm.youtube.com', 'youtu.be']);
+
+function isYouTubeHost(host: string): boolean {
+  return YOUTUBE_HOSTS.has(host);
+}
+
+// The playlist id of a YouTube URL, or null if it isn't a playlist context.
+// A `list=` param marks a playlist (`/playlist?list=…` or `watch?v=…&list=…`).
 function youtubePlaylistId(url: string): string | null {
-  let parsed: URL;
   try {
-    parsed = new URL(url);
+    const list = new URL(url).searchParams.get('list');
+    return list && list.trim().length > 0 ? list : null;
   } catch {
     return null;
   }
-  const host = parsed.hostname.replace(/^www\./, '');
-  if (host !== 'youtube.com' && host !== 'm.youtube.com') return null;
-  // A `list=` param marks a playlist context. A bare `watch?v=…` single video
-  // (no list) is atomic; `watch?v=…&list=…` and `/playlist?list=…` are the
-  // playlist container.
-  const list = parsed.searchParams.get('list');
-  return list && list.trim().length > 0 ? list : null;
 }
 
 export function classify(resource: ClassifiableResource): DecompositionPlan {
@@ -84,13 +85,20 @@ export function classify(resource: ClassifiableResource): DecompositionPlan {
   if (host) {
     const paywalled = matchPaywalled(host);
     if (paywalled) return { kind: 'unsupported', platform: paywalled };
+
+    // YouTube is decided by URL alone, NOT the resource's type label: a
+    // playlist is a container; a single `watch?v=…` / `youtu.be/…` video is
+    // atomic even when discovery mislabeled it `course` (the single-long-video
+    // case). Resolving this here keeps a watch URL out of the doc-TOC scraper,
+    // which would otherwise try to scrape a video page for "sections".
+    if (isYouTubeHost(host)) {
+      const playlistId = youtubePlaylistId(resource.url);
+      return playlistId ? { kind: 'youtube_playlist', playlistId } : { kind: 'atomic' };
+    }
   }
 
-  const playlistId = youtubePlaylistId(resource.url);
-  if (playlistId) return { kind: 'youtube_playlist', playlistId };
-
-  // Container-shaped by type (and not a single YouTube video, handled above):
-  // route to the doc-TOC scraper.
+  // Non-YouTube container-shaped by type → the doc-TOC router decides whether
+  // it's truly an ordered lesson sequence (decompose) or kept whole.
   if (CONTAINER_TYPES.has(resource.type)) return { kind: 'doc_toc' };
 
   return { kind: 'atomic' };
