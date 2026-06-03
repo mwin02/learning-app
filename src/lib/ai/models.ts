@@ -14,6 +14,7 @@ type AgentName =
   | 'curriculumFallback'
   | 'tagCanonicalizer'
   | 'conceptDeriver'
+  | 'docTocExtractor'
   | 'validityAgent'
   | 'topicGate'
   | 'health';
@@ -81,6 +82,16 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // description, canonicalized against the topic's existing vocab. Rule
     // application like tagCanonicalizer, but over more rows (chunked) and a
     // little freer output, so a larger budget than the 4k canonicalizer.
+    modelId: 'gemini-2.5-flash',
+    temperature: 0,
+    maxOutputTokens: 8192,
+  },
+  docTocExtractor: {
+    // Phase 2.5b-3: given a doc-course page's title + body snippet + the real
+    // anchor links we extracted, decides whether the page is itself one lesson
+    // (atomic) or an index of lessons, and SELECTS/orders the section links
+    // (it never invents URLs — it picks from the provided set). Selection over a
+    // possibly-long link list, so a roomy output budget.
     modelId: 'gemini-2.5-flash',
     temperature: 0,
     maxOutputTokens: 8192,

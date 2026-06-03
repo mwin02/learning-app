@@ -62,6 +62,16 @@ export const YOUTUBE_PLAYLIST_MAX_CHILDREN = 50;
 // so a 50-video playlist stays within the model's output-token budget.
 export const CONCEPT_DERIVATION_CHUNK_SIZE = 25;
 
+// Phase 2.5b-3: max atomic children materialized from one doc-site course tree.
+// Same role as the playlist cap — bounds child-row count + concept-derivation
+// spend on a large table of contents.
+export const DOC_TOC_MAX_CHILDREN = 50;
+
+// Phase 2.5b-3: cap on the fetched container HTML we process (chars). Doc pages
+// can be huge; we only need the title, anchor links, and a body snippet, so we
+// slice before extracting to bound regex + token cost.
+export const DOC_TOC_MAX_HTML_CHARS = 500_000;
+
 // Phase 2.5-AR (AR-6): max times the curriculum agent re-runs AR-4 select after
 // the rubric critic fails a path. Each revision is one extra select + critic
 // pair, so total select calls = 1 + up to this many. Bounds cost/latency; the
