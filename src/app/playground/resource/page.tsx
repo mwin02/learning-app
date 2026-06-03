@@ -3,16 +3,35 @@ import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/db';
 import { isDevAuthEnabled } from '@/lib/dev-auth';
 import { searchResources } from '@/lib/agents/tools/search-resources';
+import { listCanonicals } from '@/lib/agents/topic-registry';
 import { SEARCH_RANK_THRESHOLD } from '@/lib/config';
-import type { Difficulty } from '@prisma/client';
+import type { Difficulty, ResourceType, DecompositionStatus } from '@prisma/client';
 
 export const dynamic = 'force-dynamic';
 
 const DIFFICULTIES = ['beginner', 'intermediate', 'advanced'] as const;
+const TYPES = ['article', 'video', 'course', 'interactive', 'docs', 'book'] as const;
+const DECOMP_STATUSES = [
+  'atomic',
+  'decomposed',
+  'pending',
+  'unsupported',
+  'human_review',
+] as const;
 
 function coerceDifficulty(raw: string | undefined): Difficulty | undefined {
   return (DIFFICULTIES as readonly string[]).includes(raw ?? '')
     ? (raw as Difficulty)
+    : undefined;
+}
+
+function coerceType(raw: string | undefined): ResourceType | undefined {
+  return (TYPES as readonly string[]).includes(raw ?? '') ? (raw as ResourceType) : undefined;
+}
+
+function coerceDecomp(raw: string | undefined): DecompositionStatus | undefined {
+  return (DECOMP_STATUSES as readonly string[]).includes(raw ?? '')
+    ? (raw as DecompositionStatus)
     : undefined;
 }
 
@@ -32,28 +51,40 @@ export default async function ResourceSearchPage({
   const query = firstParam(sp.q);
   const topic = firstParam(sp.topic);
   const difficulty = coerceDifficulty(firstParam(sp.difficulty));
+  const type = coerceType(firstParam(sp.type));
+  const decomp = coerceDecomp(firstParam(sp.decomp));
   const limit = Math.min(50, Math.max(1, Number(firstParam(sp.limit)) || 30));
 
-  // Distinct topics for the dropdown.
-  const topicRows = await prisma.resource.findMany({
-    distinct: ['topic'],
-    select: { topic: true },
-    orderBy: { topic: 'asc' },
-  });
-  const topics = topicRows.map((r) => r.topic);
+  // Topic options: the full canonical vocabulary (curated launch topics plus
+  // every slug the topic gate has minted), unioned with topics actually present
+  // on resources — so agent-discovered topics are selectable, not just the
+  // handful that happen to be seeded.
+  const [canonicals, topicRows] = await Promise.all([
+    listCanonicals(),
+    prisma.resource.findMany({
+      distinct: ['topic'],
+      select: { topic: true },
+    }),
+  ]);
+  const topics = [...new Set([...canonicals, ...topicRows.map((r) => r.topic)])].sort();
 
-  const results = await searchResources({ query, topic, difficulty, limit });
+  const results = await searchResources({
+    query,
+    topic,
+    difficulty,
+    types: type ? [type] : undefined,
+    decompositionStatuses: decomp ? [decomp] : undefined,
+    // Browse the whole library here — the decomposition filter is the point of
+    // this page, so containers / pending / unsupported rows must be reachable.
+    pickableOnly: false,
+    limit,
+  });
   const ranked = results.some((r) => r.distance !== null);
 
   return (
     <main className="p-6 flex flex-col gap-6">
       <section>
-        <div className="flex items-center justify-between mb-2">
-          <h1 className="text-2xl font-bold">Resource search</h1>
-          <Link href="/playground" className="text-sm underline">
-            ← back to playground
-          </Link>
-        </div>
+        <h1 className="text-2xl font-bold mb-2">Resource search</h1>
         <p className="text-sm text-gray-600 mb-4">
           Hybrid search over the <code>Resource</code> library (AR-2): structured filters →
           semantic vector rank. A filtered set of ≤ {SEARCH_RANK_THRESHOLD} returns wholesale by
@@ -114,6 +145,32 @@ export default async function ResourceSearchPage({
             </label>
           </div>
 
+          <div className="flex gap-3">
+            <label className="flex flex-col gap-1 flex-1">
+              <span className="text-sm font-medium">type</span>
+              <select name="type" defaultValue={type ?? ''} className="border px-2 py-1 rounded">
+                <option value="">(any)</option>
+                {TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="flex flex-col gap-1 flex-1">
+              <span className="text-sm font-medium">decomposition status</span>
+              <select name="decomp" defaultValue={decomp ?? ''} className="border px-2 py-1 rounded">
+                <option value="">(any)</option>
+                {DECOMP_STATUSES.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
           <button
             type="submit"
             className="border px-4 py-2 rounded bg-black text-white self-start"
@@ -135,7 +192,7 @@ export default async function ResourceSearchPage({
 
         {results.length === 0 ? (
           <p className="text-sm text-gray-600">
-            No pickable resources match these filters.
+            No resources match these filters.
           </p>
         ) : (
           <ul className="flex flex-col gap-2">
@@ -164,6 +221,14 @@ export default async function ResourceSearchPage({
                   <span>{r.durationMin} min</span>
                   {' · '}
                   <span>trust {r.trustScore.toFixed(2)}</span>
+                  {' · '}
+                  <span
+                    className={
+                      r.decompositionStatus === 'atomic' ? 'text-gray-600' : 'text-blue-700'
+                    }
+                  >
+                    {r.decompositionStatus}
+                  </span>
                   {r.requiresPurchase && (
                     <>
                       {' · '}

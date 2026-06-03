@@ -175,7 +175,7 @@ export function PlaygroundForm() {
         <div className="flex flex-col gap-3 max-w-5xl">
           <div className="border border-green-500 bg-green-50 text-green-900 p-3 rounded text-sm">
             Path generated.{' '}
-            <Link href={`/playground/${state.pathId}`} className="font-medium underline">
+            <Link href={`/playground/path-generation/${state.pathId}`} className="font-medium underline">
               View path →
             </Link>
           </div>

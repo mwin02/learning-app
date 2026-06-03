@@ -18,7 +18,12 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
-import type { Difficulty, ResourceStatus } from '@prisma/client';
+import type {
+  Difficulty,
+  ResourceStatus,
+  ResourceType,
+  DecompositionStatus,
+} from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { embedQuery } from '@/lib/ai/embeddings';
 import { SEARCH_RANK_THRESHOLD, SEARCH_DEFAULT_LIMIT } from '@/lib/config';
@@ -29,10 +34,15 @@ export type SearchParams = {
   query?: string;
   topic?: string;
   difficulty?: Difficulty;
+  types?: ResourceType[];
   statuses?: ResourceStatus[];
+  // Explicit decomposition-status filter (e.g. browsing containers in the
+  // playground). When set it takes precedence over `pickableOnly`.
+  decompositionStatuses?: DecompositionStatus[];
   // Restrict to resources the curriculum agent may actually pick. Pickable ==
   // decompositionStatus 'atomic' (decomposed containers are excluded; their
-  // children are themselves 'atomic').
+  // children are themselves 'atomic'). Ignored when `decompositionStatuses`
+  // is provided.
   pickableOnly?: boolean;
   limit?: number;
 };
@@ -52,6 +62,7 @@ export type SearchResult = {
   conceptsTaught: string[];
   requiresPurchase: boolean;
   trustScore: number;
+  decompositionStatus: string;
   // Cosine distance to the query on the ranked path; null on the fast-path and
   // the large-set-no-query path (no embedding was computed).
   distance: number | null;
@@ -65,15 +76,32 @@ const COLS = Prisma.sql`
   id, slug, topic, title, url,
   type::text AS type, tier::text AS tier, difficulty::text AS difficulty,
   "durationMin", summary, "prerequisiteConcepts", "conceptsTaught",
-  "requiresPurchase", "trustScore"
+  "requiresPurchase", "trustScore",
+  "decompositionStatus"::text AS "decompositionStatus"
 `;
 
 function buildConditions(params: SearchParams): Prisma.Sql[] {
-  const { topic, difficulty, pickableOnly = true, statuses = DEFAULT_STATUSES } = params;
+  const {
+    topic,
+    difficulty,
+    types,
+    decompositionStatuses,
+    pickableOnly = true,
+    statuses = DEFAULT_STATUSES,
+  } = params;
   const conds: Prisma.Sql[] = [];
   if (topic) conds.push(Prisma.sql`topic = ${topic}`);
   if (difficulty) conds.push(Prisma.sql`difficulty::text = ${difficulty}`);
-  if (pickableOnly) conds.push(Prisma.sql`"decompositionStatus"::text = 'atomic'`);
+  if (types && types.length > 0) {
+    conds.push(Prisma.sql`type::text IN (${Prisma.join(types)})`);
+  }
+  // An explicit decomposition filter overrides the pickable shortcut so the
+  // playground can surface containers / pending / unsupported rows.
+  if (decompositionStatuses && decompositionStatuses.length > 0) {
+    conds.push(Prisma.sql`"decompositionStatus"::text IN (${Prisma.join(decompositionStatuses)})`);
+  } else if (pickableOnly) {
+    conds.push(Prisma.sql`"decompositionStatus"::text = 'atomic'`);
+  }
   if (statuses.length > 0) {
     conds.push(Prisma.sql`status::text IN (${Prisma.join(statuses)})`);
   }
