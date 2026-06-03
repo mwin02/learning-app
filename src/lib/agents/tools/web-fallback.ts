@@ -16,7 +16,6 @@ import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { getModel } from '@/lib/ai/models';
 import { vertex } from '@/lib/ai/vertex';
-import { safeEmbedResource } from '@/lib/ai/embeddings';
 import {
   FALLBACK_DISCOVERY_OVERSAMPLE,
   FALLBACK_MAX_DISCOVERY_ITERATIONS,
@@ -24,7 +23,8 @@ import {
 import { runValidationPipeline } from '@/lib/agents/validation';
 import { livenessValidator } from '@/lib/agents/validation/validators/liveness';
 import { rulesAgentValidator } from '@/lib/agents/validation/validators/rules-agent';
-import type { ResourceType, Difficulty } from '@prisma/client';
+import { decompose } from '@/lib/agents/decomposition/decompose';
+import { upsertResource } from '@/lib/agents/decomposition/upsert-resource';
 
 const RAW_RESOURCE_TYPES = ['article', 'video', 'course', 'interactive', 'docs', 'book'] as const;
 const DIFFICULTIES = ['beginner', 'intermediate', 'advanced'] as const;
@@ -122,18 +122,45 @@ export async function runWebFallback({
     return { insertedCount: 0, skippedCount: 0, discoveredCount: totalDiscovered, iterations };
   }
 
+  // Decompose each survivor before persisting (ROADMAP 2.5b decision #6:
+  // discover → validate → decompose → upsert). In 2.5b-1 atomic stays atomic;
+  // every container-shaped survivor returns human_review with no children until
+  // its router ships.
+  const decomposed = await Promise.all(
+    finalRows.map(async (row) => ({ row, result: await decompose(row) })),
+  );
+
+  // Canonicalize concepts only for atomic survivors. Container parents are
+  // unpickable, so their own concepts don't drive selection or dedup — per
+  // decision A, canonicalization moves down to the (future) children.
+  const atomicRows = decomposed
+    .filter((d) => d.result.status === 'atomic')
+    .map((d) => d.row);
   const vocab = await loadTopicVocab(topic);
-  const canonical = await canonicalizeTags(finalRows, vocab);
+  const canonical = await canonicalizeTags(atomicRows, vocab);
 
   let insertedCount = 0;
   let skippedCount = 0;
-  for (const row of finalRows) {
+  for (const { row, result } of decomposed) {
     const tags = canonical.get(row.url) ?? {
       prerequisiteConcepts: row.rawPrerequisiteConcepts,
       conceptsTaught: row.rawConceptsTaught,
     };
-    const ok = await upsertResource(topic, row, tags);
-    if (ok) insertedCount += 1;
+    const outcome = await upsertResource(
+      topic,
+      {
+        url: row.url,
+        title: row.title,
+        type: row.type,
+        difficulty: row.difficulty,
+        durationMin: row.durationMin,
+        summary: row.summary,
+        prerequisiteConcepts: tags.prerequisiteConcepts,
+        conceptsTaught: tags.conceptsTaught,
+      },
+      result,
+    );
+    if (outcome === 'inserted') insertedCount += 1;
     else skippedCount += 1;
   }
 
@@ -284,106 +311,6 @@ Rules:
 - Be conservative: only collapse tags that clearly refer to the same concept. When in doubt, pass through the normalized raw tag — do not invent merges.
 - Preserve the split between prerequisiteConcepts and conceptsTaught.
 - Drop empty/whitespace-only tags.`;
-
-// ── upsert ──────────────────────────────────────────────────────────────────
-
-async function upsertResource(
-  topic: string,
-  row: DiscoveredResource,
-  tags: { prerequisiteConcepts: string[]; conceptsTaught: string[] },
-): Promise<boolean> {
-  const existing = await prisma.resource.findUnique({ where: { url: row.url }, select: { id: true, topic: true } });
-  if (existing) {
-    if (existing.topic !== topic) {
-      console.log('[web-fallback] skip cross-topic URL collision', { url: row.url, existingTopic: existing.topic, requestedTopic: topic });
-      return false;
-    }
-    return false;
-  }
-
-  const source = await resolveSource(row.url);
-  const slug = await uniqueSlug(row.title, row.url);
-
-  try {
-    const created = await prisma.resource.create({
-      data: {
-        slug,
-        topic,
-        title: row.title,
-        url: row.url,
-        type: row.type as ResourceType,
-        durationMin: row.durationMin,
-        summary: row.summary,
-        difficulty: row.difficulty as Difficulty,
-        prerequisiteConcepts: tags.prerequisiteConcepts,
-        conceptsTaught: tags.conceptsTaught,
-        origin: 'agent',
-        status: 'pending_review',
-        trustScore: source.trustScore,
-        sourceId: source.id,
-      },
-      select: { id: true },
-    });
-    // Best-effort: a failed embed here logs but leaves the row inserted; the
-    // next backfill picks it up via embeddedAt < updatedAt.
-    await safeEmbedResource(created.id, {
-      title: row.title,
-      summary: row.summary,
-      conceptsTaught: tags.conceptsTaught,
-    });
-    return true;
-  } catch (err) {
-    console.log('[web-fallback] create failed', { url: row.url, error: (err as Error).message });
-    return false;
-  }
-}
-
-async function resolveSource(url: string): Promise<{ id: string; trustScore: number }> {
-  let host: string;
-  try {
-    host = new URL(url).hostname.replace(/^www\./, '');
-  } catch {
-    return loadWebSource();
-  }
-  // Match a seeded Source whose own URL host equals or is a parent of this host.
-  const candidates = await prisma.source.findMany({ select: { id: true, url: true, trustScore: true } });
-  for (const s of candidates) {
-    try {
-      const sHost = new URL(s.url).hostname.replace(/^www\./, '');
-      if (sHost && (sHost === host || host.endsWith('.' + sHost))) {
-        return { id: s.id, trustScore: s.trustScore };
-      }
-    } catch {
-      // Skip sources with non-URL `url` (the 'web' blanket row has url='https://').
-    }
-  }
-  return loadWebSource();
-}
-
-async function loadWebSource(): Promise<{ id: string; trustScore: number }> {
-  const web = await prisma.source.upsert({
-    where: { slug: 'web' },
-    update: {},
-    create: { slug: 'web', name: 'Open web (agent-discovered)', url: 'https://', kind: 'community', trustScore: 0.4 },
-    select: { id: true, trustScore: true },
-  });
-  return web;
-}
-
-async function uniqueSlug(title: string, url: string): Promise<string> {
-  const base = title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60) || 'resource';
-  const candidate = base;
-  const existing = await prisma.resource.findUnique({ where: { slug: candidate }, select: { id: true } });
-  if (!existing) return candidate;
-  // Disambiguate with a short hash of the URL.
-  let hash = 0;
-  for (let i = 0; i < url.length; i++) hash = (hash * 31 + url.charCodeAt(i)) | 0;
-  return `${candidate}-${(hash >>> 0).toString(36).slice(0, 6)}`;
-}
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
