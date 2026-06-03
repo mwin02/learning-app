@@ -52,6 +52,16 @@ export const RETRIEVAL_MAX_STEPS = 6;
 // pre-loop floor that already fires for thin topics.
 export const RETRIEVAL_MAX_FALLBACKS = 1;
 
+// Phase 2.5b-2: max atomic children materialized from one YouTube playlist.
+// Bounds the per-child concept-derivation token spend (and the child-row count)
+// on pathological playlists. Beyond this, the first N by playlist order are
+// kept and the rest dropped with a logged truncation.
+export const YOUTUBE_PLAYLIST_MAX_CHILDREN = 50;
+
+// Phase 2.5b-2: children are batched this many per concept-derivation LLM call
+// so a 50-video playlist stays within the model's output-token budget.
+export const CONCEPT_DERIVATION_CHUNK_SIZE = 25;
+
 // Phase 2.5-AR (AR-6): max times the curriculum agent re-runs AR-4 select after
 // the rubric critic fails a path. Each revision is one extra select + critic
 // pair, so total select calls = 1 + up to this many. Bounds cost/latency; the

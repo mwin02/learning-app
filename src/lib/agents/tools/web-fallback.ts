@@ -13,7 +13,6 @@
 
 import { generateText, generateObject } from 'ai';
 import { z } from 'zod';
-import { prisma } from '@/lib/db';
 import { getModel } from '@/lib/ai/models';
 import { vertex } from '@/lib/ai/vertex';
 import {
@@ -25,6 +24,7 @@ import { livenessValidator } from '@/lib/agents/validation/validators/liveness';
 import { rulesAgentValidator } from '@/lib/agents/validation/validators/rules-agent';
 import { decompose } from '@/lib/agents/decomposition/decompose';
 import { upsertResource } from '@/lib/agents/decomposition/upsert-resource';
+import { loadTopicVocab } from '@/lib/agents/decomposition/concepts';
 
 const RAW_RESOURCE_TYPES = ['article', 'video', 'course', 'interactive', 'docs', 'book'] as const;
 const DIFFICULTIES = ['beginner', 'intermediate', 'advanced'] as const;
@@ -123,16 +123,28 @@ export async function runWebFallback({
   }
 
   // Decompose each survivor before persisting (ROADMAP 2.5b decision #6:
-  // discover → validate → decompose → upsert). In 2.5b-1 atomic stays atomic;
-  // every container-shaped survivor returns human_review with no children until
-  // its router ships.
+  // discover → validate → decompose → upsert). Atomic stays atomic; a YouTube
+  // playlist is exploded into atomic children here; other containers park as
+  // pending/human_review until their router ships.
   const decomposed = await Promise.all(
-    finalRows.map(async (row) => ({ row, result: await decompose(row) })),
+    finalRows.map(async (row) => ({
+      row,
+      result: await decompose({
+        url: row.url,
+        title: row.title,
+        type: row.type,
+        topic,
+        difficulty: row.difficulty,
+        summary: row.summary,
+        conceptsTaught: row.rawConceptsTaught,
+      }),
+    })),
   );
 
   // Canonicalize concepts only for atomic survivors. Container parents are
   // unpickable, so their own concepts don't drive selection or dedup — per
-  // decision A, canonicalization moves down to the (future) children.
+  // decision A, canonicalization for a container's children happens inside the
+  // router (concepts.ts), not here.
   const atomicRows = decomposed
     .filter((d) => d.result.status === 'atomic')
     .map((d) => d.row);
@@ -254,19 +266,6 @@ function buildDiscoveryPrompt(topic: string, oversample: number, denyList: strin
 }
 
 // ── canonicalization ────────────────────────────────────────────────────────
-
-async function loadTopicVocab(topic: string): Promise<string[]> {
-  const rows = await prisma.resource.findMany({
-    where: { topic, status: { in: ['active', 'pending_review'] } },
-    select: { conceptsTaught: true, prerequisiteConcepts: true },
-  });
-  const set = new Set<string>();
-  for (const r of rows) {
-    for (const t of r.conceptsTaught) set.add(t);
-    for (const t of r.prerequisiteConcepts) set.add(t);
-  }
-  return [...set].sort();
-}
 
 async function canonicalizeTags(
   discovered: DiscoveredResource[],
