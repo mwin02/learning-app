@@ -14,7 +14,7 @@
 
 import { prisma } from '@/lib/db';
 import { safeEmbedResource } from '@/lib/ai/embeddings';
-import type { PrismaClient, ResourceType, Difficulty } from '@prisma/client';
+import type { PrismaClient, ResourceType, Difficulty, DecompositionStatus } from '@prisma/client';
 import type { DecompositionResult, ChildInput } from './decompose';
 
 export type UpsertResourceInput = {
@@ -149,18 +149,37 @@ export async function decomposeExisting(
 ): Promise<{ status: DecompositionResult['status']; childrenCreated: number }> {
   const existing = await prisma.resource.findUnique({
     where: { id: resourceId },
-    select: { topic: true, sourceId: true, trustScore: true },
+    select: {
+      topic: true,
+      sourceId: true,
+      trustScore: true,
+      title: true,
+      summary: true,
+      conceptsTaught: true,
+    },
   });
   if (!existing) throw new Error(`decomposeExisting: resource ${resourceId} not found`);
 
   const taken = new Set<string>();
   const embedTasks: EmbedTask[] = [];
+  let childrenCreated = 0;
 
   await prisma.$transaction(async (tx) => {
     await tx.resource.update({
       where: { id: resourceId },
       data: { decompositionStatus: decomposition.status },
     });
+    // A reroute to 'atomic' (e.g. doc-TOC single_lesson/reference_index) makes
+    // the parent itself pickable — embed it, or searchResources under-ranks it.
+    // A 'decomposed' parent stays an unpickable container (children only).
+    if (decomposition.status === 'atomic') {
+      embedTasks.push({
+        id: resourceId,
+        title: existing.title,
+        summary: existing.summary,
+        conceptsTaught: existing.conceptsTaught,
+      });
+    }
     for (const child of decomposition.children) {
       const childId = await createChild(tx, {
         topic: existing.topic,
@@ -171,6 +190,7 @@ export async function decomposeExisting(
         taken,
       });
       if (childId) {
+        childrenCreated++;
         embedTasks.push({ id: childId, title: child.title, summary: child.summary, conceptsTaught: child.conceptsTaught });
       }
     }
@@ -180,7 +200,52 @@ export async function decomposeExisting(
     await safeEmbedResource(t.id, { title: t.title, summary: t.summary, conceptsTaught: t.conceptsTaught });
   }
 
-  return { status: decomposition.status, childrenCreated: embedTasks.length };
+  return { status: decomposition.status, childrenCreated };
+}
+
+// ── curation-review decisions (2.5b-6) ───────────────────────────────────────
+//
+// Applied by the decomposition-review API to a row currently queued for review.
+// Both guard on the current decompositionStatus being review-queued
+// (human_review | pending) via a conditional updateMany — so a concurrent caller
+// can't clobber a row that already left the queue. `applied: false` means the
+// row wasn't in a review-queued state (already decided, or wrong id).
+
+const REVIEW_QUEUED: DecompositionStatus[] = ['human_review', 'pending'];
+
+// Accept a container whole, as a single pickable atomic unit. Unlike the
+// discovery path, a queued container was never embedded (an unpickable container
+// isn't worth an embed call) — so once it becomes pickable we embed it now, or
+// searchResources would under-rank it.
+export async function markAtomic(resourceId: string): Promise<{ applied: boolean }> {
+  const { count } = await prisma.resource.updateMany({
+    where: { id: resourceId, decompositionStatus: { in: REVIEW_QUEUED } },
+    data: { decompositionStatus: 'atomic' },
+  });
+  if (count === 0) return { applied: false };
+
+  const row = await prisma.resource.findUnique({
+    where: { id: resourceId },
+    select: { title: true, summary: true, conceptsTaught: true },
+  });
+  if (row) {
+    await safeEmbedResource(resourceId, {
+      title: row.title,
+      summary: row.summary,
+      conceptsTaught: row.conceptsTaught,
+    });
+  }
+  return { applied: true };
+}
+
+// Reject a container: keep it as an unpickable record that has left the queue
+// (not crawled, not embedded).
+export async function markUnsupported(resourceId: string): Promise<{ applied: boolean }> {
+  const { count } = await prisma.resource.updateMany({
+    where: { id: resourceId, decompositionStatus: { in: REVIEW_QUEUED } },
+    data: { decompositionStatus: 'unsupported' },
+  });
+  return { applied: count > 0 };
 }
 
 // Create one atomic child of a decomposed container. Skips (returns null) if the

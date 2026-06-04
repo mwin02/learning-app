@@ -66,8 +66,11 @@ export async function decomposeDocToc(args: {
   topic: string;
   difficulty: string;
   parentConcepts: string[];
+  // Bypass the oversize gate (curation API force-decompose): decompose every
+  // selected section however many, rather than bailing to human_review.
+  force?: boolean;
 }): Promise<DocTocResult> {
-  const { url, topic, difficulty, parentConcepts } = args;
+  const { url, topic, difficulty, parentConcepts, force = false } = args;
 
   let html: string;
   try {
@@ -119,8 +122,9 @@ export async function decomposeDocToc(args: {
 
   // Oversize gate: too many sections is usually LLM over-selection or a sprawling
   // tree — don't auto-decompose; let a human decide. Fires BEFORE the per-child
-  // concept derivation, so the expensive half is skipped.
-  if (valid.length > DECOMPOSITION_MAX_AUTO_CHILDREN) {
+  // concept derivation, so the expensive half is skipped. `force` (curation API)
+  // bypasses it for a section list the operator/agent has vouched for.
+  if (!force && valid.length > DECOMPOSITION_MAX_AUTO_CHILDREN) {
     return {
       ok: false,
       outcome: 'human_review',

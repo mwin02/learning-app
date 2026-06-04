@@ -38,17 +38,23 @@ export async function decomposePlaylist(args: {
   topic: string;
   difficulty: string;
   parentConcepts: string[];
+  // Bypass the oversize gate (curation API force-decompose): page the whole
+  // playlist however large rather than bailing to human_review.
+  force?: boolean;
 }): Promise<PlaylistResult> {
-  const { playlistId, topic, difficulty, parentConcepts } = args;
+  const { playlistId, topic, difficulty, parentConcepts, force = false } = args;
 
   const key = process.env.YOUTUBE_API_KEY?.trim();
   if (!key) {
     return { ok: false, outcome: 'pending', reason: 'YOUTUBE_API_KEY not set' };
   }
 
+  // force → raise the gate above any real playlist size so it never fires.
+  const max = force ? Number.POSITIVE_INFINITY : DECOMPOSITION_MAX_AUTO_CHILDREN;
+
   let fetched: { items: RawItem[]; totalResults: number; oversize: boolean };
   try {
-    fetched = await fetchPlaylistItems(playlistId, key, DECOMPOSITION_MAX_AUTO_CHILDREN);
+    fetched = await fetchPlaylistItems(playlistId, key, max);
   } catch (err) {
     if (err instanceof PlaylistNotFound) {
       return { ok: false, outcome: 'human_review', reason: 'playlist not found' };
