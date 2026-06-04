@@ -57,7 +57,7 @@ function QueueList({ rows }: { rows: Row[] }) {
                 {r.url}
               </a>
             </div>
-            <ReviewActions resourceId={r.id} />
+            <ReviewActions resourceId={r.id} title={r.title} />
           </li>
         );
       })}
