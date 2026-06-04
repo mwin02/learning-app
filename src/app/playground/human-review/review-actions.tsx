@@ -12,6 +12,7 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
+import { DecomposeManualModal } from './decompose-manual-modal';
 
 type Action = 'accept_atomic' | 'reject' | 'decompose';
 
@@ -30,11 +31,12 @@ const BUTTONS: Array<{ label: string; action: Action; force?: boolean; className
   { label: 'Force decompose', action: 'decompose', force: true, className: 'border-blue-800 text-blue-900 hover:bg-blue-50' },
 ];
 
-export function ReviewActions({ resourceId }: { resourceId: string }) {
+export function ReviewActions({ resourceId, title }: { resourceId: string; title: string }) {
   const router = useRouter();
   const [isRefreshing, startTransition] = useTransition();
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [manualOpen, setManualOpen] = useState(false);
 
   const disabled = busy !== null || isRefreshing;
 
@@ -80,9 +82,24 @@ export function ReviewActions({ resourceId }: { resourceId: string }) {
             {busy === b.label ? '…' : b.label}
           </button>
         ))}
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => setManualOpen(true)}
+          className="rounded border border-purple-700 px-2 py-0.5 text-xs text-purple-800 hover:bg-purple-50 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Decompose manual…
+        </button>
       </div>
       {msg && (
         <p className={`text-xs ${msg.ok ? 'text-gray-600' : 'text-red-600'}`}>{msg.text}</p>
+      )}
+      {manualOpen && (
+        <DecomposeManualModal
+          resourceId={resourceId}
+          title={title}
+          onClose={() => setManualOpen(false)}
+        />
       )}
     </div>
   );
