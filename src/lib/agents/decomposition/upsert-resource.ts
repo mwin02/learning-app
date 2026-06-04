@@ -194,7 +194,12 @@ export async function decomposeExisting(
         embedTasks.push({ id: childId, title: child.title, summary: child.summary, conceptsTaught: child.conceptsTaught });
       }
     }
-  });
+    // Raise the interactive-transaction timeout well above Prisma's 5s default:
+    // a manual (or forced) decomposition is un-gated, so a large SPA course can
+    // create 100+ children, and each child is a few round-trips to a remote DB.
+    // This is a rare admin curation op, so holding the connection ~tens of
+    // seconds for an atomic all-or-nothing insert is the right trade.
+  }, { maxWait: 10_000, timeout: 120_000 });
 
   for (const t of embedTasks) {
     await safeEmbedResource(t.id, { title: t.title, summary: t.summary, conceptsTaught: t.conceptsTaught });
