@@ -49,10 +49,24 @@ export type ChildInput = {
 export type DecompositionResult = {
   status: DecompositionStatus;
   children: ChildInput[];
+  // Present on a non-decomposed outcome: the router's human-readable reason a
+  // container stayed unpickable (oversize count, fetch error, paywall, …). Lets
+  // a caller — including an autonomous reviewer — decide whether to retry (e.g.
+  // with force) rather than guessing from a bare status. Absent on success.
+  reason?: string;
 };
 
-export async function decompose(input: DecomposeInput): Promise<DecompositionResult> {
+// `force` bypasses the DECOMPOSITION_MAX_AUTO_CHILDREN oversize gate in the
+// routers — used by the curation API when an operator/agent has decided a large
+// container is a legit course worth exploding fully.
+export type DecomposeOptions = { force?: boolean };
+
+export async function decompose(
+  input: DecomposeInput,
+  opts: DecomposeOptions = {},
+): Promise<DecompositionResult> {
   const plan = classify(input);
+  const force = opts.force ?? false;
 
   switch (plan.kind) {
     case 'atomic':
@@ -64,6 +78,7 @@ export async function decompose(input: DecomposeInput): Promise<DecompositionRes
         topic: input.topic,
         difficulty: input.difficulty,
         parentConcepts: input.conceptsTaught,
+        force,
       });
       if (result.ok) {
         console.log('[decompose] playlist decomposed', { url: input.url, children: result.children.length });
@@ -74,7 +89,7 @@ export async function decompose(input: DecomposeInput): Promise<DecompositionRes
         outcome: result.outcome,
         reason: result.reason,
       });
-      return { status: result.outcome, children: [] };
+      return { status: result.outcome, children: [], reason: result.reason };
     }
 
     case 'doc_toc': {
@@ -83,6 +98,7 @@ export async function decompose(input: DecomposeInput): Promise<DecompositionRes
         topic: input.topic,
         difficulty: input.difficulty,
         parentConcepts: input.conceptsTaught,
+        force,
       });
       if (result.ok) {
         console.log('[decompose] doc-toc decomposed', { url: input.url, children: result.children.length });
@@ -95,12 +111,12 @@ export async function decompose(input: DecomposeInput): Promise<DecompositionRes
         outcome: result.outcome,
         reason: result.reason,
       });
-      return { status: result.outcome, children: [] };
+      return { status: result.outcome, children: [], reason: result.reason };
     }
 
     // Paywalled platforms are never crawled — park as a container for curation.
     case 'unsupported':
       console.log('[decompose] routed to human_review', { url: input.url, kind: plan.kind });
-      return { status: 'human_review', children: [] };
+      return { status: 'human_review', children: [], reason: `paywalled platform (${plan.platform}) — not crawled` };
   }
 }
