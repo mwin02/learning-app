@@ -38,9 +38,14 @@ const PAYWALLED_PLATFORMS: Record<string, string> = {
   'codecademy.com': 'Codecademy',
 };
 
-// Resource types that, when not a single atomic unit, denote a container whose
-// parts should be delivered as separate lessons.
-const CONTAINER_TYPES = new Set(['course', 'interactive']);
+// Resource types that MIGHT be a container worth decomposing. This is only the
+// discovery agent's first-pass type guess, so it's a candidate signal, not a
+// verdict — the doc-TOC router fetches the page and decides whether it's truly
+// an ordered lesson sequence (decompose) vs a single lesson or a reference
+// index (keep whole as atomic). `docs` is included because official doc trees
+// are prime decomposition targets; the router's reference_index classification
+// is what keeps an API/method reference from being shattered into fragments.
+const CONTAINER_TYPES = new Set(['course', 'interactive', 'docs']);
 
 function hostnameOf(url: string): string | null {
   try {

@@ -16,6 +16,7 @@
 import type { DecompositionStatus } from '@prisma/client';
 import { classify } from './router';
 import { decomposePlaylist } from './youtube';
+import { decomposeDocToc } from './doctoc';
 
 // What decompose() needs about a resource: classification inputs (url, type)
 // plus the context a router needs to build children — topic + difficulty
@@ -80,9 +81,32 @@ export async function decompose(input: DecomposeInput): Promise<DecompositionRes
       return { status: result.outcome, children: [] };
     }
 
-    // doc_toc router lands in 2.5b-3; unsupported platforms are never crawled.
-    // Both park the parent as a container awaiting manual curation.
-    case 'doc_toc':
+    case 'doc_toc': {
+      const result = await decomposeDocToc({
+        url: input.url,
+        topic: input.topic,
+        difficulty: input.difficulty,
+        parentConcepts: input.conceptsTaught,
+      });
+      if (result.ok) {
+        console.log('[decompose] doc-toc decomposed', {
+          url: input.url,
+          children: result.children.length,
+          truncated: result.truncated,
+        });
+        return { status: 'decomposed', children: result.children };
+      }
+      // 'atomic' reroute: type=course/interactive was a mislabel — the page is a
+      // single self-contained lesson, so persist it as a pickable atomic row.
+      console.log('[decompose] doc-toc not decomposed', {
+        url: input.url,
+        outcome: result.outcome,
+        reason: result.reason,
+      });
+      return { status: result.outcome, children: [] };
+    }
+
+    // Paywalled platforms are never crawled — park as a container for curation.
     case 'unsupported':
       console.log('[decompose] routed to human_review', { url: input.url, kind: plan.kind });
       return { status: 'human_review', children: [] };
