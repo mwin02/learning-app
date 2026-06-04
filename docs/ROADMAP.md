@@ -6,7 +6,7 @@ This roadmap mirrors the build order from the original spec (`learning-path-mvp-
 
 **Shipped:** Phases 1, 2, 2.5a (schema), and the full **2.5-AR curriculum-agent redesign**. The playground generates real sequenced paths end-to-end — library-first retrieval, pgvector search, web fallback, topic canonicalization, and a rubric critic — with a full agent trace.
 
-**Next up:** **2.5b** (decomposition pipeline) → **2.5c–g** (Track/Lesson delivery layer) → 2.6 (frontend) → 2.75 (Programs) → 3 (auth + Stripe) → 4–6.
+**Next up:** **2.5c–g** (Track/Lesson delivery layer) → 2.6 (frontend) → 2.75 (Programs) → 3 (auth + Stripe) → 4–6. (2.5b decomposition pipeline ✅ shipped.)
 
 **Agent code layout:** agents live under `src/lib/agents/` (curriculum pipeline in `agents/curriculum/`, tools in `agents/tools/`, web-discovery validation in `agents/validation/`); shared AI primitives (`vertex`, `models`, `embeddings`) under `src/lib/ai/`. New agents (`decomposition`, `track`, `content`, `program`, `tutor`) land under `agents/`.
 
@@ -99,9 +99,30 @@ The 2b agent was a single `generateText` call that dumped a topic's whole librar
 - **Separate critic call** against an explicit rubric → bounded revise (not self-grading in the same context).
 - **Emit isolated from tools** — combining `tools` + `Output.object` in one call silently drops structured output, so emit is a separate `Output.object` call with no tools over the gathered candidate set.
 
+#### Phase 2.5b — Decomposition pipeline ✅
+
+Container resources (playlists, doc trees, whole courses) are decomposed into atomic, pickable child Resources at discovery/seed time, plus a human/agent curation layer for containers the routers can't (or won't) auto-explode. Code lives under `lib/agents/decomposition/` (router → `decompose()` orchestrator → per-source routers → shared `upsertResource`/`decomposeExisting` sink), not the single `decomposition-agent.ts` originally sketched.
+
+**Shipped blocks:**
+- [x] **2.5b-1** — Decomposition seam + `atomic` fast-path; `decompose()` returns a plan the caller persists, so discovery and the seed share one write path. PR #32.
+- [x] **2.5b-2** — YouTube playlist router (Data API, no OAuth); children re-derive their own concepts. PR #33.
+- [x] **2.5b-3** — Doc-site TOC router: fetch HTML → LLM selects ordered lesson links from real anchors (single_lesson / lesson_sequence / reference_index three-way) → URL-validated children. PR #34.
+- [x] **2.5b-4** — Seed-library backfill + oversize gate (`DECOMPOSITION_MAX_AUTO_CHILDREN=50`; >50 → `human_review`) + parallel concept derivation. PR #35.
+- [x] **2.5b-5** — `/playground/human-review` queue page (observable, read-only). PR #37.
+- [x] **2.5b-6** — Decomposition-review **curation API** (`POST /api/playground/decomposition-review`): `accept_atomic` / `reject` / `decompose` (force bypasses the oversize gate). New `withAdminAuth` operator/agent auth wrapper (sibling to `withAuth`; diverges in Phase 3). Returns a `reason` so an autonomous reviewer can decide whether to retry. PR #38.
+- [x] **2.5b-7** — Per-row curation buttons wired into the queue page. PR #42.
+- [x] **2.5b-8** — **Manual decomposition** (`decompose_manual`): operator/agent supplies the ordered child list for client-rendered SPA courses the scrape routers can't read; `manual.ts` is the third link-source router into the shared sink. Also raised the child-insert transaction timeout (Prisma's 5s default aborted 100+ child courses). PR #40.
+- [x] **2.5b-9** — "Decompose manual" button + paste-a-list modal (`url | title` lines → JSON `children`). PR #41.
+
+**Beyond the original plan:**
+- **Curation layer** (review API + buttons + manual action). The original sketch ended at "fallback → human_review, container exists but unpickable"; we added the actions to *resolve* that queue — by a human or an agent — not just observe it. Designed agent-first (discriminated-union JSON body, `reason` passthrough).
+- **SPA / headless escape hatch.** Khan-style SPAs render lessons client-side, so the scrape routers park them in `human_review`. `decompose_manual` lets a human or browser agent supply the ordered lessons. Verified end-to-end by driving a headless browser over Khan's Linear Algebra course (138 atomic children, ordered, concept-tagged, embedded). The proper fix — a **headless-render agent decomposer** that POSTs `decompose_manual` itself — is deferred to post-Phase-3 (avoids a Playwright/Chrome dependency on Vercel; see hosting portability in AGENTS.md). Until then a `decompose-spa` Claude Code skill (`.claude/skills/`) is the manual bandaid.
+- Queue path is `/playground/human-review`, not the `/playground/decomposition-queue` name originally sketched.
+
+Carried into 2.5c: prefer **same-parent cohesion** when the curriculum agent picks sibling atomic children (non-pickable rows are already filtered via AR-2's hybrid search).
+
 ### Block sequence — remaining (each <300 LOC, one PR per block)
 
-- [ ] **2.5b — Decomposition pipeline at discovery + seed backfill.** `lib/agents/decomposition-agent.ts` with a router: YouTube playlists via Data API, doc-site TOC scrape, atomic fast-path, fallback → `human_review`. Wired into 2c's discovery flow synchronously: classify → decompose → commit parent + children in one transaction. Includes `scripts/decompose-seed-library.ts` to migrate existing course-type rows from 1b. Also: extend curriculum agent to skip non-pickable Resources and prefer same-parent cohesion. Playground gains a `/playground/decomposition-queue` view for the `human_review` queue.
 - [ ] **2.5c — Track agent (composition + dedup).** `lib/agents/track-agent.ts` takes a persisted Path → groups PathItems' Resources into ordered Lessons (factoring in each PathItem's rationale), detects cross-resource concept overlap, collapses duplicates into Lessons-with-alternates with `primary` selected by trust score + path order. Writes a `Track` with `status='building'` → `'ready'`. Triggered lazily on first `/playground/path/[id]` visit.
 - [ ] **2.5d — Delivery-mode classifier.** Per `LessonResource`, set `deliveryMode`. Known-good embed allowlist (YouTube, MDN, Python docs, etc.) + runtime header probe (`X-Frame-Options` / `CSP: frame-ancestors`) cached on `Resource`. Native = agent-generated content we host.
 - [ ] **2.5e — Content agent: exercises.** `lib/agents/content-agent.ts` generates `Exercise` records (text/MCQ first) for Lessons flagged gap-prone (source resource has no native exercises, concept is foundational). Fans out in parallel during track building.
@@ -120,6 +141,7 @@ The 2b agent was a single `generateText` call that dumped a topic's whole librar
 - **Idempotency of track regen.** Track failures shouldn't poison the Path. `Track.status='failed'` with diagnostic; regen replaces.
 - **Decomposition failure during discovery.** Transient YouTube API / scrape failures shouldn't nuke the discovery. Commit parent with `decompositionStatus='pending'`, retry via `scripts/retry-decomposition.ts` or on next touch. Parent stays unpickable until decomposed.
 - **Discovery latency.** First user to trigger an off-library topic that finds a container pays the decomposition cost (~30s for a 30-video playlist). Accepted for now; revisit in 2.6 if it becomes a UX problem.
+- **Headless-render agent decomposer (post-Phase-3).** Replaces the `decompose_manual` human bandaid for SPA courses (Khan Academy, etc.): an agent renders the client-side page, extracts the ordered lessons, and POSTs `decompose_manual` itself. Needs a rendering surface (connected Chrome, or a Cloud Run service with Playwright) — hence deferred until after the Cloud Run migration, to keep a browser dependency off Vercel.
 - **Non-embeddable circumvention (revisit).** Options to weigh later: server-side proxy + rewrite (legal risk), agent-generated summaries (quality risk), reader-mode extraction.
 - **Critic-triggered re-retrieval (carried from AR).** If the critic finds a gap needing a *different* resource (not just reordering), v1 re-selects over the existing set only; looping back into retrieval is a future option.
 
