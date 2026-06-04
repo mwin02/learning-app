@@ -34,9 +34,9 @@ yarn-error.log*
 .env*
 !.env.example
 
-# claude code local files
-CLAUDE.md
-.claude/
+# claude code local files (CLAUDE.md and shared skills are tracked; the rest is local)
+.claude/*
+!.claude/skills/
 
 # vercel
 .vercel
