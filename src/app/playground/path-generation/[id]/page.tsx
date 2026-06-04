@@ -29,8 +29,8 @@ export default async function PathDetailPage({
   return (
     <main className="p-6 flex flex-col gap-6">
       <div>
-        <Link href="/playground" className="text-sm underline">
-          ← back to playground
+        <Link href="/playground/path-generation" className="text-sm underline">
+          ← back to path generation
         </Link>
       </div>
 
