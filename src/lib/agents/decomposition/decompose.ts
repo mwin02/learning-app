@@ -14,7 +14,22 @@
 // derivation + canonicalization (decision A) lands with the first real router.
 
 import type { DecompositionStatus } from '@prisma/client';
-import { classify, type ClassifiableResource } from './router';
+import { classify } from './router';
+import { decomposePlaylist } from './youtube';
+
+// What decompose() needs about a resource: classification inputs (url, type)
+// plus the context a router needs to build children — topic + difficulty
+// (children inherit difficulty) and the parent's first-pass concepts (a
+// grounding signal for per-child concept derivation, decision A).
+export type DecomposeInput = {
+  url: string;
+  title: string;
+  type: string;
+  topic: string;
+  difficulty: string;
+  summary: string;
+  conceptsTaught: string[];
+};
 
 // One atomic child produced by a router. Inherits topic / sourceId / trustScore
 // / language from its parent at upsert time, so those are absent here.
@@ -35,25 +50,41 @@ export type DecompositionResult = {
   children: ChildInput[];
 };
 
-export async function decompose(
-  resource: ClassifiableResource,
-): Promise<DecompositionResult> {
-  const plan = classify(resource);
+export async function decompose(input: DecomposeInput): Promise<DecompositionResult> {
+  const plan = classify(input);
 
   switch (plan.kind) {
     case 'atomic':
       return { status: 'atomic', children: [] };
 
-    // Routers not yet implemented (2.5b-2 youtube_playlist, 2.5b-3 doc_toc) and
-    // platforms we never crawl (unsupported) all park the parent as a container
-    // awaiting manual curation. No children until the router ships.
-    case 'youtube_playlist':
+    case 'youtube_playlist': {
+      const result = await decomposePlaylist({
+        playlistId: plan.playlistId,
+        topic: input.topic,
+        difficulty: input.difficulty,
+        parentConcepts: input.conceptsTaught,
+      });
+      if (result.ok) {
+        console.log('[decompose] playlist decomposed', {
+          url: input.url,
+          children: result.children.length,
+          truncated: result.truncated,
+        });
+        return { status: 'decomposed', children: result.children };
+      }
+      console.log('[decompose] playlist not decomposed', {
+        url: input.url,
+        outcome: result.outcome,
+        reason: result.reason,
+      });
+      return { status: result.outcome, children: [] };
+    }
+
+    // doc_toc router lands in 2.5b-3; unsupported platforms are never crawled.
+    // Both park the parent as a container awaiting manual curation.
     case 'doc_toc':
     case 'unsupported':
-      console.log('[decompose] routed to human_review', {
-        url: resource.url,
-        kind: plan.kind,
-      });
+      console.log('[decompose] routed to human_review', { url: input.url, kind: plan.kind });
       return { status: 'human_review', children: [] };
   }
 }

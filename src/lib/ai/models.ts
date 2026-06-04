@@ -13,6 +13,7 @@ type AgentName =
   | 'curriculumCritic'
   | 'curriculumFallback'
   | 'tagCanonicalizer'
+  | 'conceptDeriver'
   | 'validityAgent'
   | 'topicGate'
   | 'health';
@@ -73,6 +74,16 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     modelId: 'gemini-2.5-flash',
     temperature: 0,
     maxOutputTokens: 4096,
+  },
+  conceptDeriver: {
+    // Phase 2.5b-2: re-derives per-child conceptsTaught/prerequisiteConcepts for
+    // the videos of a decomposed playlist from each video's own title +
+    // description, canonicalized against the topic's existing vocab. Rule
+    // application like tagCanonicalizer, but over more rows (chunked) and a
+    // little freer output, so a larger budget than the 4k canonicalizer.
+    modelId: 'gemini-2.5-flash',
+    temperature: 0,
+    maxOutputTokens: 8192,
   },
   validityAgent: {
     // Content-rule check over a batch of ~12 URLs at a time. Flash + a sharp
