@@ -137,6 +137,52 @@ export async function upsertResource(
   return 'inserted';
 }
 
+// Apply a decomposition to an ALREADY-EXISTING resource (the seed-backfill case,
+// 2.5b-4) — the parent row already exists, unlike the discovery path which
+// creates it. Updates the parent's decompositionStatus and, for a 'decomposed'
+// result, creates the children through the same createChild path (slug, source/
+// trust inheritance, URL-collision skip, post-commit embed). Idempotent on
+// re-run: children whose URL already exists are skipped.
+export async function decomposeExisting(
+  resourceId: string,
+  decomposition: DecompositionResult,
+): Promise<{ status: DecompositionResult['status']; childrenCreated: number }> {
+  const existing = await prisma.resource.findUnique({
+    where: { id: resourceId },
+    select: { topic: true, sourceId: true, trustScore: true },
+  });
+  if (!existing) throw new Error(`decomposeExisting: resource ${resourceId} not found`);
+
+  const taken = new Set<string>();
+  const embedTasks: EmbedTask[] = [];
+
+  await prisma.$transaction(async (tx) => {
+    await tx.resource.update({
+      where: { id: resourceId },
+      data: { decompositionStatus: decomposition.status },
+    });
+    for (const child of decomposition.children) {
+      const childId = await createChild(tx, {
+        topic: existing.topic,
+        parentId: resourceId,
+        sourceId: existing.sourceId,
+        trustScore: existing.trustScore,
+        child,
+        taken,
+      });
+      if (childId) {
+        embedTasks.push({ id: childId, title: child.title, summary: child.summary, conceptsTaught: child.conceptsTaught });
+      }
+    }
+  });
+
+  for (const t of embedTasks) {
+    await safeEmbedResource(t.id, { title: t.title, summary: t.summary, conceptsTaught: t.conceptsTaught });
+  }
+
+  return { status: decomposition.status, childrenCreated: embedTasks.length };
+}
+
 // Create one atomic child of a decomposed container. Skips (returns null) if the
 // child URL already exists as a standalone resource — a video can appear both
 // as a seeded single and inside a playlist; we keep the first and don't dupe.

@@ -52,20 +52,20 @@ export const RETRIEVAL_MAX_STEPS = 6;
 // pre-loop floor that already fires for thin topics.
 export const RETRIEVAL_MAX_FALLBACKS = 1;
 
-// Phase 2.5b-2: max atomic children materialized from one YouTube playlist.
-// Bounds the per-child concept-derivation token spend (and the child-row count)
-// on pathological playlists. Beyond this, the first N by playlist order are
-// kept and the rest dropped with a logged truncation.
-export const YOUTUBE_PLAYLIST_MAX_CHILDREN = 50;
+// Phase 2.5b: a container that would decompose into MORE than this many atomic
+// children is NOT auto-decomposed — it's routed to human_review instead (with
+// the projected count logged). Rationale (2.5b-4): silently keeping "the first
+// N" is arbitrary (the right N of a 200-item playlist may not be the first N),
+// and an oversized result is usually either a legit mega-course worth a human's
+// "yes, decompose it" or a channel-dump / over-selection that shouldn't
+// decompose at all. The gate fires BEFORE the expensive per-child concept
+// derivation, so suspect resources cost almost nothing. Shared by the playlist
+// and doc-TOC routers.
+export const DECOMPOSITION_MAX_AUTO_CHILDREN = 50;
 
 // Phase 2.5b-2: children are batched this many per concept-derivation LLM call
-// so a 50-video playlist stays within the model's output-token budget.
+// so a large container stays within the model's output-token budget.
 export const CONCEPT_DERIVATION_CHUNK_SIZE = 25;
-
-// Phase 2.5b-3: max atomic children materialized from one doc-site course tree.
-// Same role as the playlist cap — bounds child-row count + concept-derivation
-// spend on a large table of contents.
-export const DOC_TOC_MAX_CHILDREN = 50;
 
 // Phase 2.5b-3: cap on the fetched container HTML we process (chars). Doc pages
 // can be huge; we only need the title, anchor links, and a body snippet, so we
