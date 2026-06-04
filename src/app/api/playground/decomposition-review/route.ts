@@ -14,6 +14,8 @@
 //   reject        — keep as an unpickable record; leaves the queue (status unsupported)
 //   decompose     — run decompose() → decomposeExisting(); force bypasses the
 //                   DECOMPOSITION_MAX_AUTO_CHILDREN oversize gate
+//   decompose_manual — explode into an operator/agent-supplied ordered child list
+//                   (SPA escape hatch; see manual.ts)
 // Returns { resourceId, status, childrenCreated?, reason? }. `reason` explains a
 // non-decomposed decompose outcome so a caller (incl. an autonomous reviewer) can
 // decide whether to retry with force.
@@ -23,6 +25,7 @@ import { prisma } from '@/lib/db';
 import { withAdminAuth } from '@/lib/api/with-admin-auth';
 import { decompositionReviewSchema } from '@/lib/api/decomposition-review-schema';
 import { decompose } from '@/lib/agents/decomposition/decompose';
+import { decomposeManual } from '@/lib/agents/decomposition/manual';
 import {
   decomposeExisting,
   markAtomic,
@@ -132,6 +135,23 @@ export const POST = withAdminAuth(async (req) => {
           childrenCreated,
           ...(result.reason ? { reason: result.reason } : {}),
         });
+      }
+
+      case 'decompose_manual': {
+        // No oversize gate / no classify() — the list is operator/agent-vouched.
+        // Build children (concepts derived, defaults applied) and persist through
+        // the same decomposeExisting() sink as the scrape-based routers.
+        const { children } = await decomposeManual({
+          items: input.children,
+          topic: resource.topic,
+          difficulty: resource.difficulty,
+          parentConcepts: resource.conceptsTaught,
+        });
+        const { status, childrenCreated } = await decomposeExisting(resource.id, {
+          status: 'decomposed',
+          children,
+        });
+        return Response.json({ resourceId: resource.id, status, childrenCreated });
       }
     }
   } catch (err) {
