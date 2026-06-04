@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/db';
 import { isDevAuthEnabled } from '@/lib/dev-auth';
 import { classify } from '@/lib/agents/decomposition/router';
+import { ReviewActions } from './review-actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -56,6 +57,7 @@ function QueueList({ rows }: { rows: Row[] }) {
                 {r.url}
               </a>
             </div>
+            <ReviewActions resourceId={r.id} />
           </li>
         );
       })}
@@ -97,10 +99,11 @@ export default async function HumanReviewPage() {
         <p className="text-sm text-gray-600 max-w-2xl">
           Container resources the decomposition pipeline could not (or chose not to) explode into
           atomic children. They are <strong>not pickable</strong> by the curriculum agent until
-          resolved. <code>human_review</code> needs a manual decision (decompose anyway, pick a
-          subset, or reject); <code>pending</code> is a transient/automatic retry shown for
-          visibility. Curation actions land in a later block — this view makes the queue
-          observable.
+          resolved. <code>human_review</code> needs a decision; <code>pending</code> is a
+          transient/automatic retry shown for visibility. Use the per-row actions to resolve a
+          container: <strong>Accept atomic</strong> keeps it whole as one pickable unit,{' '}
+          <strong>Reject</strong> drops it from the queue, <strong>Decompose</strong> runs the
+          pipeline, and <strong>Force decompose</strong> bypasses the auto-decompose size limit.
         </p>
       </section>
 
