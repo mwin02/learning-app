@@ -19,6 +19,7 @@ import { searchResources, type SearchResult } from '@/lib/agents/tools/search-re
 import { runWebFallback } from '@/lib/agents/tools/web-fallback';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 import type { CurriculumInput } from '@/lib/agents/curriculum/curriculum-agent';
+import { relatedTopics } from '@/types/resource';
 import {
   FALLBACK_THRESHOLD,
   FALLBACK_TARGET_COUNT,
@@ -123,7 +124,7 @@ function makeTools(
       execute: async ({ query, difficulty, limit }) => {
         const rows = await searchResources({
           query,
-          topic: input.topic,
+          topics: relatedTopics(input.topic),
           difficulty,
           limit,
           pickableOnly: true,
@@ -226,11 +227,17 @@ function buildPrompt(input: CurriculumInput): string {
 // Deterministic floor: guarantee the loop starts with a non-empty library on a
 // cold topic, independent of whether the model later chooses to call fallback.
 async function ensureFloor(topic: string, onTrace: OnTrace): Promise<void> {
+  // Count over the same related set the retrieval search widens to: if related
+  // topics are in scope for search, they satisfy the floor too. Otherwise a
+  // cold specialization (e.g. `javascript`, 0 own rows) would trigger expensive
+  // web discovery despite its related topic (`javascript-react`) already
+  // supplying plenty of in-scope resources.
+  const topics = relatedTopics(topic);
   const active = await prisma.resource.count({
-    where: { topic, status: 'active', decompositionStatus: 'atomic' },
+    where: { topic: { in: topics }, status: 'active', decompositionStatus: 'atomic' },
   });
   if (active < FALLBACK_THRESHOLD) {
-    console.log('[curriculum-retrieval] floor fallback', { topic, active, threshold: FALLBACK_THRESHOLD });
+    console.log('[curriculum-retrieval] floor fallback', { topic, topics, active, threshold: FALLBACK_THRESHOLD });
     const r = await runWebFallback({ topic, targetCount: FALLBACK_TARGET_COUNT });
     onTrace({ kind: 'fallback', label: 'floor fallback', detail: { active, threshold: FALLBACK_THRESHOLD, inserted: r.insertedCount } });
   }

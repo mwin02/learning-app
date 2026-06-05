@@ -33,6 +33,10 @@ export type SearchParams = {
   // set) the result is ordered by trustScore instead of semantic distance.
   query?: string;
   topic?: string;
+  // Explicit set of topics to filter on (e.g. a topic ∪ its related topics).
+  // When provided it takes precedence over `topic`; relation expansion happens
+  // in the caller — this primitive only filters on the list it's handed.
+  topics?: string[];
   difficulty?: Difficulty;
   types?: ResourceType[];
   statuses?: ResourceStatus[];
@@ -83,6 +87,7 @@ const COLS = Prisma.sql`
 function buildConditions(params: SearchParams): Prisma.Sql[] {
   const {
     topic,
+    topics,
     difficulty,
     types,
     decompositionStatuses,
@@ -90,7 +95,11 @@ function buildConditions(params: SearchParams): Prisma.Sql[] {
     statuses = DEFAULT_STATUSES,
   } = params;
   const conds: Prisma.Sql[] = [];
-  if (topic) conds.push(Prisma.sql`topic = ${topic}`);
+  if (topics && topics.length > 0) {
+    conds.push(Prisma.sql`topic IN (${Prisma.join(topics)})`);
+  } else if (topic) {
+    conds.push(Prisma.sql`topic = ${topic}`);
+  }
   if (difficulty) conds.push(Prisma.sql`difficulty::text = ${difficulty}`);
   if (types && types.length > 0) {
     conds.push(Prisma.sql`type::text IN (${Prisma.join(types)})`);

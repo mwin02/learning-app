@@ -71,10 +71,15 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     maxOutputTokens: 32768,
   },
   tagCanonicalizer: {
-    // Plain JSON shape, no grounding. Deterministic mapping job.
+    // Plain JSON shape, no grounding. Deterministic mapping job, but the input
+    // is the whole atomic survivor batch (oversampled discovery), so the
+    // results array scales with batch size. At 4k, Flash 2.5 (which spends
+    // output budget on thinking first) capped mid-JSON on realistic batches,
+    // throwing AI_JSONParseError; canonicalizeTags now degrades to raw tags on
+    // that failure, but 8k keeps the degradation rare rather than routine.
     modelId: 'gemini-2.5-flash',
     temperature: 0,
-    maxOutputTokens: 4096,
+    maxOutputTokens: 8192,
   },
   conceptDeriver: {
     // Phase 2.5b-2: re-derives per-child conceptsTaught/prerequisiteConcepts for
