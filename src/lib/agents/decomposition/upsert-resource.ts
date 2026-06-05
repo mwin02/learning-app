@@ -28,7 +28,13 @@ export type UpsertResourceInput = {
   conceptsTaught: string[];
 };
 
-export type UpsertOutcome = 'inserted' | 'skipped';
+// `atomicIds` are the newly-created pickable (atomic) resource ids — an atomic
+// parent, or a decomposed container's atomic children. The retrieval session
+// uses them as a discovery allowlist so agent-triggered fallback finds stay
+// visible to search even on an above-gate topic (where search is active-only).
+// Empty on 'skipped' and on an inserted-but-unpickable container (pending /
+// human_review parent with no atomic children).
+export type UpsertOutcome = { outcome: 'inserted' | 'skipped'; atomicIds: string[] };
 
 type TxClient = Omit<
   PrismaClient,
@@ -55,7 +61,7 @@ export async function upsertResource(
         requestedTopic: topic,
       });
     }
-    return 'skipped';
+    return { outcome: 'skipped', atomicIds: [] };
   }
 
   const source = await resolveSource(resource.url);
@@ -121,11 +127,12 @@ export async function upsertResource(
       url: resource.url,
       error: (err as Error).message,
     });
-    return 'skipped';
+    return { outcome: 'skipped', atomicIds: [] };
   }
 
   // Best-effort embeds, post-commit: a failure logs but leaves the row in place
-  // for the next backfill (embeddedAt < updatedAt).
+  // for the next backfill (embeddedAt < updatedAt). embedTasks are exactly the
+  // atomic (pickable) ids created above.
   for (const t of embedTasks) {
     await safeEmbedResource(t.id, {
       title: t.title,
@@ -134,7 +141,7 @@ export async function upsertResource(
     });
   }
 
-  return 'inserted';
+  return { outcome: 'inserted', atomicIds: embedTasks.map((t) => t.id) };
 }
 
 // Apply a decomposition to an ALREADY-EXISTING resource (the seed-backfill case,

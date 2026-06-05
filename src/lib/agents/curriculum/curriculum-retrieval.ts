@@ -13,6 +13,7 @@
 
 import { generateText, stepCountIs, tool } from 'ai';
 import { z } from 'zod';
+import type { ResourceStatus } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { getModel } from '@/lib/ai/models';
 import { searchResources, type SearchResult } from '@/lib/agents/tools/search-resources';
@@ -25,6 +26,7 @@ import {
   FALLBACK_TARGET_COUNT,
   RETRIEVAL_MAX_STEPS,
   RETRIEVAL_MAX_FALLBACKS,
+  PENDING_REVIEW_GATE_PER_TOPIC,
 } from '@/lib/config';
 
 // Model-facing view of a candidate: a handle in place of the cuid, and only the
@@ -60,6 +62,10 @@ class RetrievalSession {
   private byId = new Map<string, { handle: string; row: SearchResult }>();
   private byHandle = new Map<string, SearchResult>();
   private counter = 0;
+  // Atomic resource ids this session discovered via triggerWebFallback. They're
+  // passed to searchResources as the status allowlist so they stay visible on an
+  // above-gate (active-only) topic. See the gate logic in runRetrieval.
+  readonly discoveredIds = new Set<string>();
 
   // Idempotent: the same resource always maps to the same handle within a
   // session, so repeat searches don't multiply candidates.
@@ -103,6 +109,7 @@ function makeTools(
   session: RetrievalSession,
   input: CurriculumInput,
   budget: { fallbacks: number },
+  statusWindow: ResourceStatus[],
   onTrace: OnTrace,
 ) {
   return {
@@ -128,6 +135,8 @@ function makeTools(
           difficulty,
           limit,
           pickableOnly: true,
+          statuses: statusWindow,
+          includeIds: [...session.discoveredIds],
         });
         onTrace({ kind: 'tool', label: 'searchResources', detail: { query, difficulty, results: rows.length } });
         return rows.map((r) => session.view(r));
@@ -189,6 +198,9 @@ function makeTools(
         budget.fallbacks -= 1;
         console.log('[curriculum-retrieval] triggerWebFallback', { topic: input.topic, reason });
         const r = await runWebFallback({ topic: input.topic, targetCount: FALLBACK_TARGET_COUNT });
+        // Admit this run's finds to subsequent searches even on an above-gate
+        // (active-only) topic — they were discovered deliberately for this path.
+        for (const id of r.insertedIds) session.discoveredIds.add(id);
         onTrace({ kind: 'fallback', label: 'triggerWebFallback', detail: { reason, inserted: r.insertedCount, discovered: r.discoveredCount } });
         return {
           insertedCount: r.insertedCount,
@@ -226,7 +238,10 @@ function buildPrompt(input: CurriculumInput): string {
 
 // Deterministic floor: guarantee the loop starts with a non-empty library on a
 // cold topic, independent of whether the model later chooses to call fallback.
-async function ensureFloor(topic: string, onTrace: OnTrace): Promise<void> {
+// Returns the count of active, pickable resources over the related set — which
+// is also the input to the pending-review gate (a floor fallback only inserts
+// pending_review rows, so the count is unchanged by it and stays accurate).
+async function ensureFloor(topic: string, onTrace: OnTrace): Promise<number> {
   // Count over the same related set the retrieval search widens to: if related
   // topics are in scope for search, they satisfy the floor too. Otherwise a
   // cold specialization (e.g. `javascript`, 0 own rows) would trigger expensive
@@ -241,6 +256,7 @@ async function ensureFloor(topic: string, onTrace: OnTrace): Promise<void> {
     const r = await runWebFallback({ topic, targetCount: FALLBACK_TARGET_COUNT });
     onTrace({ kind: 'fallback', label: 'floor fallback', detail: { active, threshold: FALLBACK_THRESHOLD, inserted: r.insertedCount } });
   }
+  return active;
 }
 
 export async function runRetrieval(
@@ -250,7 +266,15 @@ export async function runRetrieval(
   const onTrace: OnTrace = opts.onTrace ?? (() => {});
 
   onTrace({ kind: 'stage', label: 'retrieval started', detail: { topic: input.topic, difficulty: input.difficulty } });
-  await ensureFloor(input.topic, onTrace);
+  const activeCount = await ensureFloor(input.topic, onTrace);
+
+  // Pending-review gate: a well-populated topic (>= the gate of active, pickable
+  // resources) generates from verified content only; a sparse one also surfaces
+  // pending_review so it isn't starved. Either way, resources THIS session
+  // discovers via triggerWebFallback bypass the window by id (session.discoveredIds).
+  const gated = activeCount >= PENDING_REVIEW_GATE_PER_TOPIC;
+  const statusWindow: ResourceStatus[] = gated ? ['active'] : ['active', 'pending_review'];
+  onTrace({ kind: 'stage', label: 'pending-review gate', detail: { activeCount, gate: PENDING_REVIEW_GATE_PER_TOPIC, gated, statusWindow } });
 
   const session = new RetrievalSession();
   const budget = { fallbacks: RETRIEVAL_MAX_FALLBACKS };
@@ -260,7 +284,7 @@ export async function runRetrieval(
     model,
     temperature,
     maxOutputTokens,
-    tools: makeTools(session, input, budget, onTrace),
+    tools: makeTools(session, input, budget, statusWindow, onTrace),
     stopWhen: stepCountIs(RETRIEVAL_MAX_STEPS),
     system: SYSTEM_PROMPT,
     prompt: buildPrompt(input),
