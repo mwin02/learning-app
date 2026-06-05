@@ -6,7 +6,27 @@ This roadmap mirrors the build order from the original spec (`learning-path-mvp-
 
 **Shipped:** Phases 1, 2, 2.5a (schema), and the full **2.5-AR curriculum-agent redesign**. The playground generates real sequenced paths end-to-end — library-first retrieval, pgvector search, web fallback, topic canonicalization, and a rubric critic — with a full agent trace.
 
-**Next up:** **2.5c–g** (Track/Lesson delivery layer) → 2.6 (frontend) → 2.75 (Programs) → 3 (auth + Stripe) → 4–6. (2.5b decomposition pipeline ✅ shipped.)
+### ⭐ NEXT UP — Topic partition vs. semantic search (own design discussion)
+
+**Status: needs a dedicated design session before implementation.** Surfaced by the curriculum-agent audit ([docs/curriculum-agent-audit.md](curriculum-agent-audit.md), Section 2 follow-up); pulled out as the next thing to work on.
+
+**Problem.** `resource.topic` is a single hard partition that conflates two things: *subject matter* and *the discovery context that found the resource*. `searchResources` filters on exact `topic =` equality ([search-resources.ts:93](src/lib/agents/tools/search-resources.ts)). Discovery stamps the *requesting* path's topic onto every resource it finds, so a generic JavaScript tutorial discovered while building a `javascript-react` path is permanently filed under `javascript-react` and is invisible to a `javascript` path. Real example: resource `cmpyc0t4f0011bsm5rqszhb37` (a plain JS tutorial filed under `javascript-react`).
+
+**Two sub-problems to keep distinct:**
+- (a) *Mis-filing* — a resource's content is broader/other than its partition label (root cause: discovery stamps the request topic).
+- (b) *Legitimate overlap* — related topics genuinely share resources (React draws on JS foundations).
+
+**Why the obvious fix is insufficient.** "Filter on `conceptsTaught` instead of `topic`" is fragile: concepts are canonicalized *per-topic* (vocab isn't shared across topics), the ≤30 fast path relies on the topic filter for selectivity, and there's no GIN index on `conceptsTaught`. The embedding is already global (built over title+summary+concepts), so the real lever is *how hard topic should gate search*, not concepts-vs-topic.
+
+**Candidate directions (decide in the session):**
+1. *Related-topic set* — curated relations table; search filters `topic IN (requested ∪ related)`. Smallest change, preserves fast path + indexing, fixes (b); doesn't fix (a) alone.
+2. *Soft topic + always rank* — drop hard `topic` WHERE; rank by embedding distance with same-topic boost + max-distance cutoff. Fixes (a)+(b) via content; loses the fast path, risks cross-subject bleed.
+3. *Subject + specialization* — two-level topic (coarse `subjectArea` + specialization); filter by subject, rank by embedding. Cleanest long-term, biggest migration.
+4. *Fix discovery + backfill* — per-resource topic classification at discovery + one-time relabel of existing rows. Treats root cause (a); still needs a relations layer for (b).
+
+**Index note:** `WHERE topic = X` is already covered by the existing composite `@@index([topic, status, tier])` (leftmost prefix) — topic is *not* unindexed. But every non-topic enum predicate in `searchResources` is written as `col::text = …` / `col::text IN (…)`, which defeats the enum-column indexes (`@@index([difficulty])` is effectively dead). If search filters become a bottleneck, revisit those casts and consider an index shaped for the actual `topic + decompositionStatus + difficulty` predicate.
+
+**Then:** **2.5c–g** (Track/Lesson delivery layer) → 2.6 (frontend) → 2.75 (Programs) → 3 (auth + Stripe) → 4–6. (2.5b decomposition pipeline ✅ shipped.)
 
 **Agent code layout:** agents live under `src/lib/agents/` (curriculum pipeline in `agents/curriculum/`, tools in `agents/tools/`, web-discovery validation in `agents/validation/`); shared AI primitives (`vertex`, `models`, `embeddings`) under `src/lib/ai/`. New agents (`decomposition`, `track`, `content`, `program`, `tutor`) land under `agents/`.
 
@@ -144,6 +164,9 @@ Carried into 2.5c: prefer **same-parent cohesion** when the curriculum agent pic
 - **Headless-render agent decomposer (post-Phase-3).** Replaces the `decompose_manual` human bandaid for SPA courses (Khan Academy, etc.): an agent renders the client-side page, extracts the ordered lessons, and POSTs `decompose_manual` itself. Needs a rendering surface (connected Chrome, or a Cloud Run service with Playwright) — hence deferred until after the Cloud Run migration, to keep a browser dependency off Vercel.
 - **Non-embeddable circumvention (revisit).** Options to weigh later: server-side proxy + rewrite (legal risk), agent-generated summaries (quality risk), reader-mode extraction.
 - **Critic-triggered re-retrieval (carried from AR).** If the critic finds a gap needing a *different* resource (not just reordering), v1 re-selects over the existing set only; looping back into retrieval is a future option.
+- **Fallback floor never fills (audit 5.1) — HIGH cost.** `ensureFloor` counts `status='active'` atomic rows, but discovery inserts `pending_review` and nothing promotes to `active`, so a full Gemini 2.5 Pro discovery loop re-fires on *every* request for any agent-grown topic (the floor gate reads `{active}` while search reads `{active, pending_review}`). Fix: count `pending_review` atomic toward the floor, or add the promotion path the dead `PENDING_REVIEW_GATE_PER_TOPIC` config anticipates. Small, self-contained; independent of the stampede/queue work (audit 5.2, deferred to Phase 3.1).
+- **Pre-decompose dedup (audit 6.1) — cost; compounds 5.1.** Dedup is currently post-decompose: the existing-URL skip lives in `upsertResource` (last step), so re-discovering an already-stored playlist still runs liveness fetches + rules-agent Flash + full YouTube Data API decomposition + concept-derivation before discarding it at upsert. With 5.1 (re-fire every request), a popular cold topic re-pays YouTube quota + decompose cost on every request. Fix: skip URLs already in the library *before* validate/decompose.
+- **Batch post-commit embeds (audit 7.1) — efficiency.** The discovery/upsert path embeds one row at a time (a 50-child playlist = 50 sequential Vertex embedding calls) even though `embedMany` batches natively (the backfill path already uses 100/call). Collect `embedTasks`, embed in chunks of 100, then UPDATE. Also covers the "parallelize post-commit embeds" half of audit 5.4.
 
 ## Phase 2.6 — Frontend (was 2f/2g)
 
@@ -194,7 +217,61 @@ A `Program` is a goal-driven plan composed of multiple single-topic `Path`s — 
 - [ ] Free→paid gate enforced (free = 1 path + preview; paid = full access + tutor)
 - [ ] Stripe **test mode** in dev
 
-**Exit criteria:** unauthenticated → Google sign-in → generate path → pricing → checkout (test card) → webhook unlocks paid features.
+### Hardening `POST /api/generate-path` (from curriculum-agent audit, Section 1)
+
+- [ ] **Rate limiting + access control (audit 1.1).** Today the route is gated only by the `DEV_AUTH=1` placeholder and is otherwise unauthenticated, unthrottled, and un-idempotent — anyone reaching the URL can trigger the app's most expensive operation (Gemini 2.5 Pro grounded search + validation fan-out + YouTube/embedding calls) without limit, draining Vertex spend, the YouTube 10k/day project quota, and pushing all traffic into Vertex DSQ deprioritization (429s). Replace the placeholder with the real Supabase session check and add a per-user rate limit + idempotency key (dedup on user + canonical topic + params).
+- [ ] **Distinct admin gate (audit 9.1) — HIGH.** `withAuth` and `withAdminAuth` currently gate on the *same* `DEV_AUTH=1` flag, so enabling generation also exposes the curation API (incl. `force`-decompose: bypasses the oversize gate, 100+ children, 120s tx), `markAtomic`/`markUnsupported`, and the human-review queue. When real auth lands, `withAdminAuth` must become a *role* check distinct from the user session — not the shared flag.
+- [ ] **Per-generation cost observability (audit 9.4).** Replace `console.log`-only with structured logs + a request/trace id, and persist per-job token cost (and the critique verdict, audit 8.4) on the async `PathGeneration` record so runaway cost is visible before the bill, not after.
+- [ ] **CSRF for cookie sessions (audit 9.7).** Once Supabase cookie auth lands, state-changing POSTs (generate-path, curation) need CSRF defense, or enforce a non-cookie auth header.
+- [ ] **Make path generation asynchronous (audit 1.2, 1.3).** Change the route to *enqueue* a generation job and return `202 Accepted` with a job id immediately, rather than running the full gate → retrieval → fallback → select → critic → persist pipeline inside the HTTP request. The user is notified (poll the job status or push/email) when the path is ready. This removes the Vercel 60s `maxDuration` guillotine (cold-topic runs structurally exceed it — `ensureFloor` alone fans out to 3× Pro grounded-search) and the wasted spend from client disconnects. Introduce a `PathGeneration` job record (`status: queued|running|succeeded|failed`, `pathId` on success) as the ack target and the natural home for the idempotency key above. **Worker still needs explicit per-call `abortSignal`/timeouts + an overall job deadline/budget** — async stops the HTTP guillotine but a hung upstream call would otherwise pin a worker indefinitely.
+
+**Exit criteria:** unauthenticated → Google sign-in → generate path (returns a job id; notified on completion) → pricing → checkout (test card) → webhook unlocks paid features.
+
+## Phase 3.1 — Launch readiness (curriculum-agent audit)
+
+Findings from the curriculum-agent code audit that aren't security-critical (those live in Phase 3) but should be addressed before real traffic. Grouped by audited section.
+
+> **Full audit:** [docs/curriculum-agent-audit.md](curriculum-agent-audit.md) — all findings (Sections 1–4 so far) with severity, disposition, and what's working well. The items below are the Phase-3.1-dispositioned subset.
+
+### Topic gate + registry (audit Section 2)
+
+- [ ] **Bounded canonical retrieval (audit 2.1).** `listCanonicals()` loads *every* canonical ever minted and concatenates all of them into the tier-3 grounding prompt. The list grows without bound across the broad launch niche, raising per-call token cost and *degrading* classification (more near-duplicate mints) exactly as the table grows. Replace the dump-everything approach with nearby-candidate retrieval (embedding/prefix match) once the registry is non-trivial.
+- [ ] **Canonical correction/merge tool (audit 2.3).** First-writer-wins makes a bad canonicalization permanent with no fix path; two phrasings of one concept can mint distinct canonicals and fragment the library. Add a small admin merge/relabel utility, and seed the curated `TOPIC_SLUGS` as self-aliases so the model maps onto them deterministically instead of re-deciding each run.
+- [ ] **Unicode-harden `normalizeTopic` (audit 2.4).** Add NFKC normalization + zero-width-char stripping so homoglyph phrasings (`pythοn` with a Greek omicron) don't bypass the alias cache into a model call + a distinct canonical.
+- [ ] **Type `TopicAlias.subject` (audit 2.5, nit).** It's a free `String` cast with `as TopicSubject`. An enum or check constraint makes it self-enforcing.
+
+### Web fallback (audit Section 5)
+
+> 5.1 (floor never fills) moved to **Phase 2.5 open items** — it's a small, path-generation-relevant metric fix.
+
+- [ ] **Web-fallback stampede / global queue (audit 5.2).** No lock/dedup means concurrent first-requests for one cold topic each run a full Gemini 2.5 Pro loop. Build a global web-fallback queue with: a worker pool processing ≤ N at a time (global Vertex-Pro/DSQ protection), in-flight dedup (don't process a topic already queued/running), and a threshold re-check at dequeue (skip if the library filled while queued). Deferred here because by Phase 3.1 we're likely on **Cloud Run** — a long-lived process makes a simple in-process worker-pool queue viable (an in-process queue doesn't span Vercel serverless instances, which is what made this awkward earlier). If still on Vercel when picked up, fall back to a Postgres advisory lock per topic + recheck (gives dedup + recheck but not the global N-cap).
+- [ ] **Double-fallback + fan-out (audit 5.3–5.5).** Deduplicate the deterministic floor vs. the model's discretionary fallback within one request; bound decompose concurrency and parallelize post-commit embeds; abort discovery after N consecutive empty results.
+
+### Decomposition (audit Section 6)
+
+> 6.1 (pre-decompose dedup) moved to **Phase 2.5 open items** — it's path-generation-relevant and compounds the 5.1 cost fix.
+
+- [ ] **Outbound-fetch hardening (audit 6.2–6.4) — one block.** Across liveness, doc-TOC, and youtube-oembed fetches: (6.2) block non-http(s) schemes + private/link-local IP ranges and re-check on each redirect hop (SSRF defense-in-depth); (6.3) add a fetch timeout to the doc-TOC scraper (it has none today); (6.4) cap the response read by streaming/`Content-Length` instead of buffering the full body before slicing (OOM/DoS).
+
+### Upsert & embeddings (audit Section 7)
+
+> 7.1 (batch post-commit embeds) moved to **Phase 2.5 open items** — path-generation-relevant efficiency fix.
+
+- [ ] **`resolveSource` full-table scan (audit 7.2).** Loads the entire (agent-extensible) `Source` table and host-matches in JS on every insert. Cache with a TTL, or add a normalized `host` column + indexed lookup.
+
+### Select & critic (audit Section 8)
+
+- [ ] **Graceful-drop unknown handles (audit 8.1).** One fabricated handle currently 422s the whole request; drop the offending item instead (hard-error only on zero valid items) — fabrication is still prevented, the path is salvaged.
+- [ ] **Renumber path `order` to dense `1..N` (audit 8.2).** Model-emitted duplicate/sparse `order` currently 500s at persist via the `@@unique([pathId, order])` constraint. Renumber after sort to remove the failure class.
+- [ ] **Deterministic `budgetFit` (audit 8.3).** Compute the budget pass/fail in code (the arithmetic is already done) instead of asking the LLM; reserve the model for judgment-based criteria.
+- [ ] **Persist the critique verdict (audit 8.4).** Store `passedCritique` + failed criteria on `Path` so known-deficient paths are queryable and you can measure agent quality over time.
+
+### Other cross-cutting (audit Section 9)
+
+- [ ] **Health-probe auth (audit 9.2).** `GET /api/health?probe=ai` is unauthenticated and fires a live Flash call per hit (loopable → unbounded cost/DSQ); also leaks raw `err.message`. Gate `probe=ai` behind admin/secret + rate-limit; keep plain liveness public.
+- [ ] **Delimit `priorKnowledge` in prompts (audit 9.3).** 500-char free text flows raw into retrieval/select/critic prompts. Delimit as untrusted data and instruct the model to treat it as the learner's description, not instructions.
+
+> **Topic partition vs. semantic search** (the audit's biggest design item) is now the headline **⭐ NEXT UP** at the top of this file (Status section), not a Phase 3.1 checkbox.
 
 ## Phase 4 — Tutor agent (deep feature — spec §6)
 
