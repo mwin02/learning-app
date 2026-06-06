@@ -17,13 +17,15 @@ This roadmap mirrors the build order from the original spec (`learning-path-mvp-
 
 **Design record:** the embedding is already global (title+summary+concepts), so the lever was *how hard topic gates search*, not concepts-vs-topic. Relatedness lives in a **code constant** (`TOPIC_RELATIONS`), not a table — promote to a table only if/when relations are auto-populated at gate-mint time. The **subject ceiling** is enforced by the relation bound, not the coarse `subject` field (which lumps calculus + linear-algebra under `math`). `WHERE topic IN (…)` is served by the existing composite `@@index([topic, status, tier])` leftmost prefix — no new index needed. (Separately: the `col::text = …` enum-predicate casts still defeat `@@index([difficulty])`; revisit if search filtering becomes a bottleneck.)
 
-### ⭐ NEXT UP — `pending_review → active` promotion pipeline
+### ✅ SHIPPED (on branch) — `pending_review → active` promotion pipeline
 
-The topic redesign wired the gate but surfaced the next load-bearing gap (audit 5.1): **nothing promotes `pending_review` → `active`.** Consequences: (a) `ensureFloor` counts `active`-only, so a seed-less, relation-less agent-grown topic re-fires a full Gemini 2.5 Pro discovery loop on *every* request; (b) the gate's `active`-only path can't engage — no topic reaches ≥10 active today; (c) decomposed children of an `active` container are stamped `pending_review` and would vanish from above-gate search once (b) engages.
+The topic redesign wired the gate but surfaced a load-bearing gap (audit 5.1): **nothing promoted `pending_review` → `active`.** The promotion pipeline (`src/lib/curation/pending-review.ts` + `/api/playground/pending-resources`, commit `b14d598`) closes it: `withAdminAuth`-gated approve (→`active`) / reject (→`deprecated`), multi-level subtree cascade via a recursive CTE, race-safe conditional updates. Reject also flips referencing `PathItem active→removed` and records `Resource.deprecationSeverity` (`soft`=quality / `hard`=broken link) — the field the new Phase 2.5 Track layer branches on.
 
-A single promotion signal closes all three — candidates: *survived-validation + selected-into-a-path*, a `trustScore` threshold, or an explicit review queue. **Folds in the deferred decomposed-child status inheritance**: children should inherit an `active` container's status at decompose time, and promotion should cascade to a container's existing children.
+### ⭐ NEXT UP — Phase 2.5 redesign: Topic Concept Map + Track Traversal
 
-**Then:** **2.5c–g** (Track/Lesson delivery layer) → 2.6 (frontend) → 2.75 (Programs) → 3 (auth + Stripe) → 4–6. (2.5b decomposition pipeline ✅ shipped.)
+`Path` becomes an **input-agnostic concept map for a whole topic**; `Track` becomes a **learner's immutable traversal** of it. See the [Phase 2.5](#phase-25--topic-concept-map--track-traversal) section for the model, locked decisions, data-model changes, and block sequence. First block: **2.5c — additive schema + inert re-keys** (zero risk to the live generate flow).
+
+**Then:** **2.5d–k** (Path builder → Track builder → cutover → content/delivery → playground) → 2.6 (frontend) → 2.75 (Programs) → 3 (auth + Stripe) → 4–6.
 
 **Agent code layout:** agents live under `src/lib/agents/` (curriculum pipeline in `agents/curriculum/`, tools in `agents/tools/`, web-discovery validation in `agents/validation/`); shared AI primitives (`vertex`, `models`, `embeddings`) under `src/lib/ai/`. New agents (`decomposition`, `track`, `content`, `program`, `tutor`) land under `agents/`.
 
@@ -58,38 +60,54 @@ Runnable Next.js scaffold + repo conventions + Vertex/Gemini proven end-to-end.
 - **2e** — Agent playground (`/playground`), `DEV_AUTH`-gated, with raw-JSON inspector. PR #22.
 
 **Constraints still binding future work:**
-- `Path` is **single-topic by design**; multi-topic goals compose Paths via a `Program` layer (Phase 2.75). The curriculum agent's interface stays narrow (`{ topic, priorKnowledge, timeframeWeeks, hoursPerWeek } → sequenced items`).
-- `Path.createdBy` is a nullable FK; `EnrolledPath` is a separate join table; `Subscription` is its own table (populated in Phase 3).
+- `Path` is **single-topic by design**; multi-topic goals compose Paths via a `Program` layer (Phase 2.75). *(Still binding — a Track traverses one Path = one topic.)*
+- `EnrolledPath` is a separate join table; `Subscription` is its own table (populated in Phase 3).
 - Every agent resolves model config via the registry (`MODEL_*` env overrides).
-- Generation inputs live on `Path` (reproducible artifact). Same input = fresh path; no caching.
+- ~~Generation inputs live on `Path` (reproducible artifact). Same input = fresh path; no caching.~~ — **Reversed by the [Phase 2.5 redesign](#phase-25--topic-concept-map--track-traversal).** Per-user inputs (`priorKnowledge`/`timeframeWeeks`/`hoursPerWeek`) move *off* Path onto the Track; `Path` becomes an input-agnostic per-topic concept map (one per canonical topic, agent-owned, no `createdById`). Freshness now lives at Track-build; the shared map is intentionally reused.
+- ~~`Path.createdBy` is a nullable FK.~~ — **Reversed by the Phase 2.5 redesign** (Path is agent-owned, not user-created); retired with `PathItem` at the 2.5f cutover.
 
 **The 2e discovery that reshaped 2.5:** a Path of curated links is the right *generation* artifact but not the right *delivery* one — whole-course resources overlap (redundant coverage), and items linking into external sites kill progress tracking and the future tutor's context. So a **Lesson layer** sits above PathItem: structured, lesson-by-lesson delivery built from heterogeneous web resources. That is Phase 2.5.
 
-## Phase 2.5 — Structured Track Agent
+## Phase 2.5 — Topic Concept Map + Track Traversal
 
-The lesson layer is the missing primitive; exercises and notebooks **attach to lessons**, not directly to PathItems. Two concerns:
+> **Redesigned 2026-06-07.** The original "Structured Track Agent" treated `Track` as a 1:1 dedup wrapper over a *user-specific* `Path`. A design pass reconceived the two layers around a **template/instance split**: `Path` becomes an **input-agnostic concept map for a whole topic**; `Track` becomes a **learner's immutable traversal** of that map. Resource invalidation, per-learner personalization, and the 2.75 Program layer all fall out more cleanly. The shipped foundations (2.5a schema, 2.5-AR curriculum agent, 2.5b decomposition) are unchanged and still load-bearing; only the *delivery* layer (old 2.5c–g) and its Track-layer decisions are replaced.
 
-1. **Decomposition is a *library* concern.** Container resources (YouTube playlists, doc trees, whole courses) are decomposed into atomic child Resources **at discovery time**, once, and cached. The curriculum agent only picks atomic, pickable Resources, so the library grows in atomic units over time.
-2. **Track creation composes, dedups, and classifies.** Given a `Path` of atomic PathItems, the Track agent produces a `Track` of ordered `Lesson`s, surfaces cross-resource concept duplicates as Lessons-with-alternates, classifies per-resource delivery mode (embed vs new-tab vs native), and triggers exercise/notebook generation for gap-prone Lessons. **No decomposition at track time.**
+### The model
 
-### Locked decisions
+- **`Path` = a topic's concept map** — input-agnostic, agent-owned, **one per canonical topic** (keyed via the `TopicAlias` registry). Holds Path-scoped `Concept` nodes + a prerequisite **DAG** between them + per-concept **candidate resources**. Each concept carries `spine | frontier` membership: the **spine** is the required backbone, the **frontier** is opt-in enrichment. A living asset the map-builder maintains.
+- **`Track` = a learner's immutable traversal** of a Path. Walks the spine sub-DAG, prunes concepts the learner already knows, trims to the time budget, pulls in frontier concepts as budget allows, picks one **primary** resource per Lesson and freezes the runners-up as **alternates**, generates exercises, and **snapshots**. Carries the per-learner inputs + user-facing title/summary.
+- **Invalidation policy** (drives `Resource.deprecationSeverity`, already shipped): `soft` (quality downgrade) → excluded from *future* Track builds only; in-flight Tracks untouched. `hard` (dead link) → also reach into live Tracks: **promote a frozen alternate to primary, else flag** the LessonResource so the learner can skip. Immutability is of the *learning structure* (lessons, ordering, progress keys), not of every resource pointer.
+- **Why Path-scoped, not a global concept graph:** a global graph needs library-wide concept canonicalization (the `TopicAlias` problem one level down, far worse) and shared-mutable edges with no blast-radius containment. Path-scoped nodes trade cross-topic concept reuse for tractability + containment + cheap subgraph snapshotting. Cross-topic prerequisites get an explicit home at the Program layer instead of leaking through traversal.
+
+### Locked decisions — carried forward from original 2.5 (decomposition; unchanged)
 
 | Decision | Choice |
 |---|---|
-| Naming | `Track` for the structured wrapper; `Lesson` for the unit. Avoids collision with "course" as a resource type. |
-| Where decomposition lives | **Resource-discovery time, not track-creation time.** Decomposed once, cached on Resource forever. Inside the 2c discovery flow: classify type → if container, fetch outline + decompose → upsert parent + N children in one transaction. |
-| Container resources | `course`-typed Resources are **container-only** — never picked by the curriculum agent. Atomic children link via `Resource.parentResourceId` + `Resource.orderInParent`. Containers carry arc metadata (title, summary, intent) as a cohesion signal. |
-| Decomposition router | Ship **YouTube playlists (Data API) + doc-site TOC scrape + "single = atomic" fast-path** first. Paid platforms (Coursera/Udemy/edX) out of scope. Unsupported types fall back to `human_review`; container row exists but is unpickable until curated. |
-| Decomposition status | Single field: `Resource.decompositionStatus ∈ {atomic, decomposed, pending, unsupported, human_review}`. Atomic + decomposed-children are pickable; the rest aren't. |
-| Concept re-derivation on decompose | Children re-derive `conceptsTaught` from their own title/transcript, not inherited slices of the parent's concepts. Dedup accuracy depends on it. |
-| Duplicate handling | **Detection at track time, not prevention.** Two atomic Resources covering the same concept → collapsed into one Lesson with `primary` + `alternate` `LessonResource`s. Alternate explanations are a learner-value feature. |
-| Non-embeddable delivery | **Open in new tab + "mark complete" return-flow.** Iframe where allowed (YouTube embeds, most docs); new-tab where blocked. Proxy/summary/reader-mode revisited later. |
-| `deliveryMode` location | On **`LessonResource`**, not `Lesson`. A single Lesson can mix embeddable video + new-tab article + native exercise. |
-| PathItem's role under Tracks | PathItem stays as the **curriculum-agent's record of intent** (what it picked + why). The Track agent reads PathItem rationales when composing Lessons; LessonResource references Resource directly. PathItem becomes an audit log. |
-| Track ↔ Path relationship | `Track.pathId` unique (1:1). `Track.status ∈ {pending, building, ready, failed}` for sync-lazy generation. |
-| Generation timing | **Sync-lazy.** `/api/generate-path` returns the Path immediately (unchanged). Track building happens on first visit to `/playground/path/[id]`, with a visible progress UI. Exercises/notebooks lazy-load per Lesson. |
-| Where exercises live | `Exercise` attaches to `Lesson`. Notebooks become Resources of `type='interactive'`, `origin='agent'`, linked from a Lesson via LessonResource. |
-| Keep Path + Track both | **Keep both layers.** Path = selection record (what was picked + rationale). Track = delivery structure (dedup'd, with generated content). Different costs/lifecycles: Track regenerates without re-running library matching + web fallback; PathItem rationales survive dedup; the 2.75 Program agent needs the cheap "picked resources" tier for budget allocation. **Revisit at end of 2.5g**: if dedup rarely fires and Tracks end up near-identical to Paths, collapse the two layers. |
+| Naming | `Track` for the structured layer; `Lesson` for the unit. Avoids collision with "course" as a resource type. |
+| Where decomposition lives | **Resource-discovery time, not build time.** Decomposed once, cached on Resource forever. |
+| Container resources | `course`-typed Resources are **container-only** — never picked. Atomic children link via `parentResourceId` + `orderInParent`. |
+| Decomposition router | YouTube playlists (Data API) + doc-TOC scrape + "single = atomic"; paid platforms out of scope; unsupported → `human_review`. |
+| Decomposition status | `Resource.decompositionStatus ∈ {atomic, decomposed, pending, unsupported, human_review}`; atomic + decomposed-children pickable. |
+| Concept re-derivation | Decomposed children re-derive `conceptsTaught` from their own content, not inherited slices of the parent's. |
+| Non-embeddable delivery | Iframe where allowed; **open-in-new-tab + "mark complete"** where blocked. `deliveryMode` lives on `LessonResource`, not `Lesson`. |
+| Where exercises live | `Exercise` attaches to `Lesson`. Notebooks become `Resource(type='interactive', origin='agent')`, linked via `LessonResource`. |
+
+### Locked decisions — this redesign (supersedes the original Track-layer decisions)
+
+| Decision | Choice |
+|---|---|
+| Path's role | **Input-agnostic concept map for a whole topic**, not a per-request user artifact. One Path per canonical topic; agent-owned. Loses `createdById`, `difficulty` (now per-resource), the `input*` snapshot, and its user-facing title. |
+| Concept representation | **Path-scoped `Concept` nodes** with a stable per-Path slug. Canonicalization is a *within-one-map* match-or-create on thicken (tractable), never global. |
+| Ordering | A **prerequisite DAG** of intra-Path `ConceptPrereq` edges (cycle-validated). The *linearization* (topo-sort) is a Track-build concern, not stored on Path. |
+| Scope bounding | **Core spine + opt-in frontier.** Track quality keys on a complete *spine*, not a complete map; the frontier thickens over time. |
+| Concept ↔ Resource | A `ConceptResource` link carrying a **role** (teaches/uses/assesses) + a **coverage/quality score**, so the builder can pick a primary and rank alternates. Candidates are existing pickable rows (`active` + `atomic`). |
+| Track ↔ Path cardinality | **Drop `Track.pathId @unique`** (1 Path → many Tracks). FK topology is fixed: `EnrolledPath → trackId`, `Progress → lessonId`. The **flavor** (per-enrollment snapshot vs. per-version) is *deferred* — both satisfy the same FKs. |
+| Where progress + enrollment live | **On the Track/instance side.** `Progress` keys on `lessonId` (the completable unit); `EnrolledPath` references the pinned `trackId`. `Path`/`PathItem` become a pure generation artifact the learner never touches. |
+| Alternates' origin | **Byproduct of per-concept candidates.** Track picks a primary from a concept's candidates and freezes the rest as `role='alternate'`. No separate alternate-sourcing step. |
+| Thin-then-thicken vs. immutability | **The spine builds synchronously and gates the first Track**; only frontier concepts + extra candidate resources (the alternates) thicken async. A Track frozen during the thin window is always *spine-complete* — just alternate-thin — never broken. |
+| Map maintenance | A **map-builder** agent is a *standing* job (build spine, then thicken + attach new finds), distinct from the per-request **track-builder**. Both reuse the AR hybrid-control-flow template. |
+| `PathItem` fate | **Retired at cutover.** `Concept`/`ConceptPrereq`/`ConceptResource` replace its role as the curriculum record. `Lesson`/`LessonResource`/`Exercise` (from 2.5a) are kept as-is — the Track's delivery shape. |
+| Entity renaming | **Deferred.** Internally "Path" now means "concept map" and "Track" the user's plan — colloquially the reverse. Whether to rename (e.g. Path→`Curriculum`, Track→`Path`) is decided before there's a public UI to break, not now. |
 
 ### Completed
 
@@ -136,26 +154,53 @@ Container resources (playlists, doc trees, whole courses) are decomposed into at
 - **SPA / headless escape hatch.** Khan-style SPAs render lessons client-side, so the scrape routers park them in `human_review`. `decompose_manual` lets a human or browser agent supply the ordered lessons. Verified end-to-end by driving a headless browser over Khan's Linear Algebra course (138 atomic children, ordered, concept-tagged, embedded). The proper fix — a **headless-render agent decomposer** that POSTs `decompose_manual` itself — is deferred to post-Phase-3 (avoids a Playwright/Chrome dependency on Vercel; see hosting portability in AGENTS.md). Until then a `decompose-spa` Claude Code skill (`.claude/skills/`) is the manual bandaid.
 - Queue path is `/playground/human-review`, not the `/playground/decomposition-queue` name originally sketched.
 
-Carried into 2.5c: prefer **same-parent cohesion** when the curriculum agent picks sibling atomic children (non-pickable rows are already filtered via AR-2's hybrid search).
+Carried into the Path builder (2.5e): prefer **same-parent cohesion** when attaching sibling atomic children as concept candidates (non-pickable rows are already filtered via AR-2's hybrid search).
 
-### Block sequence — remaining (each <300 LOC, one PR per block)
+### Data model changes (summary)
 
-- [ ] **2.5c — Track agent (composition + dedup).** `lib/agents/track-agent.ts` takes a persisted Path → groups PathItems' Resources into ordered Lessons (factoring in each PathItem's rationale), detects cross-resource concept overlap, collapses duplicates into Lessons-with-alternates with `primary` selected by trust score + path order. Writes a `Track` with `status='building'` → `'ready'`. Triggered lazily on first `/playground/path/[id]` visit.
-- [ ] **2.5d — Delivery-mode classifier.** Per `LessonResource`, set `deliveryMode`. Known-good embed allowlist (YouTube, MDN, Python docs, etc.) + runtime header probe (`X-Frame-Options` / `CSP: frame-ancestors`) cached on `Resource`. Native = agent-generated content we host.
-- [ ] **2.5e — Content agent: exercises.** `lib/agents/content-agent.ts` generates `Exercise` records (text/MCQ first) for Lessons flagged gap-prone (source resource has no native exercises, concept is foundational). Fans out in parallel during track building.
-- [ ] **2.5f — Content agent: notebooks.** Agent emits `.ipynb` JSON via Gemini, uploaded to storage, registered as `Resource(type='interactive', origin='agent', status='pending_review')`, linked into a Lesson via LessonResource. Storage backend (Supabase Storage vs GCS) decided at start of block.
-- [ ] **2.5g — Playground updates.** `/playground/path/[id]` renders the Track/Lesson structure: ordered Lessons, primary + alternate resources, per-LessonResource delivery mode, embedded iframe where applicable, inline exercises, "Open in Colab" for notebooks. Track-building progress UI for sync-lazy generation. Raw-JSON inspector extended to Track/Lesson.
+The build sequence below lands these incrementally. Coexistence is the sequencing constraint: `Track`/`Progress`/`EnrolledPath` are **inert** (zero consumers) → free to reshape now; `Path`/`PathItem` are **live** (path-service writes them, the reject pipeline reads them) → the new structures land *alongside*, the flow cuts over, `PathItem` retires last.
 
-**Exit criteria:** running the playground on a topic that pulls in a YouTube playlist or doc tree produces a Track where (a) the container is decomposed into atomic child Resources in the library, (b) overlapping concepts across different source resources are visibly surfaced as alternates on a shared Lesson, (c) LessonResources have a delivery mode and embed where allowed, (d) at least one Lesson has an agent-generated exercise and one has an agent-generated notebook, and (e) the `human_review` queue is observable in the playground.
+- **New** — `Concept` (Path-scoped: `pathId`, per-Path `slug`, `title`, `membership ∈ {spine, frontier}`), `ConceptPrereq` (directed intra-Path edge `fromConceptId → toConceptId`, cycle-validated), `ConceptResource` (`conceptId`, `resourceId`, `role ∈ {teaches, uses, assesses}`, `coverageScore`).
+- **`Path`** — add canonical-topic uniqueness + a readiness status (spine-ready gates the first Track); drop `createdById`, `difficulty`, `inputPriorKnowledge`/`inputTimeframeWeeks`/`inputHoursPerWeek`, and the user-facing title (those move to Track). *(Retired with PathItem at cutover.)*
+- **`Track`** — drop `pathId @unique`; add the per-learner inputs + user-facing title/summary; cardinality-flavor discriminator left out until that decision lands. `status` lifecycle already exists.
+- **`EnrolledPath`** — reference the pinned `trackId` (keep `pathId` for cross-version queries).
+- **`Progress`** — re-key from `pathItemId` to `lessonId`.
+- **`PathItem`** — retired at cutover (2.5f).
+
+### Builders
+
+- **Path builder (map-builder)** — per topic: authors the spine `Concept`s + prereq edges (cycle-validated), attaches existing-library candidates as `ConceptResource`s with role + coverage. Spine build is **synchronous** (gets-or-creates the Path under a lock so concurrent first-requests don't double-build) and sets the Path `spine-ready`. Frontier concepts + extra candidates **thicken async**. Launch-topic spines are seeded. Concept canonicalization is a within-map match-or-create.
+- **Track builder** — per request over a `spine-ready` Path: topo-sort the spine sub-DAG → prune concepts the learner already knows → trim to budget → pull frontier as budget allows → cover the needed concepts with resources (`coverageScore`-greedy) → emit ordered `Lesson`s with one `primary` + frozen `alternate` LessonResources → fan out exercise generation → freeze the snapshot.
+
+### Block sequence (each <300 LOC, one PR per block)
+
+- [ ] **2.5c — Additive schema + inert re-keys.** New `Concept` / `ConceptPrereq` / `ConceptResource` tables; `Track` drops `@unique` + gains inputs/title; `EnrolledPath → trackId`; `Progress → lessonId`; `Path` gains readiness status. Leaves `Path`/`PathItem`/`path-service` untouched and working. Migration + Prisma client only.
+- [ ] **2.5d — Path builder: spine.** `lib/agents/map/` — author canonical spine concepts + prereq edges (cycle validation) for a topic, attach existing-library candidates, get-or-create the Path under a lock, set `spine-ready`. Seed the 4 launch-topic spines. Playground inspector for the map.
+- [ ] **2.5e — Track builder.** `lib/agents/track/` — traverse spine sub-DAG → prune-known → fit-budget → frontier pull → coverage-greedy primary + frozen alternates → ordered `Lesson`/`LessonResource` → freeze. (Exercises deferred to 2.5g.) Verifiable via inspector before the playground render lands.
+- [ ] **2.5f — Cutover.** Repoint the create flow (`createPath` → ensure-map + build-track); repoint the reject pipeline's `PathItem active→removed` flip to `ConceptResource` candidate-deprecation + the hard-severity live-Track alternate-promotion; **retire `PathItem`** and the Path user-specific columns once nothing reads them.
+- [ ] **2.5g — Content agent: exercises.** `lib/agents/content/` generates `Exercise` records (text/MCQ first) for gap-prone Lessons; fans out in parallel during track building. Cost ceiling per build.
+- [ ] **2.5h — Delivery-mode classifier.** Per `LessonResource`, set `deliveryMode`. Embed allowlist + runtime header probe (`X-Frame-Options` / `CSP: frame-ancestors`) cached on `Resource`.
+- [ ] **2.5i — Content agent: notebooks.** Agent emits `.ipynb` JSON via Gemini → storage → `Resource(type='interactive', origin='agent', status='pending_review')` → linked via `LessonResource`. Storage backend (Supabase Storage vs GCS) decided at block start.
+- [ ] **2.5j — Async thickener.** The standing map-builder job that adds frontier concepts + extra candidate resources (the alternates) after the spine. Portable job infra (no Vercel Cron — see AGENTS.md) decided at block start. Handles the **spine-hole regression** (a hard-deprecated resource leaving a spine concept with no candidate → re-thicken).
+- [ ] **2.5k — Playground: map + Track.** Render the concept map (spine/frontier, prereq edges, per-concept candidates) and a built Track (ordered Lessons, primary + alternates, delivery mode, inline exercises, notebook links). Track-build progress UI; inspector extended.
+
+**Exit criteria:** a launch topic has a seeded spine map; requesting it builds a Track that (a) topo-respects the prereq DAG, (b) prunes concepts the learner declared known, (c) fits the time budget by trimming frontier, (d) surfaces per-concept runners-up as alternates on a Lesson, (e) has ≥1 agent-generated exercise; and rejecting a resource `hard` promotes an alternate (or flags) on an in-flight Track while excluding it from the next build.
+
+### Deferred decisions (decide when the block is worked)
+
+- **Track cardinality flavor** — per-enrollment snapshot vs. per-version. FK topology is fixed either way; pick when the Track builder's reuse/cost profile is known.
+- **Path traversal at the topic edge** — does a Path **bound** the traversal (unmet external prereqs are "assumed" / handled by a Program) or **seed** it? Pin when the Program layer (2.75) firms up.
+- **Async thickener infra** — Postgres job table + worker vs. opportunistic trigger-on-request. Portable, Cloud-Run-friendly (no Vercel Cron). Decided at 2.5j.
+- **Entity renaming** — Path→`Curriculum`/etc., Track→`Path`. Before a public UI exists, not during the playground phase.
+- **Concept granularity policy** — how coarse/fine a `Concept` node is. Decide empirically during 2.5d once real spines exist.
 
 ### Open items for Phase 2.5
 
 - **Segment refs for non-YouTube resources.** YouTube timestamps are clean. Doc anchors require fetching + parsing HTML headings. May need a fallback "describe the segment in prose" when no addressable anchor exists.
-- **How "alternate" surfaces in UI.** Tabs? Stacked cards? "Try a different explanation" button? Decide during 2.5g; shapes 2.5c data model only lightly.
-- **Lesson concept-purity vs multi-concept.** Smaller Lessons dedup better but fragment pacing. Decide empirically during 2.5c.
-- **Exercise grading.** Reveal-only in 2.5, or wait for Phase 4 tutor to grade? Lean reveal-only here.
-- **Cost ceiling per track build.** Exercises + notebooks fanned out per Lesson can be expensive. Cap generated content (notebooks especially) to N per Track.
-- **Idempotency of track regen.** Track failures shouldn't poison the Path. `Track.status='failed'` with diagnostic; regen replaces.
+- **How "alternate" surfaces in UI.** Tabs? Stacked cards? "Try a different explanation" button? Decide during 2.5k; shapes the data model only lightly.
+- **Exercise grading.** Reveal-only in 2.5, or wait for the Phase 4 tutor to grade? Lean reveal-only here.
+- **Idempotency of track regen.** A failed/superseded Track must never corrupt the Path map. `Track.status='failed'` with diagnostic; a fresh build replaces rather than mutates (immutability holds).
+- **"User knows X" → concept matching.** Pruning known concepts maps free-text `priorKnowledge` onto a Path's concept set — fuzzy. Reuse embeddings; bound to one map (tractable), but accuracy needs validation during 2.5e.
 - **Decomposition failure during discovery.** Transient YouTube API / scrape failures shouldn't nuke the discovery. Commit parent with `decompositionStatus='pending'`, retry via `scripts/retry-decomposition.ts` or on next touch. Parent stays unpickable until decomposed.
 - **Discovery latency.** First user to trigger an off-library topic that finds a container pays the decomposition cost (~30s for a 30-video playlist). Accepted for now; revisit in 2.6 if it becomes a UX problem.
 - **Headless-render agent decomposer (post-Phase-3).** Replaces the `decompose_manual` human bandaid for SPA courses (Khan Academy, etc.): an agent renders the client-side page, extracts the ordered lessons, and POSTs `decompose_manual` itself. Needs a rendering surface (connected Chrome, or a Cloud Run service with Playwright) — hence deferred until after the Cloud Run migration, to keep a browser dependency off Vercel.
