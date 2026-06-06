@@ -28,6 +28,18 @@
 //   single_lesson / reference_index  → 'atomic'      (keep whole, pickable)
 //   fetch / parse error              → 'pending'     (auto-retryable)
 //   lesson_sequence, no usable sections → 'human_review' (needs curation)
+//
+// Recursion: a doc tree can be a container of containers (a path → its courses →
+// their lessons). The extractor flags each section with `isContainer` — true for
+// a sub-index worth drilling into, false for a terminal lesson — so we re-run the
+// router ONLY on the flagged sub-indexes (not every leaf, which would cost a
+// fetch + LLM call apiece). Up to DECOMPOSITION_MAX_DEPTH levels: a flagged
+// section that comes back lesson_sequence becomes a nested container child
+// (type=course, decompositionStatus=decomposed, carrying its own `children`);
+// anything else (single_lesson, reference_index, a mis-flag, or a section we
+// couldn't cleanly explode) is kept as a single pickable atomic leaf. A shared
+// `visited` URL set prevents a back-link from looping and a shared expansion
+// budget caps total fan-out. upsertResource persists the resulting tree.
 
 import { generateObject } from 'ai';
 import { z } from 'zod';
@@ -56,6 +68,11 @@ const ExtractionSchema = z.object({
         title: z.string().min(1),
         summary: z.string().default(''),
         durationMin: z.number().int().min(1).max(6000).default(20),
+        // True when this section is itself an index of further lessons (a
+        // sub-course inside a path), so it's worth drilling into; false for a
+        // terminal lesson page. Lets us recurse only into real sub-containers
+        // instead of paying a fetch + LLM call to discover every leaf is a leaf.
+        isContainer: z.boolean().default(false),
       }),
     )
     .default([]),
@@ -69,8 +86,28 @@ export async function decomposeDocToc(args: {
   // Bypass the oversize gate (curation API force-decompose): decompose every
   // selected section however many, rather than bailing to human_review.
   force?: boolean;
+  // Recursion state (a doc tree can be a container of containers). `depth` is
+  // this node's level (root = 0); `maxDepth` caps how deep we drill; `visited`
+  // is the shared set of URLs already expanded, so a section that links back up
+  // (or sideways to a sibling already taken) can't loop; `budget` is the shared
+  // remaining-expansions counter that bounds total fan-out across the whole
+  // tree. Defaults make a bare call behave like a single-layer decompose.
+  depth?: number;
+  maxDepth?: number;
+  visited?: Set<string>;
+  budget?: { remaining: number };
 }): Promise<DocTocResult> {
-  const { url, topic, difficulty, parentConcepts, force = false } = args;
+  const {
+    url,
+    topic,
+    difficulty,
+    parentConcepts,
+    force = false,
+    depth = 0,
+    maxDepth = 1,
+    visited = new Set([args.url]),
+    budget = { remaining: 0 },
+  } = args;
 
   let html: string;
   try {
@@ -132,13 +169,72 @@ export async function decomposeDocToc(args: {
     };
   }
 
+  // Recurse only into sections the extractor flagged as sub-indexes (a course
+  // inside a path), not every leaf: re-running the router on a terminal lesson
+  // just to learn it's terminal costs a fetch + LLM call per leaf, which on a
+  // large path is hundreds of wasted round-trips. The pageKind oracle still has
+  // the final say — a flagged section that turns out NOT to be a real sequence
+  // comes back not-ok and is kept as an atomic leaf — so a mis-flag is cheap.
+  // A section is drilled only when below the depth cap, not already expanded
+  // elsewhere in the tree, and within the shared expansion budget.
+  //
+  // Sequential (not Promise.all): the shared `budget` counter is
+  // checked-and-decremented per section so a wide level can't race past the
+  // total-node cap, and it keeps concurrent fetch/LLM load bounded.
+  const canRecurse = depth + 1 < maxDepth;
+  const subResults: (DocTocResult | null)[] = [];
+  for (const s of valid) {
+    if (!canRecurse || !s.isContainer || visited.has(s.url) || budget.remaining <= 0) {
+      subResults.push(null);
+      continue;
+    }
+    visited.add(s.url);
+    budget.remaining -= 1;
+    subResults.push(
+      await decomposeDocToc({
+        url: s.url,
+        topic,
+        difficulty,
+        parentConcepts,
+        force,
+        depth: depth + 1,
+        maxDepth,
+        visited,
+        budget,
+      }),
+    );
+  }
+
+  // Concept derivation is only meaningful for leaves (containers aren't embedded
+  // or picked). Deriving just for leaves also skips the expensive half on the
+  // sections that turned out to be sub-containers.
+  const leafIdx = valid
+    .map((s, idx) => ({ s, idx }))
+    .filter(({ idx }) => !(subResults[idx]?.ok === true));
   const concepts = await deriveChildConcepts({
     topic,
     parentConcepts,
-    items: valid.map((s) => ({ ref: s.url, title: s.title, description: s.summary })),
+    items: leafIdx.map(({ s }) => ({ ref: s.url, title: s.title, description: s.summary })),
   });
 
   const children: ChildInput[] = valid.map((s, idx) => {
+    const sub = subResults[idx];
+    if (sub?.ok === true) {
+      // Sub-index → a nested container child (unpickable; its leaves are pickable).
+      return {
+        url: s.url,
+        title: s.title,
+        type: 'course',
+        difficulty,
+        durationMin: s.durationMin,
+        summary: s.summary || s.title,
+        prerequisiteConcepts: [],
+        conceptsTaught: parentConcepts.length > 0 ? parentConcepts : [topic],
+        orderInParent: idx,
+        decompositionStatus: 'decomposed',
+        children: sub.children,
+      };
+    }
     const derived = concepts.get(s.url);
     return {
       url: s.url,
@@ -150,6 +246,7 @@ export async function decomposeDocToc(args: {
       prerequisiteConcepts: derived?.prerequisiteConcepts ?? [],
       conceptsTaught: derived?.conceptsTaught ?? (parentConcepts.length > 0 ? parentConcepts : [topic]),
       orderInParent: idx,
+      decompositionStatus: 'atomic',
     };
   });
 
@@ -176,6 +273,7 @@ Rules for sections (only when pageKind is "lesson_sequence"):
 - Include only the actual ordered lesson/chapter pages. Exclude nav, login, search, social, "about", external/unrelated links, and the page's own URL.
 - Put them in the order a learner should follow.
 - title: a concise lesson title (you may clean up the link text). summary: one short sentence on what the section covers. durationMin: rough minutes to read/work through the section.
+- isContainer: set true ONLY if the section is itself an index/outline of further lessons that should be drilled into (a sub-course or module inside a larger path — e.g. a "JavaScript" course listed inside a "Full Stack" path, which in turn lists its own lessons). Set false for a normal terminal lesson page that teaches its content directly. When unsure, set false (we keep it whole rather than over-drilling). Most sections in an ordinary tutorial are terminal lessons (false); isContainer is the exception, used for multi-level catalogs.
 - If it is a lesson_sequence but you cannot identify distinct lesson pages among the links, return an empty sections list.`;
 
 async function extractToc(

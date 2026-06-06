@@ -63,6 +63,27 @@ export const RETRIEVAL_MAX_FALLBACKS = 1;
 // and doc-TOC routers.
 export const DECOMPOSITION_MAX_AUTO_CHILDREN = 50;
 
+// Recursive decomposition: how many levels of container nesting decompose() will
+// expand before parking any still-container leaves as atomic. A doc tree can be
+// a container of containers (a path → its courses → their lessons), so a single
+// layer leaves the intermediate "unit" pages mis-marked atomic and never drilled
+// into. This caps the recursion: root children are level 1, their children level
+// 2, etc. — a node at the deepest level is kept whole even if it looks like a
+// further container. Bounds runaway fan-out and cycles together with the
+// per-node DECOMPOSITION_MAX_AUTO_CHILDREN gate. Only the doc-TOC router nests;
+// YouTube playlist children (single videos) are always atomic leaves.
+export const DECOMPOSITION_MAX_DEPTH = 3;
+
+// Recursive decomposition: a hard cap on how many container nodes one tree may
+// expand (i.e. how many recursive fetch + TOC-extract passes a single top-level
+// decompose runs). The depth cap and per-node DECOMPOSITION_MAX_AUTO_CHILDREN
+// gate alone still permit a combinatorial blowup (50 × 50 × … per level), so
+// this bounds the total cost/fan-out of one decomposition. Once the budget is
+// spent, any remaining container-shaped sections are kept whole as atomic leaves
+// rather than drilled further. `force` (curation) lifts it, like the per-node
+// gate, for a tree an operator has vouched for.
+export const DECOMPOSITION_MAX_TOTAL_NODES = 250;
+
 // Phase 2.5b-2: children are batched this many per concept-derivation LLM call
 // so a large container stays within the model's output-token budget.
 export const CONCEPT_DERIVATION_CHUNK_SIZE = 25;
