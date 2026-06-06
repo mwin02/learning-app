@@ -280,25 +280,43 @@ async function canonicalizeTags(
     rawConceptsTaught: d.rawConceptsTaught,
   }));
 
-  const result = await generateObject({
-    model,
-    temperature,
-    maxOutputTokens,
-    schema: CanonicalizedTagsSchema,
-    system: CANON_SYSTEM_PROMPT,
-    prompt: [
-      'Existing topic vocabulary (canonical tags already used by this topic):',
-      vocab.length > 0 ? JSON.stringify(vocab) : '(empty — this topic has no library yet)',
-      '',
-      'Resources to canonicalize:',
-      JSON.stringify(input, null, 2),
-    ].join('\n'),
-  });
-
   const map = new Map<string, { prerequisiteConcepts: string[]; conceptsTaught: string[] }>();
-  for (const r of result.object.results) {
-    map.set(r.url, { prerequisiteConcepts: r.prerequisiteConcepts, conceptsTaught: r.conceptsTaught });
+
+  // Canonicalization is a best-effort normalization pass, not a correctness
+  // gate: every caller already falls back to the row's raw tags when a URL is
+  // missing from this map (see the `?? { rawPrerequisiteConcepts, ... }`
+  // default in runWebFallback). A failure here — most commonly the model
+  // capping mid-JSON on a large batch, which surfaces as AI_JSONParseError
+  // ("Unterminated string in JSON") from generateObject — must therefore
+  // degrade to raw tags, NOT crash the whole cold-topic fallback flow and
+  // bubble a 500 out of POST /api/generate-path. Return whatever we got
+  // (empty on total failure); the raw-tag default covers the rest.
+  try {
+    const result = await generateObject({
+      model,
+      temperature,
+      maxOutputTokens,
+      schema: CanonicalizedTagsSchema,
+      system: CANON_SYSTEM_PROMPT,
+      prompt: [
+        'Existing topic vocabulary (canonical tags already used by this topic):',
+        vocab.length > 0 ? JSON.stringify(vocab) : '(empty — this topic has no library yet)',
+        '',
+        'Resources to canonicalize:',
+        JSON.stringify(input, null, 2),
+      ].join('\n'),
+    });
+
+    for (const r of result.object.results) {
+      map.set(r.url, { prerequisiteConcepts: r.prerequisiteConcepts, conceptsTaught: r.conceptsTaught });
+    }
+  } catch (err) {
+    console.warn('[web-fallback] canonicalize failed, degrading to raw tags', {
+      count: discovered.length,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
+
   return map;
 }
 
