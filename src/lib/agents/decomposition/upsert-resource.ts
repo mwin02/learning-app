@@ -3,9 +3,10 @@
 // Extracted from web-fallback.ts so discovery and the seed-backfill script
 // (2.5b-4) write resources through one path (ROADMAP 2.5b decision #6). Given a
 // resource and the result of decompose(), it persists the parent with the
-// right decompositionStatus and, when a router produced children, the atomic
-// children — parent + children in a single transaction. Embeddings are written
-// after commit (they reference the freshly-created ids).
+// right decompositionStatus and, when a router produced children, the whole
+// child tree (a container can nest containers) — parent + descendants in a
+// single transaction. Embeddings are written after commit (they reference the
+// freshly-created ids), and only for pickable atomic leaves.
 //
 // Children inherit topic / sourceId / trustScore / language from the parent;
 // only the parent's source is resolved. Child concepts are already per-child
@@ -104,22 +105,15 @@ export async function upsertResource(
       }
 
       for (const child of decomposition.children) {
-        const childId = await createChild(tx, {
+        await createChild(tx, {
           topic,
           parentId: parent.id,
           sourceId: source.id,
           trustScore: source.trustScore,
           child,
           taken,
+          embedTasks,
         });
-        if (childId) {
-          embedTasks.push({
-            id: childId,
-            title: child.title,
-            summary: child.summary,
-            conceptsTaught: child.conceptsTaught,
-          });
-        }
       }
     });
   } catch (err) {
@@ -147,9 +141,10 @@ export async function upsertResource(
 // Apply a decomposition to an ALREADY-EXISTING resource (the seed-backfill case,
 // 2.5b-4) — the parent row already exists, unlike the discovery path which
 // creates it. Updates the parent's decompositionStatus and, for a 'decomposed'
-// result, creates the children through the same createChild path (slug, source/
-// trust inheritance, URL-collision skip, post-commit embed). Idempotent on
-// re-run: children whose URL already exists are skipped.
+// result, creates the children (and their nested descendants) through the same
+// createChild path (slug, source/trust inheritance, URL-collision skip,
+// post-commit embed). `childrenCreated` counts every row created across the
+// subtree. Idempotent on re-run: nodes whose URL already exists are skipped.
 export async function decomposeExisting(
   resourceId: string,
   decomposition: DecompositionResult,
@@ -188,18 +183,15 @@ export async function decomposeExisting(
       });
     }
     for (const child of decomposition.children) {
-      const childId = await createChild(tx, {
+      childrenCreated += await createChild(tx, {
         topic: existing.topic,
         parentId: resourceId,
         sourceId: existing.sourceId,
         trustScore: existing.trustScore,
         child,
         taken,
+        embedTasks,
       });
-      if (childId) {
-        childrenCreated++;
-        embedTasks.push({ id: childId, title: child.title, summary: child.summary, conceptsTaught: child.conceptsTaught });
-      }
     }
     // Raise the interactive-transaction timeout well above Prisma's 5s default:
     // a manual (or forced) decomposition is un-gated, so a large SPA course can
@@ -260,9 +252,15 @@ export async function markUnsupported(resourceId: string): Promise<{ applied: bo
   return { applied: count > 0 };
 }
 
-// Create one atomic child of a decomposed container. Skips (returns null) if the
-// child URL already exists as a standalone resource — a video can appear both
-// as a seeded single and inside a playlist; we keep the first and don't dupe.
+// Create one child of a decomposed container and, recursively, its whole subtree
+// (the doc-TOC router can nest a container inside a container). Returns the count
+// of rows actually created in this subtree. Only atomic leaves are queued for
+// embedding (intermediate containers aren't pickable, so embedding them wastes a
+// call) — appended to the shared `embedTasks` so the caller embeds post-commit.
+//
+// Skips a node — and its subtree — if the child URL already exists as a
+// standalone resource: a video/page can appear both as a seeded single and
+// inside a container; we keep the first and don't dupe.
 async function createChild(
   tx: TxClient,
   args: {
@@ -272,9 +270,10 @@ async function createChild(
     trustScore: number;
     child: ChildInput;
     taken: Set<string>;
+    embedTasks: EmbedTask[];
   },
-): Promise<string | null> {
-  const { topic, parentId, sourceId, trustScore, child, taken } = args;
+): Promise<number> {
+  const { topic, parentId, sourceId, trustScore, child, taken, embedTasks } = args;
 
   const clash = await tx.resource.findUnique({
     where: { url: child.url },
@@ -282,9 +281,10 @@ async function createChild(
   });
   if (clash) {
     console.log('[upsert-resource] skip existing child URL', { url: child.url, parentId });
-    return null;
+    return 0;
   }
 
+  const status: DecompositionStatus = child.decompositionStatus ?? 'atomic';
   const slug = await uniqueSlug(tx, child.title, child.url, taken);
   const created = await tx.resource.create({
     data: {
@@ -304,11 +304,34 @@ async function createChild(
       sourceId,
       parentResourceId: parentId,
       orderInParent: child.orderInParent,
-      decompositionStatus: 'atomic',
+      decompositionStatus: status,
     },
     select: { id: true },
   });
-  return created.id;
+
+  // Only atomic leaves are pickable, so only they are embedded.
+  if (status === 'atomic') {
+    embedTasks.push({
+      id: created.id,
+      title: child.title,
+      summary: child.summary,
+      conceptsTaught: child.conceptsTaught,
+    });
+  }
+
+  let count = 1;
+  for (const grandchild of child.children ?? []) {
+    count += await createChild(tx, {
+      topic,
+      parentId: created.id,
+      sourceId,
+      trustScore,
+      child: grandchild,
+      taken,
+      embedTasks,
+    });
+  }
+  return count;
 }
 
 // ── source + slug helpers (moved from web-fallback.ts) ───────────────────────

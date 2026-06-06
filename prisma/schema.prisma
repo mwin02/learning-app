@@ -31,12 +31,14 @@ model Resource {
   attribution          String?
   sourceId             String
   source               Source         @relation(fields: [sourceId], references: [id])
-  // Phase 2.5: container/atomic decomposition. Container rows are
-  // decompositionStatus='decomposed' with null parent; children are 'atomic'
-  // with a non-null parent. "Pickable" by the curriculum agent is DERIVED:
-  // status='active' AND decompositionStatus IN ('atomic','decomposed'-children-of)
-  // — i.e. decomposed containers themselves are not pickable. Do not add a
-  // pickable column.
+  // Phase 2.5: container/atomic decomposition. This is a tree of arbitrary
+  // depth: a container (decompositionStatus='decomposed') holds children, and a
+  // child may itself be a 'decomposed' container (a path → its courses → their
+  // lessons). Only leaves are 'atomic'. The root has a null parent; every other
+  // node has a non-null parent. "Pickable" by the curriculum agent is DERIVED:
+  // status='active' AND decompositionStatus='atomic' — i.e. any 'decomposed'
+  // container (root OR intermediate) is not pickable, only its atomic leaves are.
+  // Do not add a pickable column.
   parentResourceId     String?
   parent               Resource?      @relation("ResourceDecomposition", fields: [parentResourceId], references: [id], onDelete: SetNull)
   children             Resource[]     @relation("ResourceDecomposition")

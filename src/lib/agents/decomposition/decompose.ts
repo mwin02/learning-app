@@ -17,6 +17,7 @@ import type { DecompositionStatus } from '@prisma/client';
 import { classify } from './router';
 import { decomposePlaylist } from './youtube';
 import { decomposeDocToc } from './doctoc';
+import { DECOMPOSITION_MAX_DEPTH, DECOMPOSITION_MAX_TOTAL_NODES } from '@/lib/config';
 
 // What decompose() needs about a resource: classification inputs (url, type)
 // plus the context a router needs to build children — topic + difficulty
@@ -32,8 +33,15 @@ export type DecomposeInput = {
   conceptsTaught: string[];
 };
 
-// One atomic child produced by a router. Inherits topic / sourceId / trustScore
-// / language from its parent at upsert time, so those are absent here.
+// One child produced by a router. Inherits topic / sourceId / trustScore /
+// language from its parent at upsert time, so those are absent here.
+//
+// A child is usually an atomic leaf, but the doc-TOC router can nest: a child
+// that is itself a decomposable container (a course inside a path) carries
+// `decompositionStatus: 'decomposed'` and its own `children`. Absent
+// `decompositionStatus` means the child is an atomic leaf (the common case, and
+// what manual/playlist children always are). upsertResource persists the whole
+// tree, recursing into `children`.
 export type ChildInput = {
   url: string;
   title: string;
@@ -44,6 +52,8 @@ export type ChildInput = {
   prerequisiteConcepts: string[];
   conceptsTaught: string[];
   orderInParent: number;
+  decompositionStatus?: DecompositionStatus;
+  children?: ChildInput[];
 };
 
 export type DecompositionResult = {
@@ -99,6 +109,15 @@ export async function decompose(
         difficulty: input.difficulty,
         parentConcepts: input.conceptsTaught,
         force,
+        // Root is depth 0; its children are level 1. The router recurses into
+        // container children up to DECOMPOSITION_MAX_DEPTH, seeding the visited
+        // set with the root URL so a section that links back to it can't loop.
+        // The shared budget caps total expansions; force lifts it (operator-
+        // vouched tree), mirroring the per-node oversize gate.
+        depth: 0,
+        maxDepth: DECOMPOSITION_MAX_DEPTH,
+        visited: new Set([input.url]),
+        budget: { remaining: force ? Number.POSITIVE_INFINITY : DECOMPOSITION_MAX_TOTAL_NODES },
       });
       if (result.ok) {
         console.log('[decompose] doc-toc decomposed', { url: input.url, children: result.children.length });
