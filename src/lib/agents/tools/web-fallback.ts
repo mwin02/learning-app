@@ -59,6 +59,9 @@ export type WebFallbackResult = {
   skippedCount: number;
   discoveredCount: number;
   iterations: number;
+  // Newly-created atomic (pickable) resource ids from this run. The retrieval
+  // session uses them as a discovery allowlist (see curriculum-retrieval).
+  insertedIds: string[];
 };
 
 const VALIDATORS = [livenessValidator, rulesAgentValidator];
@@ -119,7 +122,7 @@ export async function runWebFallback({
   const finalRows = [...survivors.values()];
   if (finalRows.length === 0) {
     console.log('[web-fallback] no survivors', { topic, iterations, totalDiscovered });
-    return { insertedCount: 0, skippedCount: 0, discoveredCount: totalDiscovered, iterations };
+    return { insertedCount: 0, skippedCount: 0, discoveredCount: totalDiscovered, iterations, insertedIds: [] };
   }
 
   // Decompose each survivor before persisting (ROADMAP 2.5b decision #6:
@@ -153,12 +156,13 @@ export async function runWebFallback({
 
   let insertedCount = 0;
   let skippedCount = 0;
+  const insertedIds: string[] = [];
   for (const { row, result } of decomposed) {
     const tags = canonical.get(row.url) ?? {
       prerequisiteConcepts: row.rawPrerequisiteConcepts,
       conceptsTaught: row.rawConceptsTaught,
     };
-    const outcome = await upsertResource(
+    const { outcome, atomicIds } = await upsertResource(
       topic,
       {
         url: row.url,
@@ -174,6 +178,7 @@ export async function runWebFallback({
     );
     if (outcome === 'inserted') insertedCount += 1;
     else skippedCount += 1;
+    insertedIds.push(...atomicIds);
   }
 
   console.log('[web-fallback] summary', {
@@ -185,7 +190,7 @@ export async function runWebFallback({
     skippedCount,
     targetMet: finalRows.length >= targetCount,
   });
-  return { insertedCount, skippedCount, discoveredCount: totalDiscovered, iterations };
+  return { insertedCount, skippedCount, discoveredCount: totalDiscovered, iterations, insertedIds };
 }
 
 // ── discovery ───────────────────────────────────────────────────────────────

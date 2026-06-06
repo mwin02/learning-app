@@ -48,6 +48,11 @@ export type SearchParams = {
   // children are themselves 'atomic'). Ignored when `decompositionStatuses`
   // is provided.
   pickableOnly?: boolean;
+  // Resource ids that bypass the `statuses` window (but no other filter). Used
+  // by the retrieval session to admit resources it discovered this run even on
+  // an above-gate topic whose window is active-only — a deliberate per-session
+  // exception to the pending-review gate. Empty/omitted = no exception.
+  includeIds?: string[];
   limit?: number;
 };
 
@@ -93,6 +98,7 @@ function buildConditions(params: SearchParams): Prisma.Sql[] {
     decompositionStatuses,
     pickableOnly = true,
     statuses = DEFAULT_STATUSES,
+    includeIds,
   } = params;
   const conds: Prisma.Sql[] = [];
   if (topics && topics.length > 0) {
@@ -112,7 +118,16 @@ function buildConditions(params: SearchParams): Prisma.Sql[] {
     conds.push(Prisma.sql`"decompositionStatus"::text = 'atomic'`);
   }
   if (statuses.length > 0) {
-    conds.push(Prisma.sql`status::text IN (${Prisma.join(statuses)})`);
+    // The allowlist relaxes ONLY the status window: an id in it survives even
+    // when its status is outside `statuses`, but it still has to pass every
+    // other predicate (topic, difficulty, pickability) in the AND above.
+    if (includeIds && includeIds.length > 0) {
+      conds.push(
+        Prisma.sql`(status::text IN (${Prisma.join(statuses)}) OR id IN (${Prisma.join(includeIds)}))`,
+      );
+    } else {
+      conds.push(Prisma.sql`status::text IN (${Prisma.join(statuses)})`);
+    }
   }
   return conds;
 }
