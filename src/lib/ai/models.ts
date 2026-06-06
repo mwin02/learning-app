@@ -13,6 +13,7 @@ type AgentName =
   | 'curriculumCritic'
   | 'curriculumFallback'
   | 'tagCanonicalizer'
+  | 'topicClassifier'
   | 'conceptDeriver'
   | 'docTocExtractor'
   | 'validityAgent'
@@ -77,6 +78,16 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // output budget on thinking first) capped mid-JSON on realistic batches,
     // throwing AI_JSONParseError; canonicalizeTags now degrades to raw tags on
     // that failure, but 8k keeps the degradation rare rather than routine.
+    modelId: 'gemini-2.5-flash',
+    temperature: 0,
+    maxOutputTokens: 8192,
+  },
+  topicClassifier: {
+    // Phase 2.5-Block2a: files each discovered resource under its home topic,
+    // chosen from a small closed set (the request topic ∪ its related topics).
+    // Short closed-choice output (one slug per resource), but Flash 2.5 spends
+    // budget on thinking first, so keep headroom like the canonicalizer; the
+    // caller degrades to the request topic on any failure.
     modelId: 'gemini-2.5-flash',
     temperature: 0,
     maxOutputTokens: 8192,

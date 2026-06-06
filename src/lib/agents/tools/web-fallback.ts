@@ -25,6 +25,8 @@ import { rulesAgentValidator } from '@/lib/agents/validation/validators/rules-ag
 import { decompose } from '@/lib/agents/decomposition/decompose';
 import { upsertResource } from '@/lib/agents/decomposition/upsert-resource';
 import { loadTopicVocab } from '@/lib/agents/decomposition/concepts';
+import { classifyDiscoveryTopics } from '@/lib/agents/tools/classify-topic';
+import { relatedTopics } from '@/types/resource';
 
 const RAW_RESOURCE_TYPES = ['article', 'video', 'course', 'interactive', 'docs', 'book'] as const;
 const DIFFICULTIES = ['beginner', 'intermediate', 'advanced'] as const;
@@ -154,16 +156,38 @@ export async function runWebFallback({
   const vocab = await loadTopicVocab(topic);
   const canonical = await canonicalizeTags(atomicRows, vocab);
 
+  // File each survivor under its home topic rather than blindly stamping the
+  // request topic. Bounded to the request topic ∪ its related topics; a single
+  // candidate (the common case) skips the classifier entirely. Decomposed
+  // children inherit the parent's filed topic via createChild.
+  const candidateTopics = relatedTopics(topic);
+  const filedTopicByUrl =
+    candidateTopics.length > 1
+      ? await classifyDiscoveryTopics(
+          finalRows.map((r) => ({
+            url: r.url,
+            title: r.title,
+            summary: r.summary,
+            conceptsTaught: r.rawConceptsTaught,
+          })),
+          candidateTopics,
+          topic,
+        )
+      : new Map<string, string>();
+
   let insertedCount = 0;
   let skippedCount = 0;
+  let reclassifiedCount = 0;
   const insertedIds: string[] = [];
   for (const { row, result } of decomposed) {
     const tags = canonical.get(row.url) ?? {
       prerequisiteConcepts: row.rawPrerequisiteConcepts,
       conceptsTaught: row.rawConceptsTaught,
     };
+    const filedTopic = filedTopicByUrl.get(row.url) ?? topic;
+    if (filedTopic !== topic) reclassifiedCount += 1;
     const { outcome, atomicIds } = await upsertResource(
-      topic,
+      filedTopic,
       {
         url: row.url,
         title: row.title,
@@ -188,6 +212,7 @@ export async function runWebFallback({
     survivors: finalRows.length,
     insertedCount,
     skippedCount,
+    reclassifiedCount,
     targetMet: finalRows.length >= targetCount,
   });
   return { insertedCount, skippedCount, discoveredCount: totalDiscovered, iterations, insertedIds };
