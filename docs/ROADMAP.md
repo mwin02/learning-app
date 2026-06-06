@@ -2,29 +2,26 @@
 
 This roadmap mirrors the build order from the original spec (`learning-path-mvp-spec.md`, §9) and is the source of truth for what we're working on next. Edit as the project evolves.
 
-## Status (as of 2026-06-02)
+## Status (as of 2026-06-05)
 
-**Shipped:** Phases 1, 2, 2.5a (schema), and the full **2.5-AR curriculum-agent redesign**. The playground generates real sequenced paths end-to-end — library-first retrieval, pgvector search, web fallback, topic canonicalization, and a rubric critic — with a full agent trace.
+**Shipped:** Phases 1, 2, 2.5a (schema), the full **2.5-AR curriculum-agent redesign**, and the **topic partition vs. semantic search** redesign (Blocks 1/2b/2a/3, PRs #44–#47). The playground generates real sequenced paths end-to-end — library-first retrieval, pgvector search, web fallback, topic canonicalization, and a rubric critic — with a full agent trace.
 
-### ⭐ NEXT UP — Topic partition vs. semantic search (own design discussion)
+### ✅ SHIPPED — Topic partition vs. semantic search
 
-**Status: needs a dedicated design session before implementation.** Surfaced by the curriculum-agent audit ([docs/curriculum-agent-audit.md](curriculum-agent-audit.md), Section 2 follow-up); pulled out as the next thing to work on.
+`resource.topic` was a single hard partition that conflated *subject matter* with *the discovery context that found a resource*. Two distinct sub-problems — (a) **mis-filing** (discovery stamped the requesting path's topic onto every find) and (b) **legitimate overlap** (React draws on JS foundations) — resolved across four stacked PRs:
 
-**Problem.** `resource.topic` is a single hard partition that conflates two things: *subject matter* and *the discovery context that found the resource*. `searchResources` filters on exact `topic =` equality ([search-resources.ts:93](src/lib/agents/tools/search-resources.ts)). Discovery stamps the *requesting* path's topic onto every resource it finds, so a generic JavaScript tutorial discovered while building a `javascript-react` path is permanently filed under `javascript-react` and is invisible to a `javascript` path. Real example: resource `cmpyc0t4f0011bsm5rqszhb37` (a plain JS tutorial filed under `javascript-react`).
+- **Block 1 ([#44](https://github.com/mwin02/learning-app/pull/44))** — `TOPIC_RELATIONS` + `relatedTopics()` ([src/types/resource.ts](../src/types/resource.ts)); `searchResources` and `ensureFloor` widen to `topic ∈ (requested ∪ related)`. Fixes (b) without bleeding unrelated subjects (calculus ⊥ linear-algebra — no edge by design). Also hardened the web-fallback tag canonicalizer against truncated-JSON crashes.
+- **Block 2b ([#45](https://github.com/mwin02/learning-app/pull/45))** — wired the previously-dead `PENDING_REVIEW_GATE_PER_TOPIC`: an above-gate topic generates from `active`-only content; a session's own `triggerWebFallback` discoveries bypass the gate via a per-session id allowlist (so ambient `pending_review` stays excluded but deliberate finds don't).
+- **Block 2a ([#46](https://github.com/mwin02/learning-app/pull/46))** — discovery topic classifier ([classify-topic.ts](../src/lib/agents/tools/classify-topic.ts)): each find is filed under its home topic, bounded to `requested ∪ related`, fixing (a) at the root. No-op for topics without a relation.
+- **Block 3 ([#47](https://github.com/mwin02/learning-app/pull/47))** — one-time backfill ([scripts/reclassify-topics.ts](../scripts/reclassify-topics.ts)) relabeled **247** existing rows (246 `javascript-react → javascript`); `javascript-react` tightened from 285 → ~40 actual-React rows, `javascript` went 0 → ~288.
 
-**Two sub-problems to keep distinct:**
-- (a) *Mis-filing* — a resource's content is broader/other than its partition label (root cause: discovery stamps the request topic).
-- (b) *Legitimate overlap* — related topics genuinely share resources (React draws on JS foundations).
+**Design record:** the embedding is already global (title+summary+concepts), so the lever was *how hard topic gates search*, not concepts-vs-topic. Relatedness lives in a **code constant** (`TOPIC_RELATIONS`), not a table — promote to a table only if/when relations are auto-populated at gate-mint time. The **subject ceiling** is enforced by the relation bound, not the coarse `subject` field (which lumps calculus + linear-algebra under `math`). `WHERE topic IN (…)` is served by the existing composite `@@index([topic, status, tier])` leftmost prefix — no new index needed. (Separately: the `col::text = …` enum-predicate casts still defeat `@@index([difficulty])`; revisit if search filtering becomes a bottleneck.)
 
-**Why the obvious fix is insufficient.** "Filter on `conceptsTaught` instead of `topic`" is fragile: concepts are canonicalized *per-topic* (vocab isn't shared across topics), the ≤30 fast path relies on the topic filter for selectivity, and there's no GIN index on `conceptsTaught`. The embedding is already global (built over title+summary+concepts), so the real lever is *how hard topic should gate search*, not concepts-vs-topic.
+### ⭐ NEXT UP — `pending_review → active` promotion pipeline
 
-**Candidate directions (decide in the session):**
-1. *Related-topic set* — curated relations table; search filters `topic IN (requested ∪ related)`. Smallest change, preserves fast path + indexing, fixes (b); doesn't fix (a) alone.
-2. *Soft topic + always rank* — drop hard `topic` WHERE; rank by embedding distance with same-topic boost + max-distance cutoff. Fixes (a)+(b) via content; loses the fast path, risks cross-subject bleed.
-3. *Subject + specialization* — two-level topic (coarse `subjectArea` + specialization); filter by subject, rank by embedding. Cleanest long-term, biggest migration.
-4. *Fix discovery + backfill* — per-resource topic classification at discovery + one-time relabel of existing rows. Treats root cause (a); still needs a relations layer for (b).
+The topic redesign wired the gate but surfaced the next load-bearing gap (audit 5.1): **nothing promotes `pending_review` → `active`.** Consequences: (a) `ensureFloor` counts `active`-only, so a seed-less, relation-less agent-grown topic re-fires a full Gemini 2.5 Pro discovery loop on *every* request; (b) the gate's `active`-only path can't engage — no topic reaches ≥10 active today; (c) decomposed children of an `active` container are stamped `pending_review` and would vanish from above-gate search once (b) engages.
 
-**Index note:** `WHERE topic = X` is already covered by the existing composite `@@index([topic, status, tier])` (leftmost prefix) — topic is *not* unindexed. But every non-topic enum predicate in `searchResources` is written as `col::text = …` / `col::text IN (…)`, which defeats the enum-column indexes (`@@index([difficulty])` is effectively dead). If search filters become a bottleneck, revisit those casts and consider an index shaped for the actual `topic + decompositionStatus + difficulty` predicate.
+A single promotion signal closes all three — candidates: *survived-validation + selected-into-a-path*, a `trustScore` threshold, or an explicit review queue. **Folds in the deferred decomposed-child status inheritance**: children should inherit an `active` container's status at decompose time, and promotion should cascade to a container's existing children.
 
 **Then:** **2.5c–g** (Track/Lesson delivery layer) → 2.6 (frontend) → 2.75 (Programs) → 3 (auth + Stripe) → 4–6. (2.5b decomposition pipeline ✅ shipped.)
 
@@ -164,7 +161,7 @@ Carried into 2.5c: prefer **same-parent cohesion** when the curriculum agent pic
 - **Headless-render agent decomposer (post-Phase-3).** Replaces the `decompose_manual` human bandaid for SPA courses (Khan Academy, etc.): an agent renders the client-side page, extracts the ordered lessons, and POSTs `decompose_manual` itself. Needs a rendering surface (connected Chrome, or a Cloud Run service with Playwright) — hence deferred until after the Cloud Run migration, to keep a browser dependency off Vercel.
 - **Non-embeddable circumvention (revisit).** Options to weigh later: server-side proxy + rewrite (legal risk), agent-generated summaries (quality risk), reader-mode extraction.
 - **Critic-triggered re-retrieval (carried from AR).** If the critic finds a gap needing a *different* resource (not just reordering), v1 re-selects over the existing set only; looping back into retrieval is a future option.
-- **Fallback floor never fills (audit 5.1) — HIGH cost.** `ensureFloor` counts `status='active'` atomic rows, but discovery inserts `pending_review` and nothing promotes to `active`, so a full Gemini 2.5 Pro discovery loop re-fires on *every* request for any agent-grown topic (the floor gate reads `{active}` while search reads `{active, pending_review}`). Fix: count `pending_review` atomic toward the floor, or add the promotion path the dead `PENDING_REVIEW_GATE_PER_TOPIC` config anticipates. Small, self-contained; independent of the stampede/queue work (audit 5.2, deferred to Phase 3.1).
+- **Fallback floor never fills (audit 5.1) — now the ⭐ NEXT UP.** `ensureFloor` counts `status='active'` atomic rows, but discovery inserts `pending_review` and nothing promotes to `active`, so a full Gemini 2.5 Pro discovery loop re-fires on *every* request for any seed-less, relation-less agent-grown topic. The topic redesign (#44/#45) wired `PENDING_REVIEW_GATE_PER_TOPIC` and widened both `ensureFloor` and search to the related set (so a related topic's seeds now satisfy the floor), but the core gap stands. Fix = the `pending_review → active` promotion pipeline, now the headline NEXT UP at the top of this file. Independent of the stampede/queue work (audit 5.2, deferred to Phase 3.1).
 - **Pre-decompose dedup (audit 6.1) — cost; compounds 5.1.** Dedup is currently post-decompose: the existing-URL skip lives in `upsertResource` (last step), so re-discovering an already-stored playlist still runs liveness fetches + rules-agent Flash + full YouTube Data API decomposition + concept-derivation before discarding it at upsert. With 5.1 (re-fire every request), a popular cold topic re-pays YouTube quota + decompose cost on every request. Fix: skip URLs already in the library *before* validate/decompose.
 - **Batch post-commit embeds (audit 7.1) — efficiency.** The discovery/upsert path embeds one row at a time (a 50-child playlist = 50 sequential Vertex embedding calls) even though `embedMany` batches natively (the backfill path already uses 100/call). Collect `embedTasks`, embed in chunks of 100, then UPDATE. Also covers the "parallelize post-commit embeds" half of audit 5.4.
 
@@ -271,7 +268,7 @@ Findings from the curriculum-agent code audit that aren't security-critical (tho
 - [ ] **Health-probe auth (audit 9.2).** `GET /api/health?probe=ai` is unauthenticated and fires a live Flash call per hit (loopable → unbounded cost/DSQ); also leaks raw `err.message`. Gate `probe=ai` behind admin/secret + rate-limit; keep plain liveness public.
 - [ ] **Delimit `priorKnowledge` in prompts (audit 9.3).** 500-char free text flows raw into retrieval/select/critic prompts. Delimit as untrusted data and instruct the model to treat it as the learner's description, not instructions.
 
-> **Topic partition vs. semantic search** (the audit's biggest design item) is now the headline **⭐ NEXT UP** at the top of this file (Status section), not a Phase 3.1 checkbox.
+> **Topic partition vs. semantic search** (the audit's biggest design item) — ✅ **shipped** (Blocks 1/2b/2a/3, PRs #44–#47); see the Status section at the top of this file.
 
 ## Phase 4 — Tutor agent (deep feature — spec §6)
 
