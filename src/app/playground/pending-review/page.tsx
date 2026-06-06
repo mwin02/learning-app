@@ -34,10 +34,19 @@ function ResourceMeta({ root }: { root: PendingReviewRoot }) {
   );
 }
 
+// Collapsed by default — a container can hold dozens of children (a big doc
+// guide, a course path), so keep the queue scannable. Native <details> so the
+// page stays a server component (no client JS for the toggle).
 function ChildList({ items }: { items: PendingReviewRoot['children'] }) {
+  const approved = items.filter((c) => c.status === 'active').length;
   return (
-    <ul className="mt-3 flex flex-col gap-2 border-l-2 border-gray-100 pl-3">
-      {items.map((c) => (
+    <details className="mt-3">
+      <summary className="cursor-pointer text-xs text-gray-600 select-none">
+        {items.length} {items.length === 1 ? 'child' : 'children'}
+        {approved > 0 && ` · ${approved} approved`}
+      </summary>
+      <ul className="mt-2 flex flex-col gap-2 border-l-2 border-gray-100 pl-3">
+        {items.map((c) => (
         <li key={c.id} className="text-sm">
           <div className="flex items-center gap-2">
             <span className="font-medium">{c.title}</span>
@@ -58,8 +67,9 @@ function ChildList({ items }: { items: PendingReviewRoot['children'] }) {
               child can be pulled from existing paths. */}
           <ReviewActions resourceId={c.id} buttons={ROW_BUTTONS} />
         </li>
-      ))}
-    </ul>
+        ))}
+      </ul>
+    </details>
   );
 }
 
