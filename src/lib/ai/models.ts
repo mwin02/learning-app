@@ -12,6 +12,7 @@ type AgentName =
   | 'curriculumRetrieval'
   | 'curriculumCritic'
   | 'curriculumFallback'
+  | 'mapSpineAuthor'
   | 'tagCanonicalizer'
   | 'topicClassifier'
   | 'conceptDeriver'
@@ -69,6 +70,19 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // variety across deny-list retries inside one fallback loop.
     modelId: 'gemini-2.5-pro',
     temperature: 0.3,
+    maxOutputTokens: 32768,
+  },
+  mapSpineAuthor: {
+    // Phase 2.5d-1: authors a topic's spine concept DAG (nodes + directed prereq
+    // edges). Pro, not Flash — this is the infrequent, cached-forever curriculum
+    // backbone every future Track for the topic traverses; quality of the concept
+    // decomposition and prerequisite structure outweighs the per-call cost (same
+    // reasoning as curriculumFallback). Temperature low so the structure is
+    // stable and defensible, not zero so a repair pass can vary a bad edge set.
+    // 32k output: a ~15-concept spine plus its edge list plus Pro's internal
+    // thinking; matches the Pro fallback budget.
+    modelId: 'gemini-2.5-pro',
+    temperature: 0.2,
     maxOutputTokens: 32768,
   },
   tagCanonicalizer: {

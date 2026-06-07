@@ -99,3 +99,18 @@ export const DOC_TOC_MAX_HTML_CHARS = 500_000;
 // agent returns its best-effort path if the critic still fails after the last
 // revision.
 export const CRITIC_MAX_REVISIONS = 2;
+
+// Phase 2.5d-1 (map-builder spine author): the spine is the required backbone of
+// a topic's concept map — coarse enough to stay a stable skeleton, fine enough
+// that each node maps to teachable resources. These bound the authored concept
+// count; the author prompt targets this range and the validator rejects an
+// out-of-range spine into the repair loop. Starting heuristic — ROADMAP defers
+// the empirical granularity policy to this phase.
+export const SPINE_MIN_CONCEPTS = 8;
+export const SPINE_MAX_CONCEPTS = 15;
+
+// Max times the spine author re-runs after the DAG validator rejects its output
+// (a cycle, a self-loop, a dangling edge endpoint, or an out-of-range concept
+// count). Each repair is one extra author call fed the specific defects; total
+// author calls = 1 + up to this many. Mirrors CRITIC_MAX_REVISIONS' bounded loop.
+export const SPINE_MAX_REPAIRS = 2;
