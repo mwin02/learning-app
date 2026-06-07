@@ -26,6 +26,11 @@ model Resource {
   requiresPurchase     Boolean        @default(false)
   origin               Origin         @default(seed)
   status               ResourceStatus @default(active)
+  // Set when a pending-review reject deprecates the row. `soft` = quality
+  // downgrade (future tracks only); `hard` = broken/dead link (a future Track
+  // layer may need to patch or flag in-flight learners). Null for rows that
+  // were never rejected. See src/lib/curation/pending-review.ts.
+  deprecationSeverity  DeprecationSeverity?
   language             String         @default("en")
   trustScore           Float          @default(0.5)
   attribution          String?
@@ -136,6 +141,14 @@ enum ResourceStatus {
   active
   deprecated
   pending_review
+}
+
+// Severity of a pending-review rejection. `soft` — quality downgrade, future
+// tracks only. `hard` — broken/dead link, may warrant patching in-flight
+// learners once the Track layer exists.
+enum DeprecationSeverity {
+  soft
+  hard
 }
 
 // Phase 2.5: lifecycle of a Resource w.r.t. container/atomic decomposition.
