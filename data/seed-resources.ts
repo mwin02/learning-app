@@ -6,7 +6,7 @@ import type { ResourceSeedInput } from '@/types/resource';
 const pythonDataMl: ResourceSeedInput[] = [
   {
     slug: 'python-data-ml-python-official-tutorial',
-    topic: 'python-data-ml',
+    topic: 'python',
     sourceSlug: 'python-docs',
     title: 'The Python Tutorial',
     url: 'https://docs.python.org/3/tutorial/',
@@ -28,7 +28,7 @@ const pythonDataMl: ResourceSeedInput[] = [
   },
   {
     slug: 'python-data-ml-fcc-python-mike-dane',
-    topic: 'python-data-ml',
+    topic: 'python',
     sourceSlug: 'freecodecamp',
     title: 'Learn Python — Full Course for Beginners (freeCodeCamp / Mike Dane)',
     url: 'https://www.youtube.com/watch?v=rfscVS0vtbw',
@@ -48,7 +48,7 @@ const pythonDataMl: ResourceSeedInput[] = [
   },
   {
     slug: 'python-data-ml-corey-schafer-python-tutorials',
-    topic: 'python-data-ml',
+    topic: 'python',
     sourceSlug: 'corey-schafer',
     title: 'Python Tutorials (Corey Schafer)',
     url: 'https://www.youtube.com/playlist?list=PL-osiE80TeTskrapNbzXhwoFUiLCjGgY7',
@@ -70,7 +70,7 @@ const pythonDataMl: ResourceSeedInput[] = [
   },
   {
     slug: 'python-data-ml-automate-boring-stuff',
-    topic: 'python-data-ml',
+    topic: 'python',
     sourceSlug: 'automate-the-boring-stuff',
     title: 'Automate the Boring Stuff with Python (online edition)',
     url: 'https://automatetheboringstuff.com/',
@@ -201,7 +201,7 @@ const pythonDataMl: ResourceSeedInput[] = [
   },
   {
     slug: 'python-data-ml-statquest-ml-fundamentals',
-    topic: 'python-data-ml',
+    topic: 'machine-learning',
     sourceSlug: 'statquest',
     title: 'Machine Learning Fundamentals (StatQuest with Josh Starmer)',
     url: 'https://www.youtube.com/playlist?list=PLblh5JKOoLUICTaGLRoHQDuF_7q2GfuJF',
@@ -224,7 +224,7 @@ const pythonDataMl: ResourceSeedInput[] = [
 const javascriptReact: ResourceSeedInput[] = [
   {
     slug: 'javascript-react-mdn-learn-javascript',
-    topic: 'javascript-react',
+    topic: 'javascript',
     sourceSlug: 'mdn',
     title: 'MDN — Learn JavaScript (First Steps through Objects)',
     url: 'https://developer.mozilla.org/en-US/docs/Learn_web_development/Core/Scripting',
@@ -247,7 +247,7 @@ const javascriptReact: ResourceSeedInput[] = [
   },
   {
     slug: 'javascript-react-fcc-js-beau-carnes',
-    topic: 'javascript-react',
+    topic: 'javascript',
     sourceSlug: 'freecodecamp',
     title: 'Learn JavaScript — Full Course for Beginners (freeCodeCamp / Beau Carnes)',
     url: 'https://www.youtube.com/watch?v=PkZNo7MFNFg',
@@ -268,7 +268,7 @@ const javascriptReact: ResourceSeedInput[] = [
   },
   {
     slug: 'javascript-react-javascript-info',
-    topic: 'javascript-react',
+    topic: 'javascript',
     sourceSlug: 'javascript-info',
     title: 'The Modern JavaScript Tutorial (javascript.info)',
     url: 'https://javascript.info/',
@@ -290,7 +290,7 @@ const javascriptReact: ResourceSeedInput[] = [
   },
   {
     slug: 'javascript-react-mdn-async-js',
-    topic: 'javascript-react',
+    topic: 'javascript',
     sourceSlug: 'mdn',
     title: 'MDN — Asynchronous JavaScript',
     url: 'https://developer.mozilla.org/en-US/docs/Learn_web_development/Extensions/Async_JS',
@@ -304,7 +304,7 @@ const javascriptReact: ResourceSeedInput[] = [
   },
   {
     slug: 'javascript-react-eloquent-javascript',
-    topic: 'javascript-react',
+    topic: 'javascript',
     sourceSlug: 'eloquent-javascript',
     title: 'Eloquent JavaScript (Marijn Haverbeke)',
     url: 'https://eloquentjavascript.net/',

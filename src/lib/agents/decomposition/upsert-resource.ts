@@ -15,7 +15,7 @@
 
 import { prisma } from '@/lib/db';
 import { safeEmbedResource } from '@/lib/ai/embeddings';
-import type { PrismaClient, ResourceType, Difficulty, DecompositionStatus } from '@prisma/client';
+import type { PrismaClient, ResourceType, Difficulty, DecompositionStatus, ResourceStatus } from '@prisma/client';
 import type { DecompositionResult, ChildInput } from './decompose';
 
 export type UpsertResourceInput = {
@@ -110,6 +110,9 @@ export async function upsertResource(
           parentId: parent.id,
           sourceId: source.id,
           trustScore: source.trustScore,
+          // Discovery's parent is an unvetted agent find (pending_review above),
+          // so its children inherit that gate.
+          childStatus: 'pending_review',
           child,
           taken,
           embedTasks,
@@ -158,6 +161,7 @@ export async function decomposeExisting(
       title: true,
       summary: true,
       conceptsTaught: true,
+      status: true,
     },
   });
   if (!existing) throw new Error(`decomposeExisting: resource ${resourceId} not found`);
@@ -188,6 +192,14 @@ export async function decomposeExisting(
         parentId: resourceId,
         sourceId: existing.sourceId,
         trustScore: existing.trustScore,
+        // Children inherit the parent's review status: decomposing an `active`
+        // (curated seed, or already-approved) container yields `active`,
+        // pickable children — they're sub-units of vetted content, not new
+        // discovery. This is the durable fix for the seed-decomposition bug that
+        // left 1,584 atomic children stuck `pending_review` under active seed
+        // containers (the floor never saw them; the pending queue never showed
+        // the active parent).
+        childStatus: existing.status,
         child,
         taken,
         embedTasks,
@@ -268,12 +280,16 @@ async function createChild(
     parentId: string;
     sourceId: string;
     trustScore: number;
+    // Review status the child (and its subtree) is created with — inherited from
+    // the container being decomposed (pending_review for discovery, active for a
+    // curated/seed container). See the two call sites.
+    childStatus: ResourceStatus;
     child: ChildInput;
     taken: Set<string>;
     embedTasks: EmbedTask[];
   },
 ): Promise<number> {
-  const { topic, parentId, sourceId, trustScore, child, taken, embedTasks } = args;
+  const { topic, parentId, sourceId, trustScore, childStatus, child, taken, embedTasks } = args;
 
   const clash = await tx.resource.findUnique({
     where: { url: child.url },
@@ -284,7 +300,7 @@ async function createChild(
     return 0;
   }
 
-  const status: DecompositionStatus = child.decompositionStatus ?? 'atomic';
+  const decompStatus: DecompositionStatus = child.decompositionStatus ?? 'atomic';
   const slug = await uniqueSlug(tx, child.title, child.url, taken);
   const created = await tx.resource.create({
     data: {
@@ -299,18 +315,18 @@ async function createChild(
       prerequisiteConcepts: child.prerequisiteConcepts,
       conceptsTaught: child.conceptsTaught,
       origin: 'agent',
-      status: 'pending_review',
+      status: childStatus,
       trustScore,
       sourceId,
       parentResourceId: parentId,
       orderInParent: child.orderInParent,
-      decompositionStatus: status,
+      decompositionStatus: decompStatus,
     },
     select: { id: true },
   });
 
   // Only atomic leaves are pickable, so only they are embedded.
-  if (status === 'atomic') {
+  if (decompStatus === 'atomic') {
     embedTasks.push({
       id: created.id,
       title: child.title,
@@ -326,6 +342,7 @@ async function createChild(
       parentId: created.id,
       sourceId,
       trustScore,
+      childStatus,
       child: grandchild,
       taken,
       embedTasks,
