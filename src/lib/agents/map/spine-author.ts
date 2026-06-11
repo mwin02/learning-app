@@ -31,27 +31,30 @@ export type AuthorSpineArgs = {
   onTrace?: OnTrace;
 };
 
+// Deliberately permissive: the constraints the deterministic validator
+// (cycle.ts) owns — concept count range, kebab-case/empty slugs, and edge
+// endpoint integrity — are intentionally NOT enforced here. If Output.object's
+// Zod parse rejected those, an out-of-range or malformed spine would throw at
+// parse time and bypass the bounded repair loop, aborting the whole build
+// instead of feeding the specific defect back to the author. So the schema only
+// pins the structural shape; validateSpine produces actionable defects that
+// drive repair. (`title.min(2)` stays as a cheap shape guard the validator does
+// not cover; a throw here is now caught + retried by build-spine.ts.)
 const SpineSchema = z.object({
-  concepts: z
-    .array(
-      z.object({
-        // Stable, kebab-case, unique within this Path. Becomes Concept.slug.
-        slug: z
-          .string()
-          .min(1)
-          .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'slug must be kebab-case'),
-        title: z.string().min(2),
-      }),
-    )
-    .min(SPINE_MIN_CONCEPTS)
-    .max(SPINE_MAX_CONCEPTS),
-  edges: z
-    .array(
-      z.object({
-        fromSlug: z.string().min(1),
-        toSlug: z.string().min(1),
-      }),
-    ),
+  concepts: z.array(
+    z.object({
+      // Becomes Concept.slug. Format (kebab-case, non-empty) and uniqueness are
+      // validated by validateSpine, not here — see the note above.
+      slug: z.string(),
+      title: z.string().min(2),
+    }),
+  ),
+  edges: z.array(
+    z.object({
+      fromSlug: z.string(),
+      toSlug: z.string(),
+    }),
+  ),
 });
 
 export async function authorSpine(args: AuthorSpineArgs): Promise<AuthoredSpine> {

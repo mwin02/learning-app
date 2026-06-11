@@ -45,7 +45,25 @@ export async function buildSpine(args: BuildSpineArgs): Promise<AuthoredSpine> {
   let lastDefects: SpineDefect[] = [];
 
   for (let attempt = 0; attempt <= SPINE_MAX_REPAIRS; attempt++) {
-    const spine = await authorSpine({ topic, subject, repairFeedback, onTrace });
+    let spine: AuthoredSpine;
+    try {
+      spine = await authorSpine({ topic, subject, repairFeedback, onTrace });
+    } catch (err) {
+      // The author call threw (transient Vertex/network error, or output the
+      // permissive schema still couldn't parse). Consume the attempt and retry
+      // rather than aborting the whole build. We deliberately do NOT set
+      // repairFeedback: there's no model output to repair, and feeding an infra
+      // error string back as instructions would only confuse the next call.
+      const message = err instanceof Error ? err.message : String(err);
+      lastDefects = [{ kind: 'author_error', message }];
+      onTrace({
+        kind: 'stage',
+        label: 'spine author error',
+        detail: { attempt, error: message },
+      });
+      console.log('[map-build-spine] author error', { topic, attempt, error: message });
+      continue;
+    }
     const result = validateSpine(spine);
 
     if (result.ok) {
