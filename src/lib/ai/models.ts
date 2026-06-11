@@ -13,6 +13,7 @@ type AgentName =
   | 'curriculumCritic'
   | 'curriculumFallback'
   | 'mapSpineAuthor'
+  | 'mapCandidateJudge'
   | 'tagCanonicalizer'
   | 'topicClassifier'
   | 'conceptDeriver'
@@ -84,6 +85,17 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     modelId: 'gemini-2.5-pro',
     temperature: 0.2,
     maxOutputTokens: 32768,
+  },
+  mapCandidateJudge: {
+    // Phase 2.5d-2: scores a spine concept's candidate resources — assigns each
+    // a role (teaches/uses/assesses) and a 0–1 coverageScore. Rule application
+    // against the concept + each resource's own metadata, not open generation,
+    // so Flash at temperature 0 (like conceptDeriver / the curriculum critic).
+    // 8k output: the verdict array is small, but Flash 2.5 spends budget on
+    // internal thinking first and caps mid-JSON on a tighter ceiling.
+    modelId: 'gemini-2.5-flash',
+    temperature: 0,
+    maxOutputTokens: 8192,
   },
   tagCanonicalizer: {
     // Plain JSON shape, no grounding. Deterministic mapping job, but the input

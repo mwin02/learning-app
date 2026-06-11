@@ -114,3 +114,15 @@ export const SPINE_MAX_CONCEPTS = 15;
 // count). Each repair is one extra author call fed the specific defects; total
 // author calls = 1 + up to this many. Mirrors CRITIC_MAX_REVISIONS' bounded loop.
 export const SPINE_MAX_REPAIRS = 2;
+
+// Phase 2.5d-2 (candidate attachment): per spine concept, how many pickable
+// library resources to pull as candidates before the LLM judge scores them.
+// Small — the Track builder only needs a primary + a few frozen alternates per
+// concept, and each candidate costs judge tokens. The async thickener (2.5j)
+// widens this later; the synchronous spine build stays lean.
+export const MAP_CANDIDATES_PER_CONCEPT = 6;
+
+// How many concepts' candidate sets to judge concurrently. Each concept is one
+// independent Flash call (its concept + that concept's candidates), so we fan
+// out — but bounded, so a wide spine doesn't open dozens of Vertex calls at once.
+export const MAP_JUDGE_CONCURRENCY = 4;
