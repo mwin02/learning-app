@@ -60,6 +60,7 @@ model Resource {
   embeddedAt           DateTime?
   pathItems            PathItem[]
   lessonResources      LessonResource[]
+  conceptResources     ConceptResource[]
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 
@@ -210,14 +211,31 @@ model Path {
   inputHoursPerWeek    Int?
   createdById          String?
   createdBy            User?          @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  // Phase 2.5c: readiness gate. The map-builder authors the spine synchronously
+  // and flips the Path to `spine_ready`; the first Track build is gated on it.
+  // `draft` (pre-spine) → `building` (spine in flight) → `spine_ready` | `failed`.
+  status               PathStatus     @default(draft)
   items                PathItem[]
-  track                Track?
+  // Phase 2.5c: Path becomes an input-agnostic concept map for a whole topic —
+  // one Path per canonical topic, hence @@unique([topic]). The user-specific
+  // columns above (createdById, difficulty, input*, title) retire WITH PathItem
+  // at the 2.5f cutover, not in this block.
+  concepts             Concept[]
+  tracks               Track[]
   enrollments          EnrolledPath[]
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 
-  @@index([topic])
+  @@unique([topic])
   @@index([createdById])
+}
+
+// Phase 2.5c: Path readiness lifecycle for the spine-ready gate (see Path.status).
+enum PathStatus {
+  draft
+  building
+  spine_ready
+  failed
 }
 
 model PathItem {
@@ -235,7 +253,6 @@ model PathItem {
   // PathItem id, a Resource id, or something else without a migration.
   isCheckpoint  Boolean        @default(false)
   branchOnFail  String?
-  progress      Progress[]
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 
@@ -248,26 +265,37 @@ enum PathItemStatus {
   removed
 }
 
+// Phase 2.5c: enrollment keys on the pinned Track (the immutable instance the
+// learner walks), not the Path. `pathId` is kept denormalized for cross-version
+// queries ("all enrollments under this map"). Inert today — zero consumers — so
+// re-keying the PK to trackId is free; trackId is required for the same reason.
 model EnrolledPath {
   userId     String
+  trackId    String
   pathId     String
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  track      Track    @relation(fields: [trackId], references: [id], onDelete: Cascade)
   path       Path     @relation(fields: [pathId], references: [id], onDelete: Cascade)
   enrolledAt DateTime @default(now())
 
-  @@id([userId, pathId])
+  @@id([userId, trackId])
   @@index([pathId])
+  @@index([trackId])
 }
 
+// Phase 2.5c: progress re-keys from PathItem to Lesson — the Lesson is the
+// completable unit in the Track delivery shape. Inert today (zero consumers), so
+// the re-key is free. The table is empty, which is what makes the migration's
+// `lessonId NOT NULL`-with-no-default safe — do NOT copy that onto a populated table.
 model Progress {
   userId      String
-  pathItemId  String
+  lessonId    String
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  pathItem    PathItem @relation(fields: [pathItemId], references: [id], onDelete: Cascade)
+  lesson      Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
   completedAt DateTime @default(now())
 
-  @@id([userId, pathItemId])
-  @@index([pathItemId])
+  @@id([userId, lessonId])
+  @@index([lessonId])
 }
 
 // Phase 2.5 — delivery structure built on top of a Path.
@@ -277,12 +305,24 @@ model Progress {
 // expensive library matching + web fallback.
 model Track {
   id        String      @id @default(cuid())
-  pathId    String      @unique
+  // Phase 2.5c: dropped @unique — one Path (concept map) → many Tracks (learner
+  // traversals). The per-learner inputs + user-facing title/summary that used to
+  // live on Path move here; nullable for now since the builder (2.5e) populates
+  // them and the table is empty.
+  pathId    String
   path      Path        @relation(fields: [pathId], references: [id], onDelete: Cascade)
   status    TrackStatus @default(pending)
-  lessons   Lesson[]
+  priorKnowledge String?
+  timeframeWeeks Int?
+  hoursPerWeek   Int?
+  title          String?
+  summary        String?
+  lessons     Lesson[]
+  enrollments EnrolledPath[]
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
+
+  @@index([pathId])
 }
 
 enum TrackStatus {
@@ -303,6 +343,7 @@ model Lesson {
   estMinutes      Int
   resources       LessonResource[]
   exercises       Exercise[]
+  progress        Progress[]
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 
@@ -361,4 +402,81 @@ model Exercise {
 enum ExerciseKind {
   text
   mcq
+}
+
+// Phase 2.5c — Topic Concept Map. A Concept is a Path-scoped node in the topic's
+// prerequisite DAG. Canonicalization is a within-one-map match-or-create on the
+// per-Path `slug` (never global — see ROADMAP "Why Path-scoped"). `membership`
+// splits the required backbone (`spine`, gates the first Track) from opt-in
+// enrichment (`frontier`, thickened async).
+model Concept {
+  id         String            @id @default(cuid())
+  pathId     String
+  path       Path              @relation(fields: [pathId], references: [id], onDelete: Cascade)
+  slug       String
+  title      String
+  membership ConceptMembership @default(spine)
+  // Prereq edges in both directions: `prereqsOut` are edges where this concept
+  // is the prerequisite; `prereqsIn` are edges where it is the dependent.
+  prereqsOut ConceptPrereq[]   @relation("PrereqFrom")
+  prereqsIn  ConceptPrereq[]   @relation("PrereqTo")
+  resources  ConceptResource[]
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  @@unique([pathId, slug])
+  @@index([pathId, membership])
+}
+
+enum ConceptMembership {
+  spine
+  frontier
+}
+
+// Phase 2.5c — a directed prerequisite edge within one Path's concept DAG.
+// `from → to` reads "learn `from` before `to`": `from` is the prerequisite, `to`
+// depends on it. `pathId` is denormalized so the Track builder can load the whole
+// map's edges in one indexed query (and as an integrity anchor that every edge
+// stays intra-Path). Cycle-freeness is a DAG invariant the builder validates at
+// write; the DB enforces only no-duplicate-edges and (via migration CHECK) no
+// self-loop.
+model ConceptPrereq {
+  id            String  @id @default(cuid())
+  pathId        String
+  fromConceptId String
+  toConceptId   String
+  from          Concept @relation("PrereqFrom", fields: [fromConceptId], references: [id], onDelete: Cascade)
+  to            Concept @relation("PrereqTo", fields: [toConceptId], references: [id], onDelete: Cascade)
+
+  @@unique([fromConceptId, toConceptId])
+  @@index([toConceptId])
+  @@index([pathId])
+}
+
+// Phase 2.5c — candidate link between a Concept and a pickable Resource. `role`
+// distinguishes how the resource serves the concept (a Resource serves exactly
+// one purpose, hence one role per pair — @@unique([conceptId, resourceId])).
+// `coverageScore` ranks candidates so the Track builder picks a `primary` greedily
+// and freezes the rest as `alternate` LessonResources. The resourceId index backs
+// the 2.5f reject-pipeline reach-in (find concepts depending on a deprecated row).
+model ConceptResource {
+  id            String              @id @default(cuid())
+  conceptId     String
+  concept       Concept             @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  resourceId    String
+  resource      Resource            @relation(fields: [resourceId], references: [id])
+  role          ConceptResourceRole @default(teaches)
+  coverageScore Float
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  @@unique([conceptId, resourceId])
+  @@index([conceptId])
+  @@index([resourceId])
+}
+
+enum ConceptResourceRole {
+  teaches
+  uses
+  assesses
 }
