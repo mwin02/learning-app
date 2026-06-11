@@ -126,3 +126,12 @@ export const MAP_CANDIDATES_PER_CONCEPT = 6;
 // independent Flash call (its concept + that concept's candidates), so we fan
 // out — but bounded, so a wide spine doesn't open dozens of Vertex calls at once.
 export const MAP_JUDGE_CONCURRENCY = 4;
+
+// Phase 2.5d-3 (spine-ready gate): the minimum coverageScore a `teaches`
+// candidate must clear to count as a usable primary for a spine concept. A Path
+// becomes `spine_ready` only when EVERY spine concept has such a candidate —
+// the gate is honest about "can we actually teach every backbone concept". A
+// concept with only `uses` candidates, or only weak `teaches`, is a spine hole;
+// the Path stays `building` and later blocks (thickener 2.5j, edit surface) fill
+// it. Modest so we're not brittle against a thin library.
+export const MAP_SPINE_MIN_PRIMARY_COVERAGE = 0.5;
