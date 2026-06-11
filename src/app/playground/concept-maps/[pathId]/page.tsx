@@ -4,6 +4,7 @@ import { ConceptResourceRole } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { isDevAuthEnabled } from '@/lib/dev-auth';
 import { MAP_SPINE_MIN_PRIMARY_COVERAGE } from '@/lib/config';
+import { layerBySlug } from '@/lib/agents/map/order';
 import { STATUS_STYLE } from '../status-style';
 import { ConceptActions } from './concept-actions';
 import { ResourceActions } from './resource-actions';
@@ -62,27 +63,18 @@ export default async function ConceptMapDetailPage({
   if (!path) notFound();
 
   const concepts = path.concepts;
-  const bySlug = new Map(concepts.map((c) => [c.slug, c]));
 
-  // Longest-path layering over the prereq DAG: layer = 0 for a concept with no
-  // prerequisites, else 1 + max(layer of its prerequisites). The builder
-  // guarantees acyclicity; `seen` is a defensive cycle guard only.
-  const layerCache = new Map<string, number>();
-  const layerOf = (slug: string, seen: Set<string> = new Set()): number => {
-    const cached = layerCache.get(slug);
-    if (cached !== undefined) return cached;
-    if (seen.has(slug)) return 0;
-    seen.add(slug);
-    const c = bySlug.get(slug);
-    const preds = c?.prereqsIn.map((e) => e.from.slug) ?? [];
-    const layer = preds.length === 0 ? 0 : 1 + Math.max(...preds.map((p) => layerOf(p, seen)));
-    layerCache.set(slug, layer);
-    return layer;
-  };
+  // Longest-path layering over the prereq DAG (shared with the Track builder's
+  // linearization, src/lib/agents/map/order.ts). Edges come from each concept's
+  // incoming prereqs: `from` is a prerequisite of the concept it points at.
+  const edges = concepts.flatMap((c) =>
+    c.prereqsIn.map((e) => ({ fromSlug: e.from.slug, toSlug: c.slug })),
+  );
+  const layerOfSlug = layerBySlug(concepts, edges);
 
   const layered = new Map<number, typeof concepts>();
   for (const c of concepts) {
-    const l = layerOf(c.slug);
+    const l = layerOfSlug.get(c.slug) ?? 0;
     if (!layered.has(l)) layered.set(l, []);
     layered.get(l)!.push(c);
   }

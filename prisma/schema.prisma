@@ -315,6 +315,13 @@ model Track {
   priorKnowledge String?
   timeframeWeeks Int?
   hoursPerWeek   Int?
+  // Phase 2.5e: the learner's target mastery for this Track. Reuses the
+  // Difficulty enum so the Track composer can difficulty-match a concept's
+  // primary resource against the target, and so `targetMastery` drives how deep
+  // into the frontier the build reaches (advanced pulls more frontier than
+  // beginner). Nullable like the other inert Track inputs; the builder defaults
+  // null → beginner.
+  targetMastery  Difficulty?
   title          String?
   summary        String?
   lessons     Lesson[]
