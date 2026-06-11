@@ -7,6 +7,8 @@ import { MAP_SPINE_MIN_PRIMARY_COVERAGE } from '@/lib/config';
 import { STATUS_STYLE } from '../status-style';
 import { ConceptActions } from './concept-actions';
 import { ResourceActions } from './resource-actions';
+import { AddConceptForm } from './add-concept-form';
+import { PrereqActions } from './prereq-actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,8 +50,9 @@ export default async function ConceptMapDetailPage({
             },
             orderBy: { coverageScore: 'desc' },
           },
-          // Incoming edges: `from` is a prerequisite of this concept.
-          prereqsIn: { select: { from: { select: { slug: true, title: true } } } },
+          // Incoming edges: `from` is a prerequisite of this concept. `id` feeds
+          // the per-edge remove + the add-prereq picker's exclusion set (2.5d-7b).
+          prereqsIn: { select: { from: { select: { id: true, slug: true, title: true } } } },
         },
         orderBy: { slug: 'asc' },
       },
@@ -90,6 +93,10 @@ export default async function ConceptMapDetailPage({
     );
   const holes = concepts.filter((c) => c.membership === 'spine' && !hasPrimary(c));
   const style = STATUS_STYLE[path.status] ?? 'bg-gray-100 text-gray-700';
+  // The full concept list feeds the add-prereq picker (which other concepts a
+  // given concept can depend on). `membership` lets the picker exclude frontier
+  // options for a spine concept (spine prerequisites must stay spine).
+  const allConcepts = concepts.map((c) => ({ id: c.id, title: c.title, membership: c.membership }));
 
   return (
     <main className="p-6 flex flex-col gap-6">
@@ -112,6 +119,9 @@ export default async function ConceptMapDetailPage({
             <span className="text-green-700 font-medium">no spine holes</span>
           )}
         </p>
+        <div className="mt-3">
+          <AddConceptForm pathId={path.id} />
+        </div>
       </section>
 
       {layers.map((layer) => (
@@ -140,11 +150,12 @@ export default async function ConceptMapDetailPage({
                     )}
                   </div>
 
-                  <div className="text-xs text-gray-500 mt-1">
-                    {c.prereqsIn.length === 0
-                      ? 'foundational (no prerequisites)'
-                      : `requires: ${c.prereqsIn.map((e) => e.from.title).join(', ')}`}
-                  </div>
+                  <PrereqActions
+                    conceptId={c.id}
+                    membership={c.membership}
+                    prereqs={c.prereqsIn.map((e) => ({ id: e.from.id, title: e.from.title }))}
+                    allConcepts={allConcepts}
+                  />
 
                   <ConceptActions
                     conceptId={c.id}
