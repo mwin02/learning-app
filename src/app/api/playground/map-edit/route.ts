@@ -12,7 +12,7 @@
 // response echoes { pathId, pathStatus, holes, reason? }.
 
 import { ZodError } from 'zod';
-import { Prisma } from '@prisma/client';
+import { Prisma, ConceptResourceRole } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { withAdminAuth } from '@/lib/api/with-admin-auth';
 import { mapEditSchema, type MapEditInput } from '@/lib/api/map-edit-schema';
@@ -182,6 +182,85 @@ async function applyEdit(input: MapEditInput): Promise<EditSuccess | { error: Re
         }),
       );
       return { pathId: guard.pathId, status, holes };
+    }
+
+    case 'attach_resource': {
+      const concept = await loadConcept(input.conceptId);
+      if (!concept) return { error: notFoundConcept(input.conceptId) };
+      // Enforce pickability (active + atomic) so the spine-ready gate can't go
+      // green on a resource the Track builder couldn't actually pick. Mirrors the
+      // attach-candidates invariant. Deprecation that LATER un-pickables a linked
+      // resource is the reject pipeline's reach-in (2.5f/2.5j), not this guard.
+      const resource = await prisma.resource.findUnique({
+        where: { id: input.resourceId },
+        select: { status: true, decompositionStatus: true },
+      });
+      if (!resource) {
+        return { error: errorResponse(404, 'NOT_FOUND', `Resource ${input.resourceId} not found.`) };
+      }
+      if (resource.status !== 'active' || resource.decompositionStatus !== 'atomic') {
+        return {
+          error: errorResponse(
+            400,
+            'INVALID_INPUT',
+            `Resource is not pickable (must be active + atomic; got ${resource.status} + ${resource.decompositionStatus}).`,
+          ),
+        };
+      }
+      // Duplicate link → P2002 → 409 (mapped in the outer catch).
+      const { status, holes } = await mutateAndRecompute(concept.pathId, (tx) =>
+        tx.conceptResource.create({
+          data: {
+            conceptId: input.conceptId,
+            resourceId: input.resourceId,
+            role: input.role,
+            coverageScore: input.coverageScore,
+          },
+        }),
+      );
+      return { pathId: concept.pathId, status, holes };
+    }
+
+    case 'detach_resource': {
+      const concept = await loadConcept(input.conceptId);
+      if (!concept) return { error: notFoundConcept(input.conceptId) };
+      const { status, holes } = await mutateAndRecompute(concept.pathId, (tx) =>
+        // Idempotent, like remove_prereq: a missing link is a no-op.
+        tx.conceptResource.deleteMany({
+          where: { conceptId: input.conceptId, resourceId: input.resourceId },
+        }),
+      );
+      return { pathId: concept.pathId, status, holes };
+    }
+
+    case 'rescore_resource': {
+      const concept = await loadConcept(input.conceptId);
+      if (!concept) return { error: notFoundConcept(input.conceptId) };
+      const data: { role?: ConceptResourceRole; coverageScore?: number } = {};
+      if (input.role !== undefined) data.role = input.role;
+      if (input.coverageScore !== undefined) data.coverageScore = input.coverageScore;
+      // The link must already exist — rescore mutates, it doesn't create. count 0
+      // means no such Concept↔Resource link → 404 (distinct from attach). The
+      // update + readiness recompute run in one tx, so status stays consistent.
+      const outcome = await prisma.$transaction(async (tx) => {
+        const { count } = await tx.conceptResource.updateMany({
+          where: { conceptId: input.conceptId, resourceId: input.resourceId },
+          data,
+        });
+        if (count === 0) return { missing: true as const };
+        const readiness = await recomputeReadiness(concept.pathId, tx);
+        return { missing: false as const, ...readiness };
+      });
+      if (outcome.missing) {
+        return {
+          error: errorResponse(
+            404,
+            'NOT_FOUND',
+            `No link between concept ${input.conceptId} and resource ${input.resourceId}.`,
+          ),
+        };
+      }
+      return { pathId: concept.pathId, status: outcome.status, holes: outcome.holes };
     }
   }
 }
