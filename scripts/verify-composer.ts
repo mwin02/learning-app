@@ -85,15 +85,43 @@ console.log('validateComposition — invalid primary handle falls back');
   check('warned about fallback', out.warnings.some((w) => w.includes('fell back')), out.warnings);
 }
 
-console.log('validateComposition — omitted concept is synthesized');
+console.log('validateComposition — omitted non-prereq frontier stays excluded (mastery depth)');
 {
+  // f is a frontier LEAF (b→f: nothing depends on f). Composer omits it → it is
+  // NOT pulled back by closure, so the learner's mastery depth is honored.
   const out = validateComposition({
     composition: comp({ lessons: [L(['a'], 'r-a1'), L(['b'], 'r-b1')] }), // f omitted
     concepts, edges,
   });
-  check('f synthesized', out.lessons.some((l) => l.conceptSlugs[0] === 'f'));
-  check('warned about omission', out.warnings.some((w) => w.includes("omitted concept 'f'")), out.warnings);
-  check('synthesized f got its only candidate', out.lessons.find((l) => l.conceptSlugs[0] === 'f')!.primaryResourceId === 'r-f1');
+  check('f excluded (not synthesized)', !out.lessons.some((l) => l.conceptSlugs.includes('f')), out.lessons.map((l) => l.conceptSlugs));
+  check('exactly the two kept lessons', out.lessons.length === 2);
+  check('no closure warning for f', !out.warnings.some((w) => w.includes("'f'")), out.warnings);
+}
+
+console.log('validateComposition — frontier prerequisite of spine is force-included (closure)');
+{
+  // f0 (frontier) → a (spine) → b (spine): a manual map edit can leave a spine
+  // concept depending on a frontier one. The composer omits f0, but a depends on
+  // it, so closure must pull f0 back in — never orphan the spine concept.
+  const fgConcepts = [
+    { slug: 'f0', title: 'F0', membership: ConceptMembership.frontier,
+      candidates: [{ resourceId: 'r-f0', role: ConceptResourceRole.teaches, coverageScore: 0.6, title: 'F0 teach', type: 'article', difficulty: 'beginner', durationMin: 15 }] },
+    { slug: 'a', title: 'A', membership: ConceptMembership.spine,
+      candidates: [{ resourceId: 'r-a1', role: ConceptResourceRole.teaches, coverageScore: 0.9, title: 'A teach', type: 'article', difficulty: 'beginner', durationMin: 30 }] },
+    { slug: 'b', title: 'B', membership: ConceptMembership.spine,
+      candidates: [{ resourceId: 'r-b1', role: ConceptResourceRole.teaches, coverageScore: 0.8, title: 'B teach', type: 'video', difficulty: 'beginner', durationMin: 40 }] },
+  ];
+  const fgEdges: OrderEdge[] = [
+    { fromSlug: 'f0', toSlug: 'a' },
+    { fromSlug: 'a', toSlug: 'b' },
+  ];
+  const out = validateComposition({
+    composition: comp({ lessons: [L(['a'], 'r-a1'), L(['b'], 'r-b1')] }), // f0 omitted
+    concepts: fgConcepts, edges: fgEdges,
+  });
+  check('f0 re-included as a spine prerequisite', out.lessons.some((l) => l.conceptSlugs.includes('f0')), out.lessons.map((l) => l.conceptSlugs));
+  check('f0 ordered before its dependent a', out.lessons.findIndex((l) => l.conceptSlugs.includes('f0')) < out.lessons.findIndex((l) => l.conceptSlugs.includes('a')));
+  check('warned about closure re-inclusion', out.warnings.some((w) => w.includes("frontier concept 'f0' re-included")), out.warnings);
 }
 
 console.log('validateComposition — spine concept cannot be pruned');
