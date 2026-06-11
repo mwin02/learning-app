@@ -17,7 +17,7 @@ import { prisma } from '@/lib/db';
 import { withAdminAuth } from '@/lib/api/with-admin-auth';
 import { mapEditSchema, type MapEditInput } from '@/lib/api/map-edit-schema';
 import { wouldCreateCycle } from '@/lib/agents/map/cycle';
-import { recomputeReadiness } from '@/lib/agents/map/recompute-readiness';
+import { recomputeReadiness, type RecomputeResult } from '@/lib/agents/map/recompute-readiness';
 
 // Prisma + the recompute query need Node, not Edge. No long LLM work here, so the
 // default route timeout is plenty.
@@ -55,25 +55,26 @@ export const POST = withAdminAuth(async (req) => {
   }
 
   try {
-    // Each branch resolves the affected pathId, performs its guarded mutation, then
-    // falls through to a single readiness recompute + response.
+    // Each branch resolves the affected pathId and performs its guarded mutation
+    // together with the readiness recompute in ONE transaction, returning the
+    // resulting Path status + holes (so mutation and status commit atomically).
     const result = await applyEdit(input);
     if ('error' in result) return result.error;
 
-    const { status, holes } = await recomputeReadiness(result.pathId);
+    const { pathId, conceptId, status, holes } = result;
     console.log('[map-edit]', {
       action: input.action,
-      pathId: result.pathId,
+      pathId,
       status,
       holeCount: holes.length,
       ...(input.reason ? { reason: input.reason } : {}),
     });
     return Response.json({
-      pathId: result.pathId,
+      pathId,
       pathStatus: status,
       holes,
       // add_concept returns the new id so an agent can chain edges/links onto it.
-      ...(result.conceptId ? { conceptId: result.conceptId } : {}),
+      ...(conceptId ? { conceptId } : {}),
       ...(input.reason ? { reason: input.reason } : {}),
     });
   } catch (err) {
@@ -85,42 +86,51 @@ export const POST = withAdminAuth(async (req) => {
   }
 });
 
-// Performs the mutation and returns the affected pathId for the recompute, or an
-// early error Response. Throws on unexpected DB errors (caught + mapped above).
-async function applyEdit(
-  input: MapEditInput,
-): Promise<{ pathId: string; conceptId?: string } | { error: Response }> {
+type EditSuccess = { pathId: string; conceptId?: string } & RecomputeResult;
+
+// Performs the mutation + readiness recompute (atomically, in one transaction)
+// and returns the affected pathId plus the resulting status/holes, or an early
+// error Response. Throws on unexpected DB errors (caught + mapped above).
+async function applyEdit(input: MapEditInput): Promise<EditSuccess | { error: Response }> {
   switch (input.action) {
     case 'add_concept': {
       const path = await prisma.path.findUnique({ where: { id: input.pathId }, select: { id: true } });
       if (!path) return { error: errorResponse(404, 'NOT_FOUND', `Path ${input.pathId} not found.`) };
-      const created = await prisma.concept.create({
-        data: { pathId: input.pathId, slug: input.slug, title: input.title, membership: input.membership },
-        select: { id: true },
-      });
-      return { pathId: input.pathId, conceptId: created.id };
+      const { mutation, status, holes } = await mutateAndRecompute(input.pathId, (tx) =>
+        tx.concept.create({
+          data: { pathId: input.pathId, slug: input.slug, title: input.title, membership: input.membership },
+          select: { id: true },
+        }),
+      );
+      return { pathId: input.pathId, conceptId: mutation.id, status, holes };
     }
 
     case 'edit_concept': {
       const concept = await loadConcept(input.conceptId);
       if (!concept) return { error: notFoundConcept(input.conceptId) };
-      await prisma.concept.update({ where: { id: input.conceptId }, data: { title: input.title } });
-      return { pathId: concept.pathId };
+      const { status, holes } = await mutateAndRecompute(concept.pathId, (tx) =>
+        tx.concept.update({ where: { id: input.conceptId }, data: { title: input.title } }),
+      );
+      return { pathId: concept.pathId, status, holes };
     }
 
     case 'set_membership': {
       const concept = await loadConcept(input.conceptId);
       if (!concept) return { error: notFoundConcept(input.conceptId) };
-      await prisma.concept.update({ where: { id: input.conceptId }, data: { membership: input.membership } });
-      return { pathId: concept.pathId };
+      const { status, holes } = await mutateAndRecompute(concept.pathId, (tx) =>
+        tx.concept.update({ where: { id: input.conceptId }, data: { membership: input.membership } }),
+      );
+      return { pathId: concept.pathId, status, holes };
     }
 
     case 'remove_concept': {
       const concept = await loadConcept(input.conceptId);
       if (!concept) return { error: notFoundConcept(input.conceptId) };
-      // Edges (both directions) + ConceptResource links cascade via onDelete.
-      await prisma.concept.delete({ where: { id: input.conceptId } });
-      return { pathId: concept.pathId };
+      const { status, holes } = await mutateAndRecompute(concept.pathId, (tx) =>
+        // Edges (both directions) + ConceptResource links cascade via onDelete.
+        tx.concept.delete({ where: { id: input.conceptId } }),
+      );
+      return { pathId: concept.pathId, status, holes };
     }
 
     case 'add_prereq': {
@@ -131,35 +141,63 @@ async function applyEdit(
       if (input.fromConceptId === input.toConceptId) {
         return { error: errorResponse(400, 'INVALID_INPUT', 'A concept cannot be its own prerequisite.') };
       }
-      const existing = await prisma.conceptPrereq.findMany({
-        where: { pathId },
-        select: { fromConceptId: true, toConceptId: true },
+      // Serialize edge inserts on this Path so the cycle check can't race. An
+      // advisory xact lock makes a concurrent add_prereq wait, then re-read the
+      // edge set INCLUDING our edge. Without it, two concurrent inserts (e.g.
+      // A→B and B→A) could each pass wouldCreateCycle and together persist a
+      // cycle the DB has no constraint to reject — corrupting every Track built
+      // over the map. The cycle check + create + recompute all run in this tx.
+      const outcome = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${pathId})::bigint)`;
+        const existing = await tx.conceptPrereq.findMany({
+          where: { pathId },
+          select: { fromConceptId: true, toConceptId: true },
+        });
+        const cyclic = wouldCreateCycle(
+          existing.map((e) => ({ fromId: e.fromConceptId, toId: e.toConceptId })),
+          { fromId: input.fromConceptId, toId: input.toConceptId },
+        );
+        if (cyclic) return { cyclic: true as const };
+        // Duplicate edge → P2002 → 409 (mapped in the outer catch).
+        await tx.conceptPrereq.create({
+          data: { pathId, fromConceptId: input.fromConceptId, toConceptId: input.toConceptId },
+        });
+        const readiness = await recomputeReadiness(pathId, tx);
+        return { cyclic: false as const, ...readiness };
       });
-      const cyclic = wouldCreateCycle(
-        existing.map((e) => ({ fromId: e.fromConceptId, toId: e.toConceptId })),
-        { fromId: input.fromConceptId, toId: input.toConceptId },
-      );
-      if (cyclic) {
+      if (outcome.cyclic) {
         return { error: errorResponse(409, 'CONFLICT', 'Edge would create a prerequisite cycle.') };
       }
-      // Duplicate edge → P2002 → 409 (mapped in the outer catch).
-      await prisma.conceptPrereq.create({
-        data: { pathId, fromConceptId: input.fromConceptId, toConceptId: input.toConceptId },
-      });
-      return { pathId };
+      return { pathId, status: outcome.status, holes: outcome.holes };
     }
 
     case 'remove_prereq': {
       const guard = await resolveEdgeConcepts(input.fromConceptId, input.toConceptId);
       if ('error' in guard) return guard;
-      // Idempotent delete: a missing edge is a no-op (count 0), not an error — the
-      // map ends in the requested state either way.
-      await prisma.conceptPrereq.deleteMany({
-        where: { fromConceptId: input.fromConceptId, toConceptId: input.toConceptId },
-      });
-      return { pathId: guard.pathId };
+      const { status, holes } = await mutateAndRecompute(guard.pathId, (tx) =>
+        // Idempotent delete: a missing edge is a no-op (count 0), not an error —
+        // the map ends in the requested state either way.
+        tx.conceptPrereq.deleteMany({
+          where: { fromConceptId: input.fromConceptId, toConceptId: input.toConceptId },
+        }),
+      );
+      return { pathId: guard.pathId, status, holes };
     }
   }
+}
+
+// Run a mutation and the readiness recompute in one transaction, so the Path's
+// stored status can never disagree with the rows the edit just changed. Returns
+// the mutation's own result alongside the recomputed status/holes.
+async function mutateAndRecompute<T>(
+  pathId: string,
+  mutate: (tx: Prisma.TransactionClient) => Promise<T>,
+): Promise<{ mutation: T } & RecomputeResult> {
+  return prisma.$transaction(async (tx) => {
+    const mutation = await mutate(tx);
+    const readiness = await recomputeReadiness(pathId, tx);
+    return { mutation, ...readiness };
+  });
 }
 
 async function loadConcept(conceptId: string) {

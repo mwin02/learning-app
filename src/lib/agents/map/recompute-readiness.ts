@@ -18,7 +18,7 @@
 // `failed` map an edit has fixed — a hand-repaired map is no longer broken — and
 // never leaves it `draft`.
 
-import { ConceptMembership, PathStatus } from '@prisma/client';
+import { ConceptMembership, PathStatus, Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { computeReadiness } from '@/lib/agents/map/readiness';
 import type { ConceptAttachment } from '@/lib/agents/map/attach-candidates';
@@ -29,8 +29,15 @@ export type RecomputeResult = {
   holes: string[];
 };
 
-export async function recomputeReadiness(pathId: string): Promise<RecomputeResult> {
-  const concepts = await prisma.concept.findMany({
+// `client` defaults to the global prisma, but callers that mutate inside a
+// transaction (e.g. the map edit API) pass their tx client so the read-back and
+// the Path.status write commit atomically with the mutation — the status can
+// never disagree with the rows it was computed from.
+export async function recomputeReadiness(
+  pathId: string,
+  client: Prisma.TransactionClient = prisma,
+): Promise<RecomputeResult> {
+  const concepts = await client.concept.findMany({
     where: { pathId, membership: ConceptMembership.spine },
     select: {
       slug: true,
@@ -50,6 +57,6 @@ export async function recomputeReadiness(pathId: string): Promise<RecomputeResul
   const { ready, holes } = computeReadiness(attachments);
   const status = ready ? PathStatus.spine_ready : PathStatus.building;
 
-  await prisma.path.update({ where: { id: pathId }, data: { status } });
+  await client.path.update({ where: { id: pathId }, data: { status } });
   return { status, holes };
 }

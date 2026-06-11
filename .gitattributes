@@ -1,0 +1,8 @@
+# Force git to treat TypeScript sources as text. Some files (e.g.
+# src/lib/agents/map/cycle.ts) contain a high density of multi-byte UTF-8
+# punctuation (→ — –) in comments, which trips git's content heuristic into
+# classifying them as "binary" — making every change an all-or-nothing merge
+# conflict instead of a normal line-level 3-way merge. Pinning `text` keeps the
+# text merge driver in play.
+*.ts  text
+*.tsx text
