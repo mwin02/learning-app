@@ -30,6 +30,7 @@ Number of queue **roots** to process this run: **$ARGUMENTS** (default 10 if emp
 - Fails #1, broken/dead/removed → **reject hard**.
 - Fails #2/#3/#4, page works but violates a quality rule or is misrepresented → **reject soft**.
 - `blocked: true` in the queue (decompositionStatus `pending`/`human_review`) → **skip**, flag "resolve in Human review first" (the API 409s on these anyway).
+- **Flat decomposition** (a `decomposed` container whose subtree is a single flat layer — its direct `children` are *all* `atomic`, none nested `decomposed` — yet one or more of those "leaves" is itself a chapter-index / intro / table-of-contents page that links to sibling units) → **skip** and flag **"re-decompose: index pages exposed as atomic siblings"**. Do **not** approve-cascade: it would publish the chapter-index pages as pickable duplicates of the very units they list (a pre-multi-layer decomposition artifact). Hand to Human review / the `decompose-large-page` skill to rebuild the nested tree first.
 - Genuinely unsure → **skip** and flag it; do not guess. We accept the residual risk and act on broken resources retroactively from user feedback.
 
 ## Steps
@@ -41,6 +42,7 @@ Number of queue **roots** to process this run: **$ARGUMENTS** (default 10 if emp
    - **Container root** (non-empty `children`) — use **source-trust + sampling**, do **not** open every child:
      - Open the landing `url`; confirm it's a legitimate, free, no-login source and its structure matches the decomposition.
      - Sample a spread of real leaves: `node --env-file=.env.local ${CLAUDE_SKILL_DIR}/scripts/pending-review-db.cjs sample <rootId> 3` returns up to 3 atomic leaf URLs from anywhere in the subtree (direct children from the API are often themselves containers; the real leaves are deeper). Open them, confirm live + on-topic + real teaching content.
+     - **Check the decomposition shape, not just the content.** A correct multi-chapter container nests — each chapter is its own `decomposed` sub-container and only true lessons are `atomic` leaves. Smell test: if the root's direct `children` are *all* `atomic` (none nested `decomposed`) **and** a sampled "leaf" opens to an outline / table-of-contents that links to other queue siblings rather than teaching directly, the resource was flat-decomposed (a pre-multi-layer artifact). Flag it per **Flat decomposition** in the decision mapping instead of approving as-is.
      - Extrapolate trust to the rest of the subtree. (This can miss a single broken leaf — accepted tradeoff.)
 
 3. **Execute the decision** via the API:
@@ -68,4 +70,4 @@ Output **only** the final table — do not narrate your reasoning per resource a
 | Resource | Link | Type | Decision | Reasoning |
 |---|---|---|---|---|
 
-`Decision` is one of: Approve · Approve (cascade) · Reject (soft) · Reject (hard) · Skip. Keep `Reasoning` to one line grounded in the rubric. After the table, add a one-line tally (approved / rejected / skipped) and call out any borderline calls worth a human's second look.
+`Decision` is one of: Approve · Approve (cascade) · Reject (soft) · Reject (hard) · Skip · Skip (re-decompose). Keep `Reasoning` to one line grounded in the rubric. After the table, add a one-line tally (approved / rejected / skipped) and call out any borderline calls worth a human's second look.
