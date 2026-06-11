@@ -11,6 +11,7 @@
 import { searchResources } from '@/lib/agents/tools/search-resources';
 import { judgeCandidates, type JudgedCandidate } from '@/lib/agents/map/candidate-judge';
 import { MAP_CANDIDATES_PER_CONCEPT, MAP_JUDGE_CONCURRENCY } from '@/lib/config';
+import { relatedTopics } from '@/types/resource';
 import type { AuthoredConcept } from '@/lib/agents/map/cycle';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 
@@ -27,13 +28,21 @@ export async function attachCandidates(args: {
   onTrace?: OnTrace;
 }): Promise<ConceptAttachment[]> {
   const { topic, concepts, onTrace = () => {} } = args;
-  onTrace({ kind: 'stage', label: 'candidate attachment started', detail: { concepts: concepts.length } });
+  // Search the topic ∪ its related topics (e.g. a javascript-react map draws on
+  // javascript foundations), mirroring AR retrieval. A topic with no relations
+  // is just itself.
+  const topics = relatedTopics(topic);
+  onTrace({
+    kind: 'stage',
+    label: 'candidate attachment started',
+    detail: { concepts: concepts.length, topics },
+  });
 
   // Fan out per concept, bounded — each concept is one independent search + judge.
   const attachments: ConceptAttachment[] = [];
   for (let i = 0; i < concepts.length; i += MAP_JUDGE_CONCURRENCY) {
     const chunk = concepts.slice(i, i + MAP_JUDGE_CONCURRENCY);
-    const settled = await Promise.allSettled(chunk.map((c) => attachOneWithRetry(topic, c, onTrace)));
+    const settled = await Promise.allSettled(chunk.map((c) => attachOneWithRetry(topics, c, onTrace)));
     settled.forEach((s, j) => {
       if (s.status === 'fulfilled') {
         attachments.push(s.value);
@@ -74,19 +83,19 @@ export async function attachCandidates(args: {
 // failure is indistinguishable from a genuine library gap, so persistence and
 // the async thickener can't tell "no good resource exists" from "the call broke".
 async function attachOneWithRetry(
-  topic: string,
+  topics: string[],
   concept: AuthoredConcept,
   onTrace: OnTrace,
 ): Promise<ConceptAttachment> {
   try {
-    return await attachOne(topic, concept, onTrace);
+    return await attachOne(topics, concept, onTrace);
   } catch (err) {
     console.warn('[map-attach] concept attachment failed, retrying once', {
       concept: concept.slug,
       error: err instanceof Error ? err.message : String(err),
     });
     try {
-      return await attachOne(topic, concept, onTrace);
+      return await attachOne(topics, concept, onTrace);
     } catch (err2) {
       console.error('[map-attach] concept attachment failed after retry; treating as spine hole', {
         concept: concept.slug,
@@ -98,7 +107,7 @@ async function attachOneWithRetry(
 }
 
 async function attachOne(
-  topic: string,
+  topics: string[],
   concept: AuthoredConcept,
   onTrace: OnTrace,
 ): Promise<ConceptAttachment> {
@@ -107,7 +116,7 @@ async function attachOne(
   // shouldn't rest on unvetted rows.
   const candidates = await searchResources({
     query: concept.title,
-    topic,
+    topics,
     statuses: ['active'],
     pickableOnly: true,
     limit: MAP_CANDIDATES_PER_CONCEPT,

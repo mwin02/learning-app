@@ -1,7 +1,9 @@
 import type { Prisma } from '@prisma/client';
 
 export type TopicSlug =
+  | 'python'
   | 'python-data-ml'
+  | 'javascript'
   | 'javascript-react'
   | 'calculus'
   | 'linear-algebra'
@@ -10,7 +12,9 @@ export type TopicSlug =
   | 'go';
 
 export const TOPIC_SLUGS: readonly TopicSlug[] = [
+  'python',
   'python-data-ml',
+  'javascript',
   'javascript-react',
   'calculus',
   'linear-algebra',
@@ -26,6 +30,13 @@ export const TOPIC_SLUGS: readonly TopicSlug[] = [
 // not only curated TOPIC_SLUGS. Extend in code as new related pairs emerge.
 export const TOPIC_RELATIONS: Record<string, readonly string[]> = {
   'javascript-react': ['javascript'],
+  // "Python for data/ML" is the applied glue that draws on two foundations:
+  // the Python language and (largely language-agnostic) ML theory. Split out of
+  // a single conflated `python-data-ml` topic — the language tutorials moved to
+  // `python`, StatQuest's ML theory to `machine-learning` — so the applied topic
+  // composes both via relatedTopics() (symmetric, so python/machine-learning
+  // requests also reach the applied resources).
+  'python-data-ml': ['python', 'machine-learning'],
 };
 
 // {topic} ∪ its related topics, deduplicated. Symmetric: an edge counts in both
