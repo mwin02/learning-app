@@ -135,3 +135,8 @@ export const MAP_JUDGE_CONCURRENCY = 4;
 // the Path stays `building` and later blocks (thickener 2.5j, edit surface) fill
 // it. Modest so we're not brittle against a thin library.
 export const MAP_SPINE_MIN_PRIMARY_COVERAGE = 0.5;
+
+// Phase 2.5d-7c (inspector attach-resource picker): max pickable candidates the
+// resource-search endpoint returns to the attach picker. Small — the operator is
+// scanning for one resource to attach to a concept, not browsing the library.
+export const MAP_RESOURCE_PICKER_LIMIT = 20;

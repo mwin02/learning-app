@@ -9,6 +9,7 @@ import { ConceptActions } from './concept-actions';
 import { ResourceActions } from './resource-actions';
 import { AddConceptForm } from './add-concept-form';
 import { PrereqActions } from './prereq-actions';
+import { AttachResource } from './attach-resource';
 
 export const dynamic = 'force-dynamic';
 
@@ -212,6 +213,10 @@ export default async function ConceptMapDetailPage({
                       })}
                     </ul>
                   )}
+
+                  <div className="mt-2">
+                    <AttachResource conceptId={c.id} conceptTitle={c.title} topic={path.topic} />
+                  </div>
                 </li>
               );
             })}
