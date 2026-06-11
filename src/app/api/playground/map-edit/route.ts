@@ -12,12 +12,16 @@
 // response echoes { pathId, pathStatus, holes, reason? }.
 
 import { ZodError } from 'zod';
-import { Prisma, ConceptResourceRole } from '@prisma/client';
+import { Prisma, ConceptResourceRole, ConceptMembership } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { withAdminAuth } from '@/lib/api/with-admin-auth';
 import { mapEditSchema, type MapEditInput } from '@/lib/api/map-edit-schema';
 import { wouldCreateCycle } from '@/lib/agents/map/cycle';
-import { recomputeReadiness, type RecomputeResult } from '@/lib/agents/map/recompute-readiness';
+import {
+  recomputeReadiness,
+  frontierGatedSpine,
+  type RecomputeResult,
+} from '@/lib/agents/map/recompute-readiness';
 
 // Prisma + the recompute query need Node, not Edge. No long LLM work here, so the
 // default route timeout is plenty.
@@ -62,17 +66,23 @@ export const POST = withAdminAuth(async (req) => {
     if ('error' in result) return result.error;
 
     const { pathId, conceptId, status, holes } = result;
+    // Spine-containment warning: spine concepts left with a frontier prerequisite.
+    // Non-blocking (does NOT gate pathStatus) — add_prereq hard-blocks the direct
+    // case, but a set_membership flip can reintroduce it, so we always report it.
+    const frontierGated = await frontierGatedSpine(pathId);
     console.log('[map-edit]', {
       action: input.action,
       pathId,
       status,
       holeCount: holes.length,
+      frontierGatedSpine: frontierGated,
       ...(input.reason ? { reason: input.reason } : {}),
     });
     return Response.json({
       pathId,
       pathStatus: status,
       holes,
+      frontierGatedSpine: frontierGated,
       // add_concept returns the new id so an agent can chain edges/links onto it.
       ...(conceptId ? { conceptId } : {}),
       ...(input.reason ? { reason: input.reason } : {}),
@@ -136,10 +146,24 @@ async function applyEdit(input: MapEditInput): Promise<EditSuccess | { error: Re
     case 'add_prereq': {
       const guard = await resolveEdgeConcepts(input.fromConceptId, input.toConceptId);
       if ('error' in guard) return guard;
-      const { pathId } = guard;
+      const { pathId, fromMembership, toMembership } = guard;
       // Self-loop is also blocked by a DB CHECK, but reject early with a clearer 400.
       if (input.fromConceptId === input.toConceptId) {
         return { error: errorResponse(400, 'INVALID_INPUT', 'A concept cannot be its own prerequisite.') };
+      }
+      // Spine-containment: the spine must stay downward-closed, so a spine concept
+      // may not depend on a frontier prerequisite (the Track builder would orphan it
+      // when trimming that frontier node). Hard-block this direct creation; the
+      // reverse (spine → frontier enrichment) is fine. set_membership flips that can
+      // reach the same state are only warned about, not gated (see frontierGatedSpine).
+      if (fromMembership === 'frontier' && toMembership === 'spine') {
+        return {
+          error: errorResponse(
+            400,
+            'INVALID_INPUT',
+            'A spine concept cannot depend on a frontier prerequisite. Promote the prerequisite to spine first, or make this concept frontier.',
+          ),
+        };
       }
       // Serialize edge inserts on this Path so the cycle check can't race. An
       // advisory xact lock makes a concurrent add_prereq wait, then re-read the
@@ -293,21 +317,24 @@ function notFoundConcept(conceptId: string): Response {
 async function resolveEdgeConcepts(
   fromConceptId: string,
   toConceptId: string,
-): Promise<{ pathId: string } | { error: Response }> {
+): Promise<
+  | { pathId: string; fromMembership: ConceptMembership; toMembership: ConceptMembership }
+  | { error: Response }
+> {
   const ids = [...new Set([fromConceptId, toConceptId])];
   const concepts = await prisma.concept.findMany({
     where: { id: { in: ids } },
-    select: { id: true, pathId: true },
+    select: { id: true, pathId: true, membership: true },
   });
-  const byId = new Map(concepts.map((c) => [c.id, c.pathId]));
-  const fromPath = byId.get(fromConceptId);
-  const toPath = byId.get(toConceptId);
-  if (!fromPath || !toPath) {
-    const missing = !fromPath ? fromConceptId : toConceptId;
+  const byId = new Map(concepts.map((c) => [c.id, c]));
+  const from = byId.get(fromConceptId);
+  const to = byId.get(toConceptId);
+  if (!from || !to) {
+    const missing = !from ? fromConceptId : toConceptId;
     return { error: errorResponse(404, 'NOT_FOUND', `Concept ${missing} not found.`) };
   }
-  if (fromPath !== toPath) {
+  if (from.pathId !== to.pathId) {
     return { error: errorResponse(400, 'INVALID_INPUT', 'Both concepts must belong to the same Path.') };
   }
-  return { pathId: fromPath };
+  return { pathId: from.pathId, fromMembership: from.membership, toMembership: to.membership };
 }

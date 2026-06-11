@@ -53,7 +53,7 @@ export default async function ConceptMapDetailPage({
           },
           // Incoming edges: `from` is a prerequisite of this concept. `id` feeds
           // the per-edge remove + the add-prereq picker's exclusion set (2.5d-7b).
-          prereqsIn: { select: { from: { select: { id: true, slug: true, title: true } } } },
+          prereqsIn: { select: { from: { select: { id: true, slug: true, title: true, membership: true } } } },
         },
         orderBy: { slug: 'asc' },
       },
@@ -93,6 +93,14 @@ export default async function ConceptMapDetailPage({
       (r) => r.role === ConceptResourceRole.teaches && r.coverageScore >= MAP_SPINE_MIN_PRIMARY_COVERAGE,
     );
   const holes = concepts.filter((c) => c.membership === 'spine' && !hasPrimary(c));
+  // Spine-containment warning (2.5d-7c): spine concepts with a frontier prerequisite.
+  // The spine must stay downward-closed, so the Track builder can trim unselected
+  // frontier nodes without orphaning a spine concept. The map-edit API hard-blocks
+  // creating such an edge directly, but a membership flip can reach it; surface it
+  // here as a non-blocking warning. Mirrors frontierGatedSpine on the server.
+  const frontierGated = concepts.filter(
+    (c) => c.membership === 'spine' && c.prereqsIn.some((e) => e.from.membership === 'frontier'),
+  );
   const style = STATUS_STYLE[path.status] ?? 'bg-gray-100 text-gray-700';
   // The full concept list feeds the add-prereq picker (which other concepts a
   // given concept can depend on). `membership` lets the picker exclude frontier
@@ -120,6 +128,13 @@ export default async function ConceptMapDetailPage({
             <span className="text-green-700 font-medium">no spine holes</span>
           )}
         </p>
+        {frontierGated.length > 0 && (
+          <p className="text-sm text-amber-700 font-medium mt-1">
+            ⚠ {frontierGated.length} spine concept{frontierGated.length === 1 ? '' : 's'} with a
+            frontier prerequisite: {frontierGated.map((c) => c.slug).join(', ')} — promote the
+            prerequisite to spine, or the Track builder will orphan it.
+          </p>
+        )}
         <div className="mt-3">
           <AddConceptForm pathId={path.id} />
         </div>
