@@ -33,8 +33,22 @@ export async function attachCandidates(args: {
   const attachments: ConceptAttachment[] = [];
   for (let i = 0; i < concepts.length; i += MAP_JUDGE_CONCURRENCY) {
     const chunk = concepts.slice(i, i + MAP_JUDGE_CONCURRENCY);
-    const settled = await Promise.all(chunk.map((c) => attachOne(topic, c, onTrace)));
-    attachments.push(...settled);
+    const settled = await Promise.allSettled(chunk.map((c) => attachOneWithRetry(topic, c, onTrace)));
+    settled.forEach((s, j) => {
+      if (s.status === 'fulfilled') {
+        attachments.push(s.value);
+        return;
+      }
+      // Backstop: attachOneWithRetry catches its own failures and degrades to an
+      // empty attachment, so this branch should be unreachable — but we never let
+      // one concept's rejection fail the whole batch.
+      const concept = chunk[j];
+      console.error('[map-attach] concept attachment rejected after retry', {
+        concept: concept.slug,
+        error: s.reason instanceof Error ? s.reason.message : String(s.reason),
+      });
+      attachments.push({ conceptSlug: concept.slug, candidates: [] });
+    });
   }
 
   const holes = attachments.filter((a) => a.candidates.length === 0).map((a) => a.conceptSlug);
@@ -48,6 +62,39 @@ export async function attachCandidates(args: {
     },
   });
   return attachments;
+}
+
+// Run attachOne, retrying once on a thrown failure (transient Vertex error, or
+// the judge capping mid-JSON so Output.object can't parse). If it still fails,
+// degrade to an empty attachment so one flaky concept never aborts the whole map.
+//
+// TODO(2.5d-3+): surface a post-retry failure as a DISTINCT signal (e.g. an
+// `error` field on ConceptAttachment) instead of collapsing it into the
+// empty-candidates spine-hole bucket. As written, a transient judge/search
+// failure is indistinguishable from a genuine library gap, so persistence and
+// the async thickener can't tell "no good resource exists" from "the call broke".
+async function attachOneWithRetry(
+  topic: string,
+  concept: AuthoredConcept,
+  onTrace: OnTrace,
+): Promise<ConceptAttachment> {
+  try {
+    return await attachOne(topic, concept, onTrace);
+  } catch (err) {
+    console.warn('[map-attach] concept attachment failed, retrying once', {
+      concept: concept.slug,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    try {
+      return await attachOne(topic, concept, onTrace);
+    } catch (err2) {
+      console.error('[map-attach] concept attachment failed after retry; treating as spine hole', {
+        concept: concept.slug,
+        error: err2 instanceof Error ? err2.message : String(err2),
+      });
+      return { conceptSlug: concept.slug, candidates: [] };
+    }
+  }
 }
 
 async function attachOne(

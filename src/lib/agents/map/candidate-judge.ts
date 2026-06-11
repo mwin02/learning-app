@@ -71,7 +71,11 @@ export async function judgeCandidates(args: {
     finishReason: result.finishReason,
   });
 
-  const judged: JudgedCandidate[] = [];
+  // Dedupe by resourceId: if the model scores the same handle (hence the same
+  // resource) more than once, keep the higher-coverage verdict. ConceptResource
+  // is unique per (conceptId, resourceId), so a duplicate slipping through here
+  // would become a unique-constraint violation when 2.5d-3 persists the rows.
+  const byResource = new Map<string, JudgedCandidate>();
   for (const v of result.experimental_output.verdicts) {
     const row = byHandle.get(v.handle);
     if (!row) {
@@ -82,9 +86,17 @@ export async function judgeCandidates(args: {
       });
       continue;
     }
-    judged.push({ resourceId: row.id, role: v.role, coverageScore: v.coverageScore });
+    const existing = byResource.get(row.id);
+    if (existing) {
+      console.warn('[map-candidate-judge] duplicate resource verdict, keeping higher coverage', {
+        concept: conceptSlug,
+        resourceId: row.id,
+      });
+      if (v.coverageScore <= existing.coverageScore) continue;
+    }
+    byResource.set(row.id, { resourceId: row.id, role: v.role, coverageScore: v.coverageScore });
   }
-  return judged;
+  return [...byResource.values()];
 }
 
 const SYSTEM_PROMPT = `You score candidate learning resources for how they serve a single target concept in a curriculum map.
