@@ -94,8 +94,9 @@ export default async function ConceptMapDetailPage({
   const holes = concepts.filter((c) => c.membership === 'spine' && !hasPrimary(c));
   const style = STATUS_STYLE[path.status] ?? 'bg-gray-100 text-gray-700';
   // The full concept list feeds the add-prereq picker (which other concepts a
-  // given concept can depend on).
-  const allConcepts = concepts.map((c) => ({ id: c.id, title: c.title }));
+  // given concept can depend on). `membership` lets the picker exclude frontier
+  // options for a spine concept (spine prerequisites must stay spine).
+  const allConcepts = concepts.map((c) => ({ id: c.id, title: c.title, membership: c.membership }));
 
   return (
     <main className="p-6 flex flex-col gap-6">
@@ -151,6 +152,7 @@ export default async function ConceptMapDetailPage({
 
                   <PrereqActions
                     conceptId={c.id}
+                    membership={c.membership}
                     prereqs={c.prereqsIn.map((e) => ({ id: e.from.id, title: e.from.title }))}
                     allConcepts={allConcepts}
                   />

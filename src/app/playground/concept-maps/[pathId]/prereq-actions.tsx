@@ -6,24 +6,32 @@
 //
 // Edge direction matches the API: a prerequisite P of concept C is the edge
 // P → C, so add posts { fromConceptId: P, toConceptId: C } and remove posts the
-// same pair. The picker only excludes self and already-direct prerequisites; the
-// API is the source of truth for cycle rejection (a would-be cycle surfaces as the
-// inline 409 error rather than being pre-filtered here).
+// same pair. The picker excludes self, already-direct prerequisites, and — for a
+// SPINE concept — frontier candidates (a spine concept's prerequisites must all be
+// spine, or trimming the frontier node would strand it; the API also hard-rejects
+// this). Cycle rejection stays the API's job: a would-be cycle surfaces as the
+// inline 409 error rather than being pre-filtered here.
 
 import { useState } from 'react';
 import { useMapEdit } from './use-map-edit';
 
-const BTN = 'rounded border px-1.5 py-0.5 text-xs disabled:opacity-40 disabled:cursor-not-allowed';
+type Membership = 'spine' | 'frontier';
+// Displayed prerequisites need only id + title; picker candidates also carry
+// membership so a spine concept can filter out frontier options.
+type PrereqRef = { id: string; title: string };
+type ConceptRef = PrereqRef & { membership: Membership };
 
-type ConceptRef = { id: string; title: string };
+const BTN = 'rounded border px-1.5 py-0.5 text-xs disabled:opacity-40 disabled:cursor-not-allowed';
 
 export function PrereqActions({
   conceptId,
+  membership,
   prereqs,
   allConcepts,
 }: {
   conceptId: string;
-  prereqs: ConceptRef[];
+  membership: Membership;
+  prereqs: PrereqRef[];
   allConcepts: ConceptRef[];
 }) {
   const { run, busy, error, pending } = useMapEdit();
@@ -32,8 +40,15 @@ export function PrereqActions({
   const disabled = busy || pending;
 
   const prereqIds = new Set(prereqs.map((p) => p.id));
-  // Candidates: every other concept not already a direct prerequisite.
-  const candidates = allConcepts.filter((c) => c.id !== conceptId && !prereqIds.has(c.id));
+  // Candidates: every other concept not already a direct prerequisite. A spine
+  // concept additionally can't take a frontier prerequisite (spine stays
+  // downward-closed) — so those are filtered out of the picker for it.
+  const candidates = allConcepts.filter(
+    (c) =>
+      c.id !== conceptId &&
+      !prereqIds.has(c.id) &&
+      !(membership === 'spine' && c.membership === 'frontier'),
+  );
 
   async function add() {
     if (pick === '') return;
