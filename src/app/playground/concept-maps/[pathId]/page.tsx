@@ -5,6 +5,8 @@ import { prisma } from '@/lib/db';
 import { isDevAuthEnabled } from '@/lib/dev-auth';
 import { MAP_SPINE_MIN_PRIMARY_COVERAGE } from '@/lib/config';
 import { STATUS_STYLE } from '../status-style';
+import { ConceptActions } from './concept-actions';
+import { ResourceActions } from './resource-actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -144,6 +146,12 @@ export default async function ConceptMapDetailPage({
                       : `requires: ${c.prereqsIn.map((e) => e.from.title).join(', ')}`}
                   </div>
 
+                  <ConceptActions
+                    conceptId={c.id}
+                    title={c.title}
+                    membership={c.membership}
+                  />
+
                   {c.resources.length === 0 ? (
                     <div className="text-xs text-gray-400 mt-2">no candidate resources</div>
                   ) : (
@@ -182,6 +190,12 @@ export default async function ConceptMapDetailPage({
                               {r.resource.title}
                             </a>
                             <span className="text-gray-400">{r.resource.type}</span>
+                            <ResourceActions
+                              conceptId={c.id}
+                              resourceId={r.resource.id}
+                              role={r.role}
+                              coverageScore={r.coverageScore}
+                            />
                           </li>
                         );
                       })}
