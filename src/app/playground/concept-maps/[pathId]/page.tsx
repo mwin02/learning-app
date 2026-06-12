@@ -9,6 +9,7 @@ import { STATUS_STYLE } from '../status-style';
 import { ConceptActions } from './concept-actions';
 import { ResourceActions } from './resource-actions';
 import { AddConceptForm } from './add-concept-form';
+import { BuildTrackForm } from './build-track-form';
 import { PrereqActions } from './prereq-actions';
 import { AttachResource } from './attach-resource';
 
@@ -18,6 +19,13 @@ const ROLE_STYLE: Record<string, string> = {
   teaches: 'bg-green-100 text-green-800',
   uses: 'bg-gray-100 text-gray-700',
   assesses: 'bg-blue-100 text-blue-800',
+};
+
+const TRACK_STATUS_STYLE: Record<string, string> = {
+  pending: 'bg-gray-100 text-gray-700',
+  building: 'bg-amber-100 text-amber-800',
+  ready: 'bg-green-100 text-green-800',
+  failed: 'bg-red-100 text-red-800',
 };
 
 // Phase 2.5d-5: render one concept map — its spine DAG (topo-layered) and each
@@ -57,6 +65,19 @@ export default async function ConceptMapDetailPage({
           prereqsIn: { select: { from: { select: { id: true, slug: true, title: true } } } },
         },
         orderBy: { slug: 'asc' },
+      },
+      // Tracks previously built from this map (2.5e-4) — newest first, so the
+      // operator can revisit a built Track instead of only the post-build redirect.
+      tracks: {
+        select: {
+          id: true,
+          status: true,
+          title: true,
+          targetMastery: true,
+          createdAt: true,
+          _count: { select: { lessons: true } },
+        },
+        orderBy: { createdAt: 'desc' },
       },
     },
   });
@@ -112,9 +133,38 @@ export default async function ConceptMapDetailPage({
             <span className="text-green-700 font-medium">no spine holes</span>
           )}
         </p>
-        <div className="mt-3">
+        <div className="mt-3 flex flex-col gap-3">
           <AddConceptForm pathId={path.id} />
+          <BuildTrackForm pathId={path.id} spineReady={path.status === 'spine_ready'} />
         </div>
+
+        {path.tracks.length > 0 && (
+          <div className="mt-3">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1">
+              Tracks built from this map ({path.tracks.length})
+            </h2>
+            <ul className="flex flex-col gap-1">
+              {path.tracks.map((t) => (
+                <li key={t.id} className="text-sm flex items-center gap-2">
+                  <Link href={`/playground/tracks/${t.id}`} className="underline">
+                    {t.title ?? '(untitled track)'}
+                  </Link>
+                  <span
+                    className={`rounded px-1.5 py-0.5 text-xs font-medium ${
+                      TRACK_STATUS_STYLE[t.status] ?? 'bg-gray-100 text-gray-700'
+                    }`}
+                  >
+                    {t.status}
+                  </span>
+                  <span className="text-xs text-gray-500">
+                    {t.targetMastery ?? 'beginner'} · {t._count.lessons} lessons ·{' '}
+                    {t.createdAt.toISOString().slice(0, 10)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </section>
 
       {layers.map((layer) => (
