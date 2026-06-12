@@ -322,6 +322,16 @@ model Track {
   // beginner). Nullable like the other inert Track inputs; the builder defaults
   // null → beginner.
   targetMastery  Difficulty?
+  // Phase 2.5e-6: `goal` is the learner's own free-text statement of why they're
+  // taking this Track ("refresh calc before grad school", "drill for my exam");
+  // `intent` is the coarse category the composer INFERS from that goal (+ prior
+  // knowledge) in its one judgment pass and emits as structured output. We keep the
+  // inferred label as a queryable column so deterministic downstream code (the
+  // 2.5e-7 allocator) can branch on it and so intent is analyzable — the raw goal
+  // is data, the enum is the decision. Both nullable like the other Track inputs;
+  // the builder defaults a missing intent to `learn` (a fresh first pass).
+  goal           String?
+  intent         TrackIntent?
   title          String?
   summary        String?
   lessons     Lesson[]
@@ -337,6 +347,23 @@ enum TrackStatus {
   building
   ready
   failed
+}
+
+// Phase 2.5e-6: why the learner is taking this Track, inferred by the composer
+// from their free-text goal. Shapes pruning + (2.5e-7) time allocation:
+//   learn     — fresh first pass; full depth, teach from first principles.
+//   review    — refresh material they once knew; prune known spine readily, prefer
+//               short refreshers + practice over long first-principles lectures.
+//   practice  — drilling/application over new exposition; bias toward exercises.
+//   master    — go deep / internalize beyond a first pass (depth of engagement;
+//               orthogonal to targetMastery, which is the level ceiling of material).
+//   exam_prep — time-boxed, breadth-first cram against an assessment.
+enum TrackIntent {
+  learn
+  review
+  practice
+  master
+  exam_prep
 }
 
 model Lesson {

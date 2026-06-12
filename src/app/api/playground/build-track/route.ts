@@ -5,7 +5,7 @@
 // (NEVER withAuth — a signed-in customer must not reach it; both are the DEV_AUTH
 // placeholder today, they diverge in Phase 3).
 //
-// Body: { pathId, priorKnowledge?, timeframeWeeks?, hoursPerWeek?, targetMastery? }.
+// Body: { pathId, priorKnowledge?, goal?, timeframeWeeks?, hoursPerWeek?, targetMastery? }.
 // Synchronous: this is the seam that becomes a 202 + job id in Phase 3 (audit 1.2).
 // On success returns the built Track's id + status + diagnostics; the caller
 // redirects to the read-only Track view.
@@ -30,6 +30,7 @@ function errorResponse(status: number, code: ErrorCode, error: string, details?:
 const bodySchema = z.object({
   pathId: z.string().min(1),
   priorKnowledge: z.string().max(2000).optional(),
+  goal: z.string().max(2000).optional(),
   timeframeWeeks: z.number().int().positive().max(520).optional(),
   hoursPerWeek: z.number().int().positive().max(168).optional(),
   targetMastery: z.nativeEnum(Difficulty).optional(),
