@@ -124,14 +124,31 @@ console.log('validateComposition — frontier prerequisite of spine is force-inc
   check('warned about closure re-inclusion', out.warnings.some((w) => w.includes("frontier concept 'f0' re-included")), out.warnings);
 }
 
-console.log('validateComposition — spine concept cannot be pruned');
+console.log('validateComposition — spine concept can be pruned when known (2.5e-5)');
 {
+  // The learner already knows the middle spine concept b. Pruning it is now legal:
+  // closure no longer forces it back, so the Track skips it.
   const out = validateComposition({
-    composition: comp({ prune: ['b'], lessons: [L(['a'], 'r-a1'), L(['f'], 'r-f1')] }),
+    composition: comp({ prune: ['b'], lessons: [L(['a'], 'r-a1'), L(['f'], 'r-f1', { isFrontier: true })] }),
     concepts, edges,
   });
-  check('b survives the prune', out.lessons.some((l) => l.conceptSlugs.includes('b')));
-  check('warned about refused prune', out.warnings.some((w) => w.includes("refused to prune spine concept 'b'")), out.warnings);
+  check('b pruned (absent)', !out.lessons.some((l) => l.conceptSlugs.includes('b')), out.lessons.map((l) => l.conceptSlugs));
+  check('a and f remain', out.lessons.length === 2, out.lessons.map((l) => l.conceptSlugs));
+  check('no "refused to prune" warning', !out.warnings.some((w) => w.includes('refused to prune')), out.warnings);
+}
+
+console.log('validateComposition — pruned spine prerequisite is not re-added via closure (2.5e-5)');
+{
+  // a (spine) → b (spine) → f: a is a foundational prerequisite of b. The learner
+  // knows a, so it is pruned. The dependent b stays, and closure must NOT pull a
+  // back in — the learner's knowledge satisfies b's prerequisite.
+  const out = validateComposition({
+    composition: comp({ prune: ['a'], lessons: [L(['b'], 'r-b1'), L(['f'], 'r-f1', { isFrontier: true })] }),
+    concepts, edges,
+  });
+  check('a stays pruned (not re-added)', !out.lessons.some((l) => l.conceptSlugs.includes('a')), out.lessons.map((l) => l.conceptSlugs));
+  check('dependent b stays', out.lessons.some((l) => l.conceptSlugs.includes('b')), out.lessons.map((l) => l.conceptSlugs));
+  check('two lessons remain (b, f)', out.lessons.length === 2, out.lessons.map((l) => l.conceptSlugs));
 }
 
 console.log('validateComposition — frontier concept can be pruned');
