@@ -1,0 +1,283 @@
+// Phase 2.5e-3: the Track builder orchestrator — the per-request entry point that
+// turns a spine_ready Path (concept map) into a frozen, immutable Track for one
+// learner. It composes the deterministic scaffold (2.5e-1) around the one LLM
+// judgment pass (2.5e-2) and the closure enforcement (2.5e-2b):
+//
+//   load spine_ready map (concepts + edges + candidates)
+//     → compose (prune known, rank frontier by mastery, pick primaries, frame) [LLM]
+//     → validate (inclusion closure, primary fallback, DAG order)              [pure]
+//     → trim to budget (closure-aware; spine never trimmed)                    [pure]
+//     → if composer flagged resources insufficient: thicken + rebuild (bounded)
+//     → persist Lessons + LessonResources (primary + frozen alternates, newtab)
+//     → freeze Track.status = ready
+//
+// Immutability + idempotency: every build creates a FRESH Track; nothing here
+// mutates the Path map, and a failed build flips that one Track to `failed` (for
+// diagnostics) without touching anything else — a later build replaces it. The
+// lesson writes run in a single transaction so a failure never leaves a half-Track.
+//
+// deliveryMode is hardcoded `newtab` (the safe default: open in a new tab + mark
+// complete) until the 2.5h classifier backfills per-resource embed/native modes.
+//
+// Synchronous today; structured to move async later (see thicken-seam.ts).
+
+import { Difficulty, DeliveryMode, LessonResourceRole, PathStatus, TrackStatus } from '@prisma/client';
+import { prisma } from '@/lib/db';
+import { topoSort, type OrderEdge } from '@/lib/agents/map/order';
+import {
+  composeTrack,
+  type ComposerInputConcept,
+  type ComposerResult,
+} from '@/lib/agents/track/composer';
+import {
+  validateComposition,
+  type ValidatedLesson,
+} from '@/lib/agents/track/validate-composition';
+import { trimToBudget, lessonPrereqKeys, budgetMinutesFor } from '@/lib/agents/track/plan';
+import { thickenSpine } from '@/lib/agents/track/thicken-seam';
+import { TRACK_MAX_THICKEN_ATTEMPTS } from '@/lib/config';
+import type { OnTrace } from '@/lib/agents/agent-trace';
+
+export type BuildTrackInput = {
+  pathId: string;
+  priorKnowledge?: string | null;
+  timeframeWeeks?: number | null;
+  hoursPerWeek?: number | null;
+  // Defaults to `beginner` when omitted; drives composer depth + difficulty-match.
+  targetMastery?: Difficulty | null;
+  onTrace?: OnTrace;
+};
+
+export type BuildTrackResult = {
+  trackId: string;
+  status: TrackStatus;
+  lessonCount: number;
+  // Diagnostics — a Track can be `ready` yet weak along either axis (ROADMAP 2.5e):
+  // budgetWeak = couldn't fit the target-mastery depth in the time budget;
+  // underResourced = concepts the composer judged thin (thickener couldn't help yet).
+  budgetWeak: boolean;
+  underResourced: string[];
+  warnings: string[];
+};
+
+export class TrackBuildError extends Error {
+  constructor(message: string, readonly cause?: unknown) {
+    super(message);
+    this.name = 'TrackBuildError';
+  }
+}
+
+export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResult> {
+  const { pathId, priorKnowledge, timeframeWeeks, hoursPerWeek, onTrace = () => {} } = input;
+  const targetMastery = input.targetMastery ?? Difficulty.beginner;
+  const budgetMinutes = budgetMinutesFor(timeframeWeeks, hoursPerWeek);
+
+  // --- gate on spine_ready (before any Track row exists) -------------------
+  const path = await prisma.path.findUnique({
+    where: { id: pathId },
+    select: { id: true, topic: true, status: true },
+  });
+  if (!path) throw new TrackBuildError(`No Path '${pathId}'.`);
+  if (path.status !== PathStatus.spine_ready) {
+    throw new TrackBuildError(
+      `Path '${pathId}' is '${path.status}', not spine_ready — cannot build a Track. ` +
+        `Spine-hole remediation is the thickener's job (2.5j).`,
+    );
+  }
+
+  onTrace({ kind: 'stage', label: 'track build started', detail: { pathId, topic: path.topic, targetMastery, budgetMinutes } });
+
+  // Every build attempt gets a Track row up front, so a failure is a visible
+  // `failed` Track (diagnostic) rather than nothing. Inputs are recorded now.
+  const track = await prisma.track.create({
+    data: {
+      pathId,
+      status: TrackStatus.building,
+      priorKnowledge: priorKnowledge ?? null,
+      timeframeWeeks: timeframeWeeks ?? null,
+      hoursPerWeek: hoursPerWeek ?? null,
+      targetMastery,
+    },
+    select: { id: true },
+  });
+
+  try {
+    // --- compose → validate, with a bounded thicken-and-rebuild loop -------
+    let composition: ComposerResult;
+    let validatedLessons: ValidatedLesson[];
+    let edges: OrderEdge[];
+    let warnings: string[];
+    for (let attempt = 0; ; attempt++) {
+      const loaded = await loadMap(pathId);
+      edges = loaded.edges;
+      composition = await composeTrack({
+        topic: path.topic,
+        concepts: loaded.concepts,
+        priorKnowledge,
+        targetMastery,
+        budgetMinutes,
+        onTrace,
+      });
+      const validation = validateComposition({ composition, concepts: loaded.concepts, edges });
+      validatedLessons = validation.lessons;
+      warnings = validation.warnings;
+
+      // Axis-1 (resource) insufficiency → thicken + rebuild, bounded. Stub returns
+      // not-thickened today, so we fall through to best-effort on the first pass.
+      if (composition.resourceSufficiency.enough || attempt >= TRACK_MAX_THICKEN_ATTEMPTS) break;
+      const thicken = await thickenSpine({
+        pathId,
+        underResourced: composition.resourceSufficiency.underResourced,
+      });
+      onTrace({ kind: 'stage', label: 'thicken attempt', detail: { attempt, ...thicken } });
+      if (!thicken.thickened) break; // best-effort weaker Track
+    }
+
+    // --- budget trim (closure-aware; axis-2 weakness) ----------------------
+    const keyed = validatedLessons.map((lesson, i) => ({ key: `L${i}`, lesson }));
+    const byKey = new Map(keyed.map((k) => [k.key, k.lesson]));
+    const prereqKeys = lessonPrereqKeys(
+      keyed.map((k) => ({ key: k.key, conceptSlugs: k.lesson.conceptSlugs })),
+      edges,
+    );
+    const plan = trimToBudget(
+      keyed.map((k) => ({
+        key: k.key,
+        isFrontier: k.lesson.isFrontier,
+        masteryRelevant: k.lesson.masteryRelevant,
+        estMinutes: k.lesson.estMinutes,
+      })),
+      budgetMinutes,
+      prereqKeys,
+    );
+    const keptLessons = plan.kept.map((p) => byKey.get(p.key)!);
+
+    if (keptLessons.length === 0) {
+      throw new TrackBuildError(`Track build for Path '${pathId}' produced no lessons.`);
+    }
+
+    // --- persist + freeze (one transaction) --------------------------------
+    await prisma.$transaction(async (tx) => {
+      for (let i = 0; i < keptLessons.length; i++) {
+        const l = keptLessons[i];
+        const lesson = await tx.lesson.create({
+          data: {
+            trackId: track.id,
+            orderInTrack: i + 1,
+            title: l.title,
+            summary: l.summary,
+            conceptsTaught: l.conceptSlugs,
+            estMinutes: l.estMinutes,
+          },
+          select: { id: true },
+        });
+        await tx.lessonResource.createMany({
+          data: [
+            {
+              lessonId: lesson.id,
+              resourceId: l.primaryResourceId,
+              role: LessonResourceRole.primary,
+              deliveryMode: DeliveryMode.newtab,
+            },
+            ...l.alternateResourceIds.map((resourceId) => ({
+              lessonId: lesson.id,
+              resourceId,
+              role: LessonResourceRole.alternate,
+              deliveryMode: DeliveryMode.newtab,
+            })),
+          ],
+        });
+      }
+      await tx.track.update({
+        where: { id: track.id },
+        data: {
+          status: TrackStatus.ready,
+          title: composition.trackTitle,
+          summary: composition.trackSummary,
+        },
+      });
+    });
+
+    const underResourced = composition.resourceSufficiency.enough
+      ? []
+      : composition.resourceSufficiency.underResourced.map((u) => u.conceptSlug);
+    onTrace({
+      kind: 'stage',
+      label: 'track build done',
+      detail: { trackId: track.id, lessons: keptLessons.length, budgetWeak: plan.budgetWeak, underResourced },
+    });
+    console.log('[track-build-track] built', {
+      pathId,
+      trackId: track.id,
+      lessons: keptLessons.length,
+      dropped: plan.dropped.length,
+      budgetWeak: plan.budgetWeak,
+      underResourced,
+    });
+
+    return {
+      trackId: track.id,
+      status: TrackStatus.ready,
+      lessonCount: keptLessons.length,
+      budgetWeak: plan.budgetWeak,
+      underResourced,
+      warnings,
+    };
+  } catch (err) {
+    // Flip this one Track to `failed` for diagnostics; the Path map is untouched.
+    await prisma.track
+      .update({ where: { id: track.id }, data: { status: TrackStatus.failed } })
+      .catch(() => {});
+    throw new TrackBuildError(`Failed to build Track for Path '${pathId}'.`, err);
+  }
+}
+
+// Load a Path's concepts as composer inputs, in topo order, each with its
+// candidate ConceptResources (coverage-desc), plus the prereq edge list.
+async function loadMap(
+  pathId: string,
+): Promise<{ concepts: ComposerInputConcept[]; edges: OrderEdge[] }> {
+  const rows = await prisma.concept.findMany({
+    where: { pathId },
+    select: {
+      slug: true,
+      title: true,
+      membership: true,
+      prereqsIn: { select: { from: { select: { slug: true } } } },
+      resources: {
+        select: {
+          role: true,
+          coverageScore: true,
+          resource: {
+            select: { id: true, title: true, type: true, difficulty: true, durationMin: true },
+          },
+        },
+        orderBy: { coverageScore: 'desc' },
+      },
+    },
+  });
+
+  const edges: OrderEdge[] = rows.flatMap((c) =>
+    c.prereqsIn.map((e) => ({ fromSlug: e.from.slug, toSlug: c.slug })),
+  );
+  const pos = new Map(topoSort(rows.map((r) => ({ slug: r.slug })), edges).map((s, i) => [s, i]));
+
+  const concepts: ComposerInputConcept[] = rows
+    .map((c) => ({
+      slug: c.slug,
+      title: c.title,
+      membership: c.membership,
+      candidates: c.resources.map((r) => ({
+        resourceId: r.resource.id,
+        role: r.role,
+        coverageScore: r.coverageScore,
+        title: r.resource.title,
+        type: r.resource.type,
+        difficulty: r.resource.difficulty,
+        durationMin: r.resource.durationMin,
+      })),
+    }))
+    .sort((a, b) => (pos.get(a.slug) ?? 0) - (pos.get(b.slug) ?? 0));
+
+  return { concepts, edges };
+}
