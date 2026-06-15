@@ -75,9 +75,9 @@ console.log('validateComposition — valid composition');
   const order = out.lessons.map((l) => l.conceptSlugs.join());
   check('three lessons', out.lessons.length === 3, order);
   check('DAG order a,b,f', order.join(',') === 'a,b,f', order);
-  check('primaries honored', out.lessons[0].primaryResourceId === 'r-a1' && out.lessons[1].primaryResourceId === 'r-b1');
-  check('alternates for a = [r-a2]', JSON.stringify(out.lessons[0].alternateResourceIds) === '["r-a2"]', out.lessons[0].alternateResourceIds);
-  check('estMinutes from primary (a=30)', out.lessons[0].estMinutes === 30);
+  check('mandatory cores honored', out.lessons[0].mandatoryResourceIds[0] === 'r-a1' && out.lessons[1].mandatoryResourceIds[0] === 'r-b1');
+  check('optional pool for a = [r-a2]', JSON.stringify(out.lessons[0].optionalResourceIds) === '["r-a2"]', out.lessons[0].optionalResourceIds);
+  check('timeWeight carried (a=normal)', out.lessons[0].timeWeight === 'normal', out.lessons[0].timeWeight);
   check('frontier flagged on f', out.lessons[2].isFrontier === true && out.lessons[2].masteryRelevant === true);
   check('no warnings', out.warnings.length === 0, out.warnings);
 }
@@ -88,7 +88,7 @@ console.log('validateComposition — invalid primary handle falls back');
     composition: comp({ lessons: [L(['a'], 'bogus'), L(['b'], 'r-b1'), L(['f'], 'r-f1')] }),
     concepts, edges,
   });
-  check('fallback to top teaches r-a1', out.lessons.find((l) => l.conceptSlugs[0] === 'a')!.primaryResourceId === 'r-a1');
+  check('fallback to top teaches r-a1', out.lessons.find((l) => l.conceptSlugs[0] === 'a')!.mandatoryResourceIds[0] === 'r-a1');
   check('warned about fallback', out.warnings.some((w) => w.includes('fell back')), out.warnings);
 }
 
@@ -185,7 +185,8 @@ console.log('validateComposition — merged lesson pools + dedups alternates');
   });
   const merged = out.lessons.find((l) => l.conceptSlugs.length === 2)!;
   check('merged lesson present', !!merged);
-  check('merged alternates = a2,b1 (non-primary, coverage-desc)', JSON.stringify(merged.alternateResourceIds) === '["r-b1","r-a2"]', merged.alternateResourceIds);
+  check('merged core = [r-a1]', JSON.stringify(merged.mandatoryResourceIds) === '["r-a1"]', merged.mandatoryResourceIds);
+  check('merged optional pool = b1,a2 (non-core, coverage-desc)', JSON.stringify(merged.optionalResourceIds) === '["r-b1","r-a2"]', merged.optionalResourceIds);
   check('merged lesson ordered before f', out.lessons[0].conceptSlugs.length === 2, out.lessons.map((l) => l.conceptSlugs));
 }
 
@@ -250,10 +251,10 @@ async function liveRun(topic: string) {
     );
   });
 
-  console.log('\nlessons (DAG order):');
+  console.log('\nvalidated lessons (DAG order):');
   lessons.forEach((l, i) => {
     console.log(`  ${i + 1}. [${l.conceptSlugs.join('+')}]${l.isFrontier ? ' (frontier)' : ''} — ${l.title}`);
-    console.log(`      primary=${l.primaryResourceId} alts=${l.alternateResourceIds.length} est=${l.estMinutes}m`);
+    console.log(`      weight=${l.timeWeight} mandatory=${l.mandatoryResourceIds.length} optional=${l.optionalResourceIds.length}`);
   });
 }
 

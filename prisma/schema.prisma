@@ -396,6 +396,12 @@ model LessonResource {
   resourceId   String
   resource     Resource           @relation(fields: [resourceId], references: [id])
   role         LessonResourceRole @default(primary)
+  // Phase 2.5e-7b: render/selection order WITHIN a lesson. The allocator emits a
+  // ranked list — the mandatory complementary core (multiple role=primary rows) in
+  // priority order, then the optional/alternate substitute pool. One sequence per
+  // lesson (primaries 1..k first, then alternates); `role` distinguishes core vs
+  // optional. @default(0) covers pre-2.5e-7b rows; the builder always sets it.
+  orderInLesson Int               @default(0)
   deliveryMode DeliveryMode
   segmentRef   Json?
   createdAt    DateTime           @default(now())
