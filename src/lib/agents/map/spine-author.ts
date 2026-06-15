@@ -107,6 +107,7 @@ This is NOT a reading list and NOT a schedule. You are authoring a concept graph
 
 Concepts:
 - Output between ${SPINE_MIN_CONCEPTS} and ${SPINE_MAX_CONCEPTS} concepts. The spine is the REQUIRED backbone only — exclude optional enrichment, niche subtopics, and tooling. Those are added later as a separate "frontier".
+- OPEN with a foundational onboarding concept at the root — an orientation on-ramp every later concept builds on, so an absolute beginner is never dropped cold into a hard idea. It covers what the subject is, the core mental model, and (as the subject warrants) how to set up / run / read it: for a programming topic, "Getting Started: what it is, environment setup, your first program"; for a math topic, the conceptual big picture, notation, and prerequisite review (NOT tooling). It is a real teachable concept (not a preface), has no prerequisites of its own, and is a prerequisite of the first substantive concept(s). Skip it only when the topic genuinely has no meaningful on-ramp.
 - Each concept is one coherent, teachable idea — coarse enough to map to real lessons, not a single fact and not a whole sub-field.
 - \`slug\`: stable, kebab-case, unique (e.g. "variables-and-types", "list-comprehensions"). The slug is an identity that later passes match against, so make it descriptive and canonical.
 - \`title\`: a short human-readable name.
