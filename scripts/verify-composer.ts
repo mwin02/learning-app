@@ -57,7 +57,13 @@ function comp(over: Partial<ComposerResult>): ComposerResult {
 }
 const L = (conceptSlugs: string[], primaryResourceId: string | null, over: Partial<ComposerResult['lessons'][number]> = {}) => ({
   conceptSlugs, primaryResourceId, title: conceptSlugs.join('+'), summary: 's',
-  isFrontier: false, masteryRelevant: false, ...over,
+  isFrontier: false, masteryRelevant: false,
+  // New graded fields (2.5e-7 composer output); validateComposition still keys off
+  // primaryResourceId, so these defaults just satisfy the ComposedLesson type.
+  timeWeight: 'normal' as const,
+  mandatoryResourceIds: primaryResourceId ? [primaryResourceId] : [],
+  optionalResourceIds: [],
+  ...over,
 });
 
 console.log('validateComposition — valid composition');
@@ -237,6 +243,13 @@ async function liveRun(topic: string) {
   console.log(`track: ${composition.trackTitle}\n  ${composition.trackSummary}`);
   console.log(`sufficiency: enough=${composition.resourceSufficiency.enough} underResourced=${composition.resourceSufficiency.underResourced.map((u) => u.conceptSlug).join(',') || '(none)'}`);
   if (warnings.length) console.log(`warnings:\n  - ${warnings.join('\n  - ')}`);
+  console.log('\ncomposer grading (timeWeight + mandatory/optional counts):');
+  composition.lessons.forEach((l) => {
+    console.log(
+      `  [${l.conceptSlugs.join('+')}] weight=${l.timeWeight} mandatory=${l.mandatoryResourceIds.length} optional=${l.optionalResourceIds.length}`,
+    );
+  });
+
   console.log('\nlessons (DAG order):');
   lessons.forEach((l, i) => {
     console.log(`  ${i + 1}. [${l.conceptSlugs.join('+')}]${l.isFrontier ? ' (frontier)' : ''} — ${l.title}`);
