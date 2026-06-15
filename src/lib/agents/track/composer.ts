@@ -28,6 +28,7 @@ import { Output, generateText } from 'ai';
 import { z } from 'zod';
 import { ConceptMembership, ConceptResourceRole, Difficulty, TrackIntent } from '@prisma/client';
 import { getModel } from '@/lib/ai/models';
+import { TIME_WEIGHTS, type TimeWeight } from '@/lib/agents/track/allocate';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 
 // A pre-attached candidate for one concept, as the builder loads it from the
@@ -53,10 +54,21 @@ export type ComposerInputConcept = {
   candidates: ComposerCandidate[];
 };
 
-// One lesson as the model composed it. `primaryResourceId` is already resolved
-// from the model's handle (null = unknown/missing handle → validate falls back).
+// One lesson as the model composed it. The model grades the lesson's candidates
+// into a ranked MANDATORY complementary core + an OPTIONAL pool and assigns a coarse
+// `timeWeight`; all handles are resolved to resourceIds here (unknown handles
+// dropped). `primaryResourceId` is derived as the first mandatory (back-compat for
+// validate-composition.ts until the 2.5e-7b allocator consumes the graded lists).
 export type ComposedLesson = {
   conceptSlugs: string[];
+  // Coarse time-priority bucket; the allocator turns it into a minute slice.
+  timeWeight: TimeWeight;
+  // Ranked mandatory complementary core (resolved), highest-priority first. May
+  // span functions (a teaches + an assesses). [0] is the must-have primary.
+  mandatoryResourceIds: string[];
+  // Optional substitute pool (resolved), graded order.
+  optionalResourceIds: string[];
+  // Derived = mandatoryResourceIds[0] ?? null (null → validate falls back).
   primaryResourceId: string | null;
   title: string;
   summary: string;
@@ -88,7 +100,11 @@ const CompositionSchema = z.object({
   lessons: z.array(
     z.object({
       conceptSlugs: z.array(z.string()).min(1),
-      primaryHandle: z.string(),
+      timeWeight: z.enum(TIME_WEIGHTS),
+      // Ranked must-have core (≥1), highest priority first. Handles, resolved below.
+      mandatoryHandles: z.array(z.string()).min(1),
+      // The optional substitute pool (may be empty).
+      optionalHandles: z.array(z.string()),
       title: z.string().min(1),
       summary: z.string().min(1),
       isFrontier: z.boolean(),
@@ -170,20 +186,36 @@ export async function composeTrack(args: {
     finishReason: result.finishReason,
   });
 
-  // Resolve each primary handle to a resourceId; drop a fabricated/unknown handle
-  // to null (validate falls back) rather than fail.
-  const lessons: ComposedLesson[] = raw.lessons.map((l) => {
-    const resolved = byHandle.get(l.primaryHandle);
-    if (!resolved) {
-      console.warn('[track-composer] unknown primary handle dropped', {
-        topic,
-        handle: l.primaryHandle,
-        conceptSlugs: l.conceptSlugs,
-      });
+  // Resolve each graded handle list to resourceIds, dropping fabricated/unknown
+  // handles (anti-hallucination) and de-duping within a list rather than failing.
+  // `primaryResourceId` is the first surviving mandatory (null → validate falls back).
+  const resolveHandles = (handles: string[], conceptSlugs: string[]): string[] => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const h of handles) {
+      const resolved = byHandle.get(h);
+      if (!resolved) {
+        console.warn('[track-composer] unknown handle dropped', { topic, handle: h, conceptSlugs });
+        continue;
+      }
+      if (seen.has(resolved.resourceId)) continue;
+      seen.add(resolved.resourceId);
+      out.push(resolved.resourceId);
     }
+    return out;
+  };
+  const lessons: ComposedLesson[] = raw.lessons.map((l) => {
+    const mandatoryResourceIds = resolveHandles(l.mandatoryHandles, l.conceptSlugs);
+    // A resource can't be both mandatory and optional; mandatory wins.
+    const optionalResourceIds = resolveHandles(l.optionalHandles, l.conceptSlugs).filter(
+      (id) => !mandatoryResourceIds.includes(id),
+    );
     return {
       conceptSlugs: l.conceptSlugs,
-      primaryResourceId: resolved?.resourceId ?? null,
+      timeWeight: l.timeWeight,
+      mandatoryResourceIds,
+      optionalResourceIds,
+      primaryResourceId: mandatoryResourceIds[0] ?? null,
       title: l.title,
       summary: l.summary,
       isFrontier: l.isFrontier,
@@ -221,7 +253,10 @@ You produce, in one pass:
 
 2. \`lessons\` — entries in teaching order. Include every SPINE (backbone) concept you keep; include the FRONTIER (enrichment) concepts the target mastery warrants and omit the rest (omitting deep/tangential frontier is how mastery sets depth). If you include a concept, also include any concept it depends on — never include a concept while omitting its prerequisite. For each lesson:
    - \`conceptSlugs\`: usually one slug. You MAY merge two or three TIGHTLY-COUPLED adjacent concepts into one lesson when they are naturally taught together — but never merge across an unrelated concept that sits between them in the order.
-   - \`primaryHandle\`: the handle of the ONE best resource to teach this lesson. Prefer a "teaches" candidate; among those, match the resource's difficulty to the learner's target mastery (beginner→beginner resources, advanced→advanced). Also let the inferred \`intent\` (below) bias the choice: for \`review\`/\`practice\` lean toward shorter refreshers and "uses"/"assesses" resources over long first-principles lectures; for \`learn\`/\`master\` prefer a fuller, thorough "teaches". Use a handle exactly as given; never invent one.
+   - \`mandatoryHandles\`: the RANKED must-have resources for this lesson, best first — its "complementary core". These are the resources a learner genuinely needs; a bigger time budget will include more of them, but the FIRST is always used, so make it the single best one. Prefer "teaches" candidates difficulty-matched to the target mastery (beginner→beginner, advanced→advanced). The core MAY span functions — e.g. a "teaches" to learn it plus an "assesses" to practice it — when that genuinely complements. Keep it tight: usually 1, up to ~3; do NOT pad it with redundant overlapping resources. Use handles exactly as given; never invent one.
+   - \`optionalHandles\`: the remaining useful candidates as a substitute/enrichment pool, graded best first. These are NOT scheduled by default — they are fallbacks if a core resource fails and extra reading for the keen. Leave empty if there are none. Never repeat a handle that is already in \`mandatoryHandles\`.
+   - \`timeWeight\`: how much of the time budget this lesson deserves RELATIVE to the others — \`low\`, \`normal\`, \`high\`, or \`deep\`. This is a coarse priority, NOT minutes. Give \`high\`/\`deep\` to load-bearing, hard, or mastery-critical lessons that warrant more resources; \`low\` to quick or peripheral ones. Most lessons are \`normal\`.
+   - Let the inferred \`intent\` (below) shape the core: for \`review\`/\`practice\`, prefer shorter refreshers and "uses"/"assesses" resources and a leaner core; for \`learn\`/\`master\`, prefer a fuller, thorough "teaches" core and lean toward heavier \`timeWeight\`.
    - \`title\`, \`summary\`: a concise learner-facing lesson title and a 1–2 sentence summary of what they'll learn.
    - \`isFrontier\`: true if every concept in the lesson is a frontier (enrichment) concept, false if any is a spine (backbone) concept.
    - \`masteryRelevant\`: for a frontier lesson, true if it is important for reaching the target mastery (so the budget trimmer keeps it before less-relevant frontier). Ignored for spine lessons.

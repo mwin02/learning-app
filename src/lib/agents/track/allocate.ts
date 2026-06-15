@@ -37,7 +37,10 @@
 // from both the composer's handles and Prisma rows so it is fixture-testable; the
 // builder (2.5e-7b) maps composer output → this contract and persists the result.
 
-export type TimeWeight = 'low' | 'normal' | 'high' | 'deep';
+// The coarse time-weight buckets, lightest → heaviest. Single source of truth so
+// the composer's output enum (composer.ts) can't drift from the allocator's weights.
+export const TIME_WEIGHTS = ['low', 'normal', 'high', 'deep'] as const;
+export type TimeWeight = (typeof TIME_WEIGHTS)[number];
 
 // Coarse buckets → integer weights (locked decision #6: tune later). A `deep`
 // lesson claims 8× the minute-slice of a `low` one.
