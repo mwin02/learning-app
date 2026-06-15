@@ -13,10 +13,24 @@ const TRACK_STATUS_STYLE: Record<string, string> = {
   failed: 'bg-red-100 text-red-800',
 };
 
-const ROLE_STYLE: Record<string, string> = {
-  primary: 'bg-green-100 text-green-800',
-  alternate: 'bg-gray-100 text-gray-600',
+type ResourceRow = {
+  role: string;
+  deliveryMode: string;
+  resource: { id: string; title: string; url: string; type: string };
 };
+
+function ResourceItem({ r }: { r: ResourceRow }) {
+  return (
+    <li className="flex items-center gap-2 text-sm">
+      <a href={r.resource.url} target="_blank" rel="noreferrer" className="underline">
+        {r.resource.title}
+      </a>
+      <span className="text-xs text-gray-400">
+        {r.resource.type} · {r.deliveryMode}
+      </span>
+    </li>
+  );
+}
 
 // Phase 2.5e-4: read-only view of a built Track — its ordered Lessons, each with
 // the concepts it teaches, its primary resource, and the frozen alternates with
@@ -38,6 +52,8 @@ export default async function TrackDetailPage({
       title: true,
       summary: true,
       targetMastery: true,
+      intent: true,
+      goal: true,
       priorKnowledge: true,
       timeframeWeeks: true,
       hoursPerWeek: true,
@@ -53,6 +69,8 @@ export default async function TrackDetailPage({
           conceptsTaught: true,
           estMinutes: true,
           resources: {
+            // Allocator order within the lesson: mandatory core first, then pool.
+            orderBy: { orderInLesson: 'asc' },
             select: {
               role: true,
               deliveryMode: true,
@@ -67,8 +85,6 @@ export default async function TrackDetailPage({
 
   const style = TRACK_STATUS_STYLE[track.status] ?? 'bg-gray-100 text-gray-700';
   const totalMinutes = track.lessons.reduce((sum, l) => sum + l.estMinutes, 0);
-  // Primary first within each lesson.
-  const roleOrder = (r: string) => (r === LessonResourceRole.primary ? 0 : 1);
 
   return (
     <main className="p-6 flex flex-col gap-6">
@@ -87,10 +103,18 @@ export default async function TrackDetailPage({
         <p className="text-sm text-gray-600 mt-2">
           {track.lessons.length} lessons · ~{totalMinutes} min ·{' '}
           target mastery: <span className="font-medium">{track.targetMastery ?? 'beginner'}</span>
+          {track.intent && (
+            <> · intent: <span className="font-medium">{track.intent}</span></>
+          )}
           {track.timeframeWeeks && track.hoursPerWeek && (
             <> · budget: {track.timeframeWeeks}w × {track.hoursPerWeek}h/w</>
           )}
         </p>
+        {track.goal && (
+          <p className="text-xs text-gray-500 mt-1 max-w-2xl">
+            Goal: <span className="italic">{track.goal}</span>
+          </p>
+        )}
         {track.priorKnowledge && (
           <p className="text-xs text-gray-500 mt-1 max-w-2xl">
             Prior knowledge: <span className="italic">{track.priorKnowledge}</span>
@@ -99,43 +123,56 @@ export default async function TrackDetailPage({
       </section>
 
       <ol className="flex flex-col gap-3">
-        {track.lessons.map((lesson) => (
-          <li key={lesson.id} className="border rounded p-3">
-            <div className="flex items-baseline gap-2">
-              <span className="text-xs text-gray-400 font-mono">{lesson.orderInTrack}</span>
-              <span className="font-medium">{lesson.title}</span>
-              <span className="text-xs text-gray-500">~{lesson.estMinutes} min</span>
-            </div>
-            {lesson.summary && <p className="text-sm text-gray-600 mt-1">{lesson.summary}</p>}
-            <div className="mt-1 flex flex-wrap gap-1">
-              {lesson.conceptsTaught.map((slug) => (
-                <code key={slug} className="text-xs bg-gray-50 text-gray-500 rounded px-1">
-                  {slug}
-                </code>
-              ))}
-            </div>
-
-            <ul className="mt-2 flex flex-col gap-1">
-              {[...lesson.resources]
-                .sort((a, b) => roleOrder(a.role) - roleOrder(b.role))
-                .map((r) => (
-                  <li key={r.resource.id} className="flex items-center gap-2 text-sm">
-                    <span
-                      className={`rounded px-1.5 py-0.5 text-xs font-medium ${ROLE_STYLE[r.role] ?? ''}`}
-                    >
-                      {r.role}
-                    </span>
-                    <a href={r.resource.url} target="_blank" rel="noreferrer" className="underline">
-                      {r.resource.title}
-                    </a>
-                    <span className="text-xs text-gray-400">
-                      {r.resource.type} · {r.deliveryMode}
-                    </span>
-                  </li>
+        {track.lessons.map((lesson) => {
+          // Resources arrive in allocator order (orderInLesson). The mandatory core
+          // is the role=primary set (multiple since 2.5e-7b); the rest are the frozen
+          // optional/substitute pool — kept so invalidation can promote one if a core
+          // resource dies (mandatory set degrades → promote an optional).
+          const core = lesson.resources.filter((r) => r.role === LessonResourceRole.primary);
+          const optional = lesson.resources.filter((r) => r.role !== LessonResourceRole.primary);
+          return (
+            <li key={lesson.id} className="border rounded p-3">
+              <div className="flex items-baseline gap-2">
+                <span className="text-xs text-gray-400 font-mono">{lesson.orderInTrack}</span>
+                <span className="font-medium">{lesson.title}</span>
+                <span className="text-xs text-gray-500">~{lesson.estMinutes} min</span>
+              </div>
+              {lesson.summary && <p className="text-sm text-gray-600 mt-1">{lesson.summary}</p>}
+              <div className="mt-1 flex flex-wrap gap-1">
+                {lesson.conceptsTaught.map((slug) => (
+                  <code key={slug} className="text-xs bg-gray-50 text-gray-500 rounded px-1">
+                    {slug}
+                  </code>
                 ))}
-            </ul>
-          </li>
-        ))}
+              </div>
+
+              <div className="mt-2 flex flex-col gap-2">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wide text-green-700">
+                    Core{core.length > 1 ? ` (${core.length})` : ''}
+                  </p>
+                  <ul className="mt-0.5 flex flex-col gap-1">
+                    {core.map((r) => (
+                      <ResourceItem key={r.resource.id} r={r} />
+                    ))}
+                  </ul>
+                </div>
+                {optional.length > 0 && (
+                  <div>
+                    <p className="text-xs font-medium uppercase tracking-wide text-gray-400">
+                      Optional ({optional.length})
+                    </p>
+                    <ul className="mt-0.5 flex flex-col gap-1">
+                      {optional.map((r) => (
+                        <ResourceItem key={r.resource.id} r={r} />
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            </li>
+          );
+        })}
       </ol>
     </main>
   );
