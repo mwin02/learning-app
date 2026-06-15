@@ -1,10 +1,13 @@
 'use client';
 
 // Phase 2.5e-4: "Build a Track" trigger on the inspector. Collapsed to a button
-// until opened, then a small form for the learner inputs (prior knowledge, target
-// mastery, timeframe, hours/week) that POSTs to /api/playground/build-track and,
-// on success, redirects to the read-only Track view. Disabled unless the Path is
-// spine_ready — the builder gates on it, so we don't even let the operator try.
+// until opened, then a small form for the learner inputs (goal, prior knowledge,
+// target mastery, timeframe, hours/week) that POSTs to /api/playground/build-track
+// and, on success, redirects to the read-only Track view. Disabled unless the Path
+// is spine_ready — the builder gates on it, so we don't even let the operator try.
+//
+// 2.5e-6: `goal` is free text, not an intent picker — the composer infers the
+// TrackIntent enum from it (asking a learner to self-classify is the wrong job).
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -20,6 +23,7 @@ export function BuildTrackForm({ pathId, spineReady }: { pathId: string; spineRe
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [goal, setGoal] = useState('');
   const [priorKnowledge, setPriorKnowledge] = useState('');
   const [targetMastery, setTargetMastery] = useState<Difficulty>(Difficulty.beginner);
   const [timeframeWeeks, setTimeframeWeeks] = useState('6');
@@ -46,6 +50,7 @@ export function BuildTrackForm({ pathId, spineReady }: { pathId: string; spineRe
     setError(null);
     try {
       const body: Record<string, unknown> = { pathId, targetMastery };
+      if (goal.trim()) body.goal = goal.trim();
       if (priorKnowledge.trim()) body.priorKnowledge = priorKnowledge.trim();
       const weeks = Number(timeframeWeeks);
       const hours = Number(hoursPerWeek);
@@ -78,6 +83,17 @@ export function BuildTrackForm({ pathId, spineReady }: { pathId: string; spineRe
           cancel
         </button>
       </div>
+
+      <label className="text-xs text-gray-600">
+        Goal (free text — the composer infers intent from this)
+        <textarea
+          className={`${FIELD} mt-0.5 w-full`}
+          rows={2}
+          value={goal}
+          onChange={(e) => setGoal(e.target.value)}
+          placeholder="e.g. refresh calculus before grad school / cram for my exam next week"
+        />
+      </label>
 
       <label className="text-xs text-gray-600">
         Prior knowledge (free text)

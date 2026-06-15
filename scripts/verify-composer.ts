@@ -6,7 +6,7 @@
 // with no LLM. Part 2 (when a topic is given) runs the real composer against a
 // seeded spine_ready map and prints the result for manual inspection.
 
-import { ConceptMembership, ConceptResourceRole, Difficulty } from '@prisma/client';
+import { ConceptMembership, ConceptResourceRole, Difficulty, TrackIntent } from '@prisma/client';
 import { prisma } from '../src/lib/db';
 import { validateComposition } from '../src/lib/agents/track/validate-composition';
 import { composeTrack, type ComposerInputConcept, type ComposerResult } from '../src/lib/agents/track/composer';
@@ -48,6 +48,7 @@ const edges: OrderEdge[] = [
 function comp(over: Partial<ComposerResult>): ComposerResult {
   return {
     prune: [],
+    intent: TrackIntent.learn,
     lessons: [],
     trackTitle: 'T', trackSummary: 'S',
     resourceSufficiency: { enough: true, underResourced: [] },
@@ -224,13 +225,15 @@ async function liveRun(topic: string) {
   const composition = await composeTrack({
     topic,
     concepts: inputConcepts,
+    goal: 'I studied this years ago and just want to refresh the advanced topics before an exam.',
     priorKnowledge: 'I am comfortable with basic programming and high-school algebra.',
     targetMastery: Difficulty.intermediate,
     budgetMinutes: 6 * 5 * 60,
   });
   const { lessons, warnings } = validateComposition({ composition, concepts: inputConcepts, edges: liveEdges });
 
-  console.log(`\npruned: ${composition.prune.join(', ') || '(none)'}`);
+  console.log(`\ninferred intent: ${composition.intent}`);
+  console.log(`pruned: ${composition.prune.join(', ') || '(none)'}`);
   console.log(`track: ${composition.trackTitle}\n  ${composition.trackSummary}`);
   console.log(`sufficiency: enough=${composition.resourceSufficiency.enough} underResourced=${composition.resourceSufficiency.underResourced.map((u) => u.conceptSlug).join(',') || '(none)'}`);
   if (warnings.length) console.log(`warnings:\n  - ${warnings.join('\n  - ')}`);

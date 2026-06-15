@@ -41,6 +41,9 @@ import type { OnTrace } from '@/lib/agents/agent-trace';
 export type BuildTrackInput = {
   pathId: string;
   priorKnowledge?: string | null;
+  // The learner's free-text statement of why they're taking this Track. Persisted
+  // raw on the Track; the composer infers a coarse `intent` enum from it (2.5e-6).
+  goal?: string | null;
   timeframeWeeks?: number | null;
   hoursPerWeek?: number | null;
   // Defaults to `beginner` when omitted; drives composer depth + difficulty-match.
@@ -68,7 +71,7 @@ export class TrackBuildError extends Error {
 }
 
 export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResult> {
-  const { pathId, priorKnowledge, timeframeWeeks, hoursPerWeek, onTrace = () => {} } = input;
+  const { pathId, priorKnowledge, goal, timeframeWeeks, hoursPerWeek, onTrace = () => {} } = input;
   const targetMastery = input.targetMastery ?? Difficulty.beginner;
   const budgetMinutes = budgetMinutesFor(timeframeWeeks, hoursPerWeek);
 
@@ -94,6 +97,7 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
       pathId,
       status: TrackStatus.building,
       priorKnowledge: priorKnowledge ?? null,
+      goal: goal ?? null,
       timeframeWeeks: timeframeWeeks ?? null,
       hoursPerWeek: hoursPerWeek ?? null,
       targetMastery,
@@ -114,6 +118,7 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
         topic: path.topic,
         concepts: loaded.concepts,
         priorKnowledge,
+        goal,
         targetMastery,
         budgetMinutes,
         onTrace,
@@ -194,6 +199,9 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
           status: TrackStatus.ready,
           title: composition.trackTitle,
           summary: composition.trackSummary,
+          // Inferred by the composer from the learner's goal (2.5e-6); recorded on
+          // the frozen Track for downstream stages + analytics.
+          intent: composition.intent,
         },
       });
     });
