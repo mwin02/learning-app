@@ -4,9 +4,10 @@
 // produce a broken Track:
 //
 //   - Inclusion closure (2.5e-2b): the included concept set must be downward-closed
-//     over its NON-PRUNED prerequisites. Spine is always included; the composer may
-//     omit deep, non-load-bearing frontier (that is how target mastery sets depth) —
-//     but any concept an included concept DEPENDS ON is pulled back in. This handles
+//     over its NON-PRUNED prerequisites. Spine is included by default; the composer
+//     may omit deep, non-load-bearing frontier (that is how target mastery sets
+//     depth) and may PRUNE a known spine concept (2.5e-5) — but any concept an
+//     included concept DEPENDS ON is pulled back in. This handles
 //     frontier→spine edges (possible via manual map edits) and frontier→frontier
 //     prereq chains: a load-bearing frontier is never silently excluded. Pruning is
 //     the one legal way to break a prereq (the learner already knows it).
@@ -67,14 +68,12 @@ export function validateComposition(args: {
   const warnings: string[] = [];
 
   const conceptBySlug = new Map(concepts.map((c) => [c.slug, c]));
+  // Spine pruning is allowed (2.5e-5): a learner who already knows a backbone
+  // concept can drop it. Closure makes this safe — a pruned concept is excluded
+  // from the seed set and skipped in the prereq walk, so it is never re-added, and
+  // a dependent's prereq is considered satisfied by the learner's knowledge. The
+  // composer (composer.ts) is told to prune spine only with clear evidence.
   const pruned = new Set(composition.prune.filter((s) => conceptBySlug.has(s)));
-  // A spine concept must never be pruned into a gap — keep it and warn.
-  for (const slug of [...pruned]) {
-    if (conceptBySlug.get(slug)!.membership === 'spine') {
-      pruned.delete(slug);
-      warnings.push(`refused to prune spine concept '${slug}' (kept to stay spine-complete)`);
-    }
-  }
 
   // --- inclusion closure -------------------------------------------------
   // Seeds: every spine concept (always taught) + every concept the composer put
@@ -155,7 +154,9 @@ export function validateComposition(args: {
   }
 
   if (groups.length === 0) {
-    throw new CompositionError('No lessons after validation (every concept pruned or unknown).');
+    throw new CompositionError(
+      'No lessons after validation — every concept was pruned (the learner may already know this whole topic) or unknown.',
+    );
   }
 
   // --- resolve primary + alternates per group ----------------------------
