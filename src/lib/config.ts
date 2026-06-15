@@ -140,3 +140,11 @@ export const MAP_SPINE_MIN_PRIMARY_COVERAGE = 0.5;
 // resource-search endpoint returns to the attach picker. Small — the operator is
 // scanning for one resource to attach to a concept, not browsing the library.
 export const MAP_RESOURCE_PICKER_LIMIT = 20;
+
+// Phase 2.5e-3 (Track builder): how many times the builder may invoke the spine
+// thickener and rebuild within one build when the composer judges resources
+// insufficient for the target mastery. Each attempt = one extra compose call, so
+// this bounds cost/latency on the per-request hot path. 1 today (the thickener is
+// a 2.5j stub that always reports "couldn't"), so the builder falls through to a
+// best-effort weaker Track. Raise once the real thickener can actually fill holes.
+export const TRACK_MAX_THICKEN_ATTEMPTS = 1;
