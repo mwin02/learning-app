@@ -60,3 +60,24 @@ export async function recomputeReadiness(
   await client.path.update({ where: { id: pathId }, data: { status } });
   return { status, holes };
 }
+
+// Spine-containment warning (Phase 2.5d-7c): the slugs of spine concepts that have
+// a frontier prerequisite. The spine must stay downward-closed — every prerequisite
+// of a spine concept must itself be spine — so the Track builder (2.5e) can trim
+// unselected frontier nodes without orphaning a required spine concept. A
+// `frontier → spine` prereq edge (from.membership = frontier, to.membership = spine)
+// violates that, leaving the `to` concept with a dangling prerequisite once trimmed.
+// add_prereq hard-blocks the direct case, but a set_membership flip can reintroduce
+// it without passing that gate, so callers surface this as a non-blocking warning.
+// It deliberately does NOT affect Path.status — only spine holes gate spine_ready.
+// One indexed query over the (membership-joined) edge set, deduped by slug.
+export async function frontierGatedSpine(
+  pathId: string,
+  client: Prisma.TransactionClient = prisma,
+): Promise<string[]> {
+  const edges = await client.conceptPrereq.findMany({
+    where: { pathId, from: { membership: 'frontier' }, to: { membership: 'spine' } },
+    select: { to: { select: { slug: true } } },
+  });
+  return [...new Set(edges.map((e) => e.to.slug))];
+}
