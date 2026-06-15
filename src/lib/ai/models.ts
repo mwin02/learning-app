@@ -14,6 +14,7 @@ type AgentName =
   | 'curriculumFallback'
   | 'mapSpineAuthor'
   | 'mapCandidateJudge'
+  | 'trackComposer'
   | 'tagCanonicalizer'
   | 'topicClassifier'
   | 'conceptDeriver'
@@ -96,6 +97,20 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     modelId: 'gemini-2.5-flash',
     temperature: 0,
     maxOutputTokens: 8192,
+  },
+  trackComposer: {
+    // Phase 2.5e-2: composes a learner's Track from a spine_ready map in one
+    // call — prunes known concepts, ranks frontier by target mastery, picks each
+    // lesson's primary (difficulty-matched), writes lesson + track framing, and
+    // judges per-concept resource sufficiency. Pro, not Flash: this is the
+    // judgment-heavy, learner-facing artifact (same reasoning as mapSpineAuthor),
+    // and it reasons over the whole map at once. Temperature low-ish so structure
+    // and selection stay stable but the prose framing isn't robotic. 32k output:
+    // a lesson object per concept across a (frontier-thickened) map plus Pro's
+    // internal thinking; matches the spine-author budget.
+    modelId: 'gemini-2.5-pro',
+    temperature: 0.3,
+    maxOutputTokens: 32768,
   },
   tagCanonicalizer: {
     // Plain JSON shape, no grounding. Deterministic mapping job, but the input
