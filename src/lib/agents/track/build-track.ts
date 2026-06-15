@@ -188,8 +188,12 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
           },
           select: { id: true },
         });
-        // One ordered sequence: the mandatory core (multiple role=primary) first,
-        // then the frozen optional/alternate substitute pool.
+        // One ordered sequence (orderInLesson): the mandatory core (multiple
+        // role=primary) first, then the frozen optional/alternate substitute pool.
+        // Invalidation policy (future): when the mandatory set degrades below viable
+        // — a core resource goes hard-dead — promote the highest-graded optional into
+        // the core; multi-primary also degrades gracefully (the other mandatory
+        // resources still teach the concept).
         let order = 0;
         await tx.lessonResource.createMany({
           data: [
