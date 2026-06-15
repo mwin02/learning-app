@@ -1,16 +1,19 @@
-// Phase 2.5e-2: deterministic re-validation of the composer's output — the cheap
-// "critic" for the Track builder's hard invariants. No LLM. The composer
+// Phase 2.5e-2 / 2.5e-2b: deterministic re-validation of the composer's output —
+// the cheap "critic" for the Track builder's hard invariants. No LLM. The composer
 // (composer.ts) is judgment; this enforces structure so a model slip can never
 // produce a broken Track:
 //
-//   - Concept coverage: every KEPT (non-pruned) concept lands in exactly one
-//     lesson. A concept the composer forgot gets a synthesized lesson; a pruned
-//     or unknown slug referenced by a lesson is dropped. A spine concept is never
-//     lost (it can't be pruned away into a gap silently).
-//   - Primary selection: each lesson's primary must be a real `teaches` candidate
-//     of one of its concepts. The composer's pick is honored when valid; otherwise
-//     we fall back to the highest-coverage `teaches` (then any role) in the pool.
-//     This is the deterministic backstop for a dropped/invalid handle.
+//   - Inclusion closure (2.5e-2b): the included concept set must be downward-closed
+//     over its NON-PRUNED prerequisites. Spine is always included; the composer may
+//     omit deep, non-load-bearing frontier (that is how target mastery sets depth) —
+//     but any concept an included concept DEPENDS ON is pulled back in. This handles
+//     frontier→spine edges (possible via manual map edits) and frontier→frontier
+//     prereq chains: a load-bearing frontier is never silently excluded. Pruning is
+//     the one legal way to break a prereq (the learner already knows it).
+//   - Primary selection: each lesson's primary must be a real `teaches` candidate of
+//     one of its concepts. The composer's pick is honored when valid; otherwise we
+//     fall back to the highest-coverage `teaches` (then any role) in the pool — the
+//     deterministic backstop for a dropped/invalid handle.
 //   - Alternates: every other candidate of the lesson's concepts, coverage-desc,
 //     deduped — the frozen runners-up (ROADMAP: alternates are a byproduct).
 //   - Ordering: lesson order is DERIVED from the prereq DAG (topoSort), not trusted
@@ -18,7 +21,7 @@
 //     teaches. Composer order only breaks ties within a layer.
 //
 // Budget trimming is NOT here — that's plan.ts, run by the builder over these
-// validated lessons.
+// validated lessons (and it re-applies the same closure rule to the trim).
 
 import { ConceptResourceRole } from '@prisma/client';
 import { topoSort, type OrderEdge } from '@/lib/agents/map/order';
@@ -72,12 +75,49 @@ export function validateComposition(args: {
       warnings.push(`refused to prune spine concept '${slug}' (kept to stay spine-complete)`);
     }
   }
-  const keptSlugs = concepts.map((c) => c.slug).filter((s) => !pruned.has(s));
 
-  // --- assign each kept concept to exactly one lesson group ---------------
-  // Honor the composer's groupings (merges), dropping references to pruned/unknown
-  // concepts and ignoring duplicates; then sweep any kept concept the composer
-  // omitted into its own single-concept lesson so nothing is silently lost.
+  // --- inclusion closure -------------------------------------------------
+  // Seeds: every spine concept (always taught) + every concept the composer put
+  // in a lesson. Then close over non-pruned prerequisites so nothing included is
+  // left depending on an excluded concept.
+  const prereqsOf = new Map<string, string[]>();
+  for (const c of concepts) prereqsOf.set(c.slug, []);
+  for (const e of edges) {
+    if (conceptBySlug.has(e.fromSlug) && conceptBySlug.has(e.toSlug)) {
+      prereqsOf.get(e.toSlug)!.push(e.fromSlug);
+    }
+  }
+
+  const composerSlugs = new Set<string>();
+  for (const l of composition.lessons) {
+    for (const s of l.conceptSlugs) {
+      if (conceptBySlug.has(s) && !pruned.has(s)) composerSlugs.add(s);
+    }
+  }
+  const seeds = [
+    ...concepts.filter((c) => c.membership === 'spine' && !pruned.has(c.slug)).map((c) => c.slug),
+    ...composerSlugs,
+  ];
+  const included = new Set<string>();
+  const stack = [...seeds];
+  while (stack.length > 0) {
+    const s = stack.pop()!;
+    if (included.has(s) || pruned.has(s) || !conceptBySlug.has(s)) continue;
+    included.add(s);
+    for (const p of prereqsOf.get(s) ?? []) if (!included.has(p) && !pruned.has(p)) stack.push(p);
+  }
+  // Frontier the composer excluded that got pulled back as a prerequisite — note it.
+  for (const s of included) {
+    if (!composerSlugs.has(s) && conceptBySlug.get(s)!.membership === 'frontier') {
+      warnings.push(`frontier concept '${s}' re-included as a prerequisite of an included concept`);
+    }
+  }
+
+  // --- assign each included concept to exactly one lesson ----------------
+  // Honor the composer's groupings (merges), dropping references to pruned/unknown/
+  // excluded concepts and ignoring duplicates; then sweep any included concept the
+  // composer omitted (a forgotten spine, or a closure-forced frontier) into its own
+  // single-concept lesson so nothing included is silently lost.
   const assigned = new Set<string>();
   type Group = {
     conceptSlugs: string[];
@@ -89,10 +129,8 @@ export function validateComposition(args: {
   const groups: Group[] = [];
 
   for (const l of composition.lessons) {
-    const slugs = l.conceptSlugs.filter(
-      (s) => conceptBySlug.has(s) && !pruned.has(s) && !assigned.has(s),
-    );
-    if (slugs.length === 0) continue; // wholly pruned/duplicate/unknown lesson
+    const slugs = l.conceptSlugs.filter((s) => included.has(s) && !assigned.has(s));
+    if (slugs.length === 0) continue; // wholly excluded/duplicate/unknown lesson
     slugs.forEach((s) => assigned.add(s));
     groups.push({
       conceptSlugs: slugs,
@@ -103,12 +141,12 @@ export function validateComposition(args: {
     });
   }
 
-  for (const slug of keptSlugs) {
-    if (assigned.has(slug)) continue;
-    const c = conceptBySlug.get(slug)!;
-    warnings.push(`composer omitted concept '${slug}'; synthesized a lesson for it`);
+  for (const c of concepts) {
+    if (!included.has(c.slug) || assigned.has(c.slug)) continue;
+    assigned.add(c.slug);
+    warnings.push(`composer omitted included concept '${c.slug}'; synthesized a lesson for it`);
     groups.push({
-      conceptSlugs: [slug],
+      conceptSlugs: [c.slug],
       title: c.title,
       summary: `Learn ${c.title}.`,
       masteryRelevant: false,
@@ -153,10 +191,11 @@ export function validateComposition(args: {
   });
 
   // --- order lessons by the DAG, not by the model ------------------------
+  const includedSlugs = [...included];
   const rank = new Map<string, number>();
   topoSort(
-    keptSlugs.map((slug) => ({ slug })),
-    edges.filter((e) => !pruned.has(e.fromSlug) && !pruned.has(e.toSlug)),
+    includedSlugs.map((slug) => ({ slug })),
+    edges.filter((e) => included.has(e.fromSlug) && included.has(e.toSlug)),
   ).forEach((slug, i) => rank.set(slug, i));
   // A lesson's position = the latest topo rank among its concepts (so a merged
   // lesson follows every prerequisite of every concept it teaches). Ties keep the
