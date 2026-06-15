@@ -11,21 +11,24 @@
 //     frontier→spine edges (possible via manual map edits) and frontier→frontier
 //     prereq chains: a load-bearing frontier is never silently excluded. Pruning is
 //     the one legal way to break a prereq (the learner already knows it).
-//   - Primary selection: each lesson's primary must be a real `teaches` candidate of
-//     one of its concepts. The composer's pick is honored when valid; otherwise we
-//     fall back to the highest-coverage `teaches` (then any role) in the pool — the
-//     deterministic backstop for a dropped/invalid handle.
-//   - Alternates: every other candidate of the lesson's concepts, coverage-desc,
-//     deduped — the frozen runners-up (ROADMAP: alternates are a byproduct).
+//   - Resource grading (2.5e-7b): the composer grades each lesson's candidates into
+//     a ranked MANDATORY complementary core + an OPTIONAL pool. Here we keep only the
+//     ids that are real candidates of the lesson's (surviving) concepts, dedupe, and
+//     guarantee ≥1 mandatory — falling back to the highest-coverage `teaches` (then
+//     any role) when the composer's core is empty/invalid. Every remaining pool
+//     candidate is frozen into `optional` (the substitute/invalidation pool), so no
+//     runner-up is lost. Depth (how many mandatory become primaries) + budget are the
+//     allocator's job (allocate.ts), not this module's.
 //   - Ordering: lesson order is DERIVED from the prereq DAG (topoSort), not trusted
 //     from the model — a lesson comes after every prerequisite of every concept it
 //     teaches. Composer order only breaks ties within a layer.
 //
-// Budget trimming is NOT here — that's plan.ts, run by the builder over these
-// validated lessons (and it re-applies the same closure rule to the trim).
+// Budget trimming + depth allocation are NOT here — that's allocate.ts, run by the
+// builder over these validated lessons (closure-aware breadth at floor cost).
 
 import { ConceptResourceRole } from '@prisma/client';
 import { topoSort, type OrderEdge } from '@/lib/agents/map/order';
+import type { TimeWeight } from '@/lib/agents/track/allocate';
 import type {
   ComposerResult,
   ComposerInputConcept,
@@ -34,16 +37,19 @@ import type {
 
 export type ValidatedLesson = {
   conceptSlugs: string[];
-  primaryResourceId: string;
-  // Frozen runners-up (every non-primary candidate of the lesson's concepts).
-  alternateResourceIds: string[];
+  // Coarse time-priority bucket, carried through from the composer (allocator input).
+  timeWeight: TimeWeight;
+  // Ranked mandatory complementary core (≥1) — the must-have resources, best first.
+  mandatoryResourceIds: string[];
+  // Frozen optional/substitute pool: composer's graded optionals first, then every
+  // remaining candidate of the lesson's concepts (coverage-desc), deduped.
+  optionalResourceIds: string[];
   title: string;
   summary: string;
   // A lesson is frontier only if ALL its concepts are frontier; any spine concept
   // makes it spine (never trimmed for budget).
   isFrontier: boolean;
   masteryRelevant: boolean;
-  estMinutes: number;
 };
 
 export type ValidationOutput = {
@@ -123,7 +129,10 @@ export function validateComposition(args: {
     title: string;
     summary: string;
     masteryRelevant: boolean;
-    primaryResourceId: string | null;
+    timeWeight: TimeWeight;
+    // The composer's graded lists ([] for a synthesized lesson → fallback resolves).
+    mandatoryResourceIds: string[];
+    optionalResourceIds: string[];
   };
   const groups: Group[] = [];
 
@@ -136,7 +145,9 @@ export function validateComposition(args: {
       title: l.title,
       summary: l.summary,
       masteryRelevant: l.masteryRelevant,
-      primaryResourceId: l.primaryResourceId,
+      timeWeight: l.timeWeight,
+      mandatoryResourceIds: l.mandatoryResourceIds,
+      optionalResourceIds: l.optionalResourceIds,
     });
   }
 
@@ -149,7 +160,9 @@ export function validateComposition(args: {
       title: c.title,
       summary: `Learn ${c.title}.`,
       masteryRelevant: false,
-      primaryResourceId: null,
+      timeWeight: 'normal',
+      mandatoryResourceIds: [],
+      optionalResourceIds: [],
     });
   }
 
@@ -159,35 +172,22 @@ export function validateComposition(args: {
     );
   }
 
-  // --- resolve primary + alternates per group ----------------------------
+  // --- resolve mandatory core + optional pool per group ------------------
   const lessonsUnordered = groups.map((g) => {
     const pool = poolFor(g.conceptSlugs, conceptBySlug);
-    const primary = choosePrimary(g.primaryResourceId, pool);
-    if (!primary) {
-      // spine_ready guarantees a teaches per spine concept, so this implies a
-      // frontier (or thin) concept with zero candidates — surface it loudly.
-      throw new CompositionError(
-        `No usable resource for lesson [${g.conceptSlugs.join(', ')}] — cannot pick a primary.`,
-      );
-    }
-    if (g.primaryResourceId && g.primaryResourceId !== primary.resourceId) {
-      warnings.push(
-        `lesson [${g.conceptSlugs.join(', ')}]: composer primary invalid/absent, fell back to top candidate`,
-      );
-    }
-    const alternateResourceIds = dedupeAlternates(pool, primary.resourceId);
+    const { mandatoryResourceIds, optionalResourceIds } = resolveResources(g, pool, warnings);
     const isFrontier = g.conceptSlugs.every(
       (s) => conceptBySlug.get(s)!.membership === 'frontier',
     );
     return {
       conceptSlugs: g.conceptSlugs,
-      primaryResourceId: primary.resourceId,
-      alternateResourceIds,
+      timeWeight: g.timeWeight,
+      mandatoryResourceIds,
+      optionalResourceIds,
       title: g.title,
       summary: g.summary,
       isFrontier,
       masteryRelevant: isFrontier ? g.masteryRelevant : false,
-      estMinutes: primary.durationMin,
     };
   });
 
@@ -221,33 +221,66 @@ function poolFor(
   return conceptSlugs.flatMap((s) => conceptBySlug.get(s)?.candidates ?? []);
 }
 
-// Honor the composer's primary when it's a valid `teaches` in the pool; else the
-// highest-coverage `teaches`; else the highest-coverage candidate of any role.
-function choosePrimary(
-  composerPick: string | null,
+// Turn a group's composer-graded lists into validated mandatory + optional id lists:
+//   - mandatory = the composer's core, kept only where it's a real pool candidate,
+//     deduped. Empty/all-invalid → fall back to one top candidate (≥1 guarantee).
+//   - optional  = the composer's optionals (real, non-mandatory), then EVERY other
+//     pool candidate (coverage-desc) — so all runners-up stay frozen as substitutes.
+function resolveResources(
+  g: { conceptSlugs: string[]; mandatoryResourceIds: string[]; optionalResourceIds: string[] },
   pool: ComposerCandidate[],
-): ComposerCandidate | null {
+  warnings: string[],
+): { mandatoryResourceIds: string[]; optionalResourceIds: string[] } {
+  const inPool = new Set(pool.map((c) => c.resourceId));
+  const dedupe = (ids: string[], exclude: Set<string> = new Set()): string[] => {
+    const seen = new Set(exclude);
+    const out: string[] = [];
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
+    }
+    return out;
+  };
+
+  let mandatory = dedupe(g.mandatoryResourceIds.filter((id) => inPool.has(id)));
+  if (mandatory.length === 0) {
+    const fb = chooseFallback(pool);
+    if (!fb) {
+      // spine_ready guarantees a teaches per spine concept, so this implies a
+      // frontier (or thin) concept with zero candidates — surface it loudly.
+      throw new CompositionError(
+        `No usable resource for lesson [${g.conceptSlugs.join(', ')}] — cannot pick a primary.`,
+      );
+    }
+    mandatory = [fb.resourceId];
+    // Only a real fallback (composer DID grade a core, but none survived) is worth a
+    // warning; a synthesized lesson's empty core is already noted upstream.
+    if (g.mandatoryResourceIds.length > 0) {
+      warnings.push(
+        `lesson [${g.conceptSlugs.join(', ')}]: composer mandatory invalid/absent, fell back to top candidate`,
+      );
+    }
+  }
+
+  const mandatorySet = new Set(mandatory);
+  const optional = dedupe(g.optionalResourceIds.filter((id) => inPool.has(id)), mandatorySet);
+  // Freeze every remaining candidate as a substitute, highest coverage first.
+  const taken = new Set([...mandatory, ...optional]);
+  for (const cand of [...pool].sort((a, b) => b.coverageScore - a.coverageScore)) {
+    if (taken.has(cand.resourceId)) continue;
+    taken.add(cand.resourceId);
+    optional.push(cand.resourceId);
+  }
+  return { mandatoryResourceIds: mandatory, optionalResourceIds: optional };
+}
+
+// Highest-coverage `teaches`; else the highest-coverage candidate of any role.
+function chooseFallback(pool: ComposerCandidate[]): ComposerCandidate | null {
   if (pool.length === 0) return null;
   const teaches = pool
     .filter((c) => c.role === ConceptResourceRole.teaches)
     .sort((a, b) => b.coverageScore - a.coverageScore);
-  if (composerPick) {
-    const picked = teaches.find((c) => c.resourceId === composerPick);
-    if (picked) return picked;
-  }
   if (teaches.length > 0) return teaches[0];
   return [...pool].sort((a, b) => b.coverageScore - a.coverageScore)[0];
-}
-
-// Every non-primary candidate, coverage-desc, deduped by resourceId (a resource
-// can be a candidate of two merged concepts).
-function dedupeAlternates(pool: ComposerCandidate[], primaryId: string): string[] {
-  const seen = new Set<string>([primaryId]);
-  const out: string[] = [];
-  for (const c of [...pool].sort((a, b) => b.coverageScore - a.coverageScore)) {
-    if (seen.has(c.resourceId)) continue;
-    seen.add(c.resourceId);
-    out.push(c.resourceId);
-  }
-  return out;
 }

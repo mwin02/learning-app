@@ -33,7 +33,8 @@ import {
   validateComposition,
   type ValidatedLesson,
 } from '@/lib/agents/track/validate-composition';
-import { trimToBudget, lessonPrereqKeys, budgetMinutesFor } from '@/lib/agents/track/plan';
+import { lessonPrereqKeys, budgetMinutesFor } from '@/lib/agents/track/plan';
+import { allocate, type AllocatorLesson } from '@/lib/agents/track/allocate';
 import { thickenSpine } from '@/lib/agents/track/thicken-seam';
 import { TRACK_MAX_THICKEN_ATTEMPTS } from '@/lib/config';
 import type { OnTrace } from '@/lib/agents/agent-trace';
@@ -56,9 +57,13 @@ export type BuildTrackResult = {
   status: TrackStatus;
   lessonCount: number;
   // Diagnostics — a Track can be `ready` yet weak along either axis (ROADMAP 2.5e):
-  // budgetWeak = couldn't fit the target-mastery depth in the time budget;
+  // budgetWeak = couldn't fit the breadth (mastery-relevant frontier dropped, or the
+  // required spine floor alone exceeds budget);
+  // depthConstrained = a kept lesson couldn't fit its full mandatory core (the budget
+  // bought less depth than the composer judged ideal);
   // underResourced = concepts the composer judged thin (thickener couldn't help yet).
   budgetWeak: boolean;
+  depthConstrained: boolean;
   underResourced: string[];
   warnings: string[];
 };
@@ -110,10 +115,12 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
     let composition: ComposerResult;
     let validatedLessons: ValidatedLesson[];
     let edges: OrderEdge[];
+    let concepts: ComposerInputConcept[];
     let warnings: string[];
     for (let attempt = 0; ; attempt++) {
       const loaded = await loadMap(pathId);
       edges = loaded.edges;
+      concepts = loaded.concepts;
       composition = await composeTrack({
         topic: path.topic,
         concepts: loaded.concepts,
@@ -138,57 +145,67 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
       if (!thicken.thickened) break; // best-effort weaker Track
     }
 
-    // --- budget trim (closure-aware; axis-2 weakness) ----------------------
-    const keyed = validatedLessons.map((lesson, i) => ({ key: `L${i}`, lesson }));
-    const byKey = new Map(keyed.map((k) => [k.key, k.lesson]));
+    // --- allocate: breadth (closure-aware budget trim) + depth -------------
+    // Join real durations from the loaded candidates so the allocator can size
+    // slices; map each validated lesson to the allocator's input contract.
+    const durationById = new Map<string, number>();
+    for (const cpt of concepts) for (const cand of cpt.candidates) durationById.set(cand.resourceId, cand.durationMin);
+    const durOf = (id: string) => durationById.get(id) ?? 0;
+
+    const keyOf = (i: number) => `L${i}`;
+    const byKey = new Map(validatedLessons.map((lesson, i) => [keyOf(i), lesson]));
+    const allocLessons: AllocatorLesson[] = validatedLessons.map((l, i) => ({
+      key: keyOf(i),
+      isFrontier: l.isFrontier,
+      masteryRelevant: l.masteryRelevant,
+      timeWeight: l.timeWeight,
+      mandatory: l.mandatoryResourceIds.map((id) => ({ resourceId: id, durationMin: durOf(id) })),
+      optional: l.optionalResourceIds.map((id) => ({ resourceId: id, durationMin: durOf(id) })),
+    }));
     const prereqKeys = lessonPrereqKeys(
-      keyed.map((k) => ({ key: k.key, conceptSlugs: k.lesson.conceptSlugs })),
+      validatedLessons.map((l, i) => ({ key: keyOf(i), conceptSlugs: l.conceptSlugs })),
       edges,
     );
-    const plan = trimToBudget(
-      keyed.map((k) => ({
-        key: k.key,
-        isFrontier: k.lesson.isFrontier,
-        masteryRelevant: k.lesson.masteryRelevant,
-        estMinutes: k.lesson.estMinutes,
-      })),
-      budgetMinutes,
-      prereqKeys,
-    );
-    const keptLessons = plan.kept.map((p) => byKey.get(p.key)!);
+    const allocation = allocate({ lessons: allocLessons, budgetMinutes, prereqKeys });
 
-    if (keptLessons.length === 0) {
+    if (allocation.kept.length === 0) {
       throw new TrackBuildError(`Track build for Path '${pathId}' produced no lessons.`);
     }
 
     // --- persist + freeze (one transaction) --------------------------------
     await prisma.$transaction(async (tx) => {
-      for (let i = 0; i < keptLessons.length; i++) {
-        const l = keptLessons[i];
+      for (let i = 0; i < allocation.kept.length; i++) {
+        const a = allocation.kept[i];
+        const v = byKey.get(a.key)!;
         const lesson = await tx.lesson.create({
           data: {
             trackId: track.id,
             orderInTrack: i + 1,
-            title: l.title,
-            summary: l.summary,
-            conceptsTaught: l.conceptSlugs,
-            estMinutes: l.estMinutes,
+            title: v.title,
+            summary: v.summary,
+            conceptsTaught: v.conceptSlugs,
+            estMinutes: a.estMinutes,
           },
           select: { id: true },
         });
+        // One ordered sequence: the mandatory core (multiple role=primary) first,
+        // then the frozen optional/alternate substitute pool.
+        let order = 0;
         await tx.lessonResource.createMany({
           data: [
-            {
+            ...a.primaries.map((p) => ({
               lessonId: lesson.id,
-              resourceId: l.primaryResourceId,
+              resourceId: p.resourceId,
               role: LessonResourceRole.primary,
               deliveryMode: DeliveryMode.newtab,
-            },
-            ...l.alternateResourceIds.map((resourceId) => ({
+              orderInLesson: ++order,
+            })),
+            ...a.alternates.map((alt) => ({
               lessonId: lesson.id,
-              resourceId,
+              resourceId: alt.resourceId,
               role: LessonResourceRole.alternate,
               deliveryMode: DeliveryMode.newtab,
+              orderInLesson: ++order,
             })),
           ],
         });
@@ -212,22 +229,31 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
     onTrace({
       kind: 'stage',
       label: 'track build done',
-      detail: { trackId: track.id, lessons: keptLessons.length, budgetWeak: plan.budgetWeak, underResourced },
+      detail: {
+        trackId: track.id,
+        lessons: allocation.kept.length,
+        budgetWeak: allocation.budgetWeak,
+        depthConstrained: allocation.depthConstrained,
+        underResourced,
+      },
     });
     console.log('[track-build-track] built', {
       pathId,
       trackId: track.id,
-      lessons: keptLessons.length,
-      dropped: plan.dropped.length,
-      budgetWeak: plan.budgetWeak,
+      lessons: allocation.kept.length,
+      dropped: allocation.dropped.length,
+      totalMinutes: allocation.totalMinutes,
+      budgetWeak: allocation.budgetWeak,
+      depthConstrained: allocation.depthConstrained,
       underResourced,
     });
 
     return {
       trackId: track.id,
       status: TrackStatus.ready,
-      lessonCount: keptLessons.length,
-      budgetWeak: plan.budgetWeak,
+      lessonCount: allocation.kept.length,
+      budgetWeak: allocation.budgetWeak,
+      depthConstrained: allocation.depthConstrained,
       underResourced,
       warnings,
     };
