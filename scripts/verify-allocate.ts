@@ -92,6 +92,27 @@ console.log('allocate — breadth: frontier dropped when floor unaffordable; spi
   check('budgetWeak', r.budgetWeak === true);
 }
 
+console.log('allocate — breadth priority: a mastery-relevant frontier is kept before a less-relevant one');
+{
+  // Spine floor 10; budget 22 → cap 24.2, room for exactly ONE 10-floor frontier
+  // (20 ≤ 24.2), not both (30). The less-relevant frontier comes FIRST in teaching
+  // order, so input order alone would keep it — mastery-relevance must override that.
+  const lessons = [
+    L('S', { mandatory: [c('s', 10)] }),
+    L('Firrel', { isFrontier: true, masteryRelevant: false, mandatory: [c('fi', 10)] }),
+    L('Frel', { isFrontier: true, masteryRelevant: true, mandatory: [c('fr', 10)] }),
+  ];
+  const r = allocate({ lessons, budgetMinutes: 22 });
+  check(
+    'relevant frontier kept over the earlier less-relevant one',
+    r.kept.some((l) => l.key === 'Frel') && !r.kept.some((l) => l.key === 'Firrel'),
+    r.kept.map((l) => l.key),
+  );
+  check('the dropped frontier is the non-relevant one', r.droppedMasteryRelevant === false);
+  // Final track order is still teaching order (S before any frontier), not relevance.
+  check('kept stays in teaching order', JSON.stringify(r.kept.map((l) => l.key)) === '["S","Frel"]', r.kept.map((l) => l.key));
+}
+
 console.log('allocate — closure: a kept frontier never orphans its frontier prereq');
 {
   // order Fdep before Fbase; Fdep depends on Fbase. Fdep's own floor (5) fits the

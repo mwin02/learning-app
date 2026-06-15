@@ -8,7 +8,9 @@
 //     plan.ts, but costed at each lesson's FLOOR (its first mandatory resource),
 //     since depth beyond that is bought from leftover budget. Spine + the prereq-
 //     closure of spine is the required floor and is never trimmed; optional frontier
-//     competes in composer order while its floor fits.
+//     competes in MASTERY-RELEVANCE order (the composer's `masteryRelevant` judgment,
+//     ties broken by teaching order) while its floor fits — so a tight budget keeps
+//     the mastery-critical frontier before the peripheral, as the composer promises.
 //   - DEPTH: how many of each kept lesson's mandatory core become PRIMARIES — a
 //     heavier `timeWeight` or a bigger budget buys more of the core per concept.
 //
@@ -150,8 +152,18 @@ export function allocate(args: {
 
   const keep = new Set(required);
   let running = requiredFloor;
-  for (const n of norm) {
-    if (!n.l.isFrontier || keep.has(n.l.key)) continue;
+  // Optional frontier competes for the leftover budget in mastery-relevance order
+  // (the composer's `masteryRelevant` judgment), ties broken by teaching order — so a
+  // tight budget keeps the mastery-critical frontier before the peripheral, honoring
+  // the contract the composer prompt states. Closure still pulls in each kept lesson's
+  // own frontier prerequisites regardless of their relevance (a load-bearing prereq is
+  // never orphaned). With no budget (cap === null) order is moot — everything is kept.
+  const frontierByPriority = norm
+    .map((n, idx) => ({ n, idx }))
+    .filter(({ n }) => n.l.isFrontier && !keep.has(n.l.key))
+    .sort((a, b) => Number(b.n.l.masteryRelevant) - Number(a.n.l.masteryRelevant) || a.idx - b.idx);
+  for (const { n } of frontierByPriority) {
+    if (keep.has(n.l.key)) continue; // already pulled in as another lesson's prereq
     const needed = [...closure([n.l.key])].filter((k) => !keep.has(k));
     const addCost = needed.reduce((s, k) => s + floorOf(k), 0);
     if (cap === null || running + addCost <= cap) {

@@ -8,7 +8,8 @@
 //   - prunes concepts the learner already knows (from free-text priorKnowledge),
 //   - decides how deep into the frontier the target mastery warrants, ranking
 //     frontier lessons by mastery-relevance (the deterministic budget trim in
-//     plan.ts drops the trailing, least-relevant ones — arithmetic stays in code),
+//     allocate.ts drops the least mastery-relevant ones first — arithmetic stays
+//     in code),
 //   - picks each lesson's PRIMARY resource, difficulty-matched to the target,
 //   - optionally merges tightly-coupled concepts into one lesson,
 //   - writes lesson + track framing (titles/summaries),
