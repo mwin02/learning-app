@@ -10,7 +10,7 @@
 // the DAG itself (that would make it a second, unvalidated author) and it never
 // blocks spine_ready — teachability (the resource gate, readiness.ts) remains the
 // only hard readiness invariant. A thin topic the critic wishes were richer still
-// ships; 2.5j thickens it later.
+// ships; 2.5f thickens it later.
 //
 // Same call shape as spine-author.ts: a no-tools structured Output.object call, to
 // sidestep the Gemini "tools + Output.object yields nothing" limitation.

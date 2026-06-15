@@ -14,7 +14,7 @@
 //   (lock-free) author the spine + attach candidates — the slow part.
 //   tx2 (populate, fast): write concepts/edges/links, compute readiness, set status.
 // A crash between tx1 and tx2 leaves a `building` Path with no concepts; the
-// stale-`building` reclaim is deferred to 2.5f (here, any existing Path is
+// stale-`building` reclaim is deferred to 2.5g (here, any existing Path is
 // treated as "exists, skip"). The seed (2.5d-4) force-rebuilds by deleting first.
 
 import { ConceptMembership, Difficulty, PathStatus } from '@prisma/client';
@@ -63,7 +63,7 @@ export async function ensurePathMap(args: {
     if (existing) return { path: existing, created: false as const };
     const path = await tx.path.create({
       // title/summary/difficulty are vestigial user-facing columns that retire
-      // with PathItem at the 2.5f cutover; a concept map has no single difficulty.
+      // with PathItem at the 2.5g cutover; a concept map has no single difficulty.
       // Required (NOT NULL) until then, so set map-appropriate placeholders.
       data: {
         topic,

@@ -214,7 +214,7 @@ async function applyEdit(input: MapEditInput): Promise<EditSuccess | { error: Re
       // Enforce pickability (active + atomic) so the spine-ready gate can't go
       // green on a resource the Track builder couldn't actually pick. Mirrors the
       // attach-candidates invariant. Deprecation that LATER un-pickables a linked
-      // resource is the reject pipeline's reach-in (2.5f/2.5j), not this guard.
+      // resource is the reject pipeline's reach-in (2.5g/2.5f), not this guard.
       const resource = await prisma.resource.findUnique({
         where: { id: input.resourceId },
         select: { status: true, decompositionStatus: true },

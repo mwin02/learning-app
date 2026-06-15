@@ -127,7 +127,7 @@ export const SPINE_MAX_REVIEW_REPAIRS = 1;
 // Phase 2.5d-2 (candidate attachment): per spine concept, how many pickable
 // library resources to pull as candidates before the LLM judge scores them.
 // Small — the Track builder only needs a primary + a few frozen alternates per
-// concept, and each candidate costs judge tokens. The async thickener (2.5j)
+// concept, and each candidate costs judge tokens. The async thickener (2.5f)
 // widens this later; the synchronous spine build stays lean.
 export const MAP_CANDIDATES_PER_CONCEPT = 6;
 
@@ -141,7 +141,7 @@ export const MAP_JUDGE_CONCURRENCY = 4;
 // becomes `spine_ready` only when EVERY spine concept has such a candidate —
 // the gate is honest about "can we actually teach every backbone concept". A
 // concept with only `uses` candidates, or only weak `teaches`, is a spine hole;
-// the Path stays `building` and later blocks (thickener 2.5j, edit surface) fill
+// the Path stays `building` and later blocks (thickener 2.5f, edit surface) fill
 // it. Modest so we're not brittle against a thin library.
 export const MAP_SPINE_MIN_PRIMARY_COVERAGE = 0.5;
 
@@ -154,6 +154,6 @@ export const MAP_RESOURCE_PICKER_LIMIT = 20;
 // thickener and rebuild within one build when the composer judges resources
 // insufficient for the target mastery. Each attempt = one extra compose call, so
 // this bounds cost/latency on the per-request hot path. 1 today (the thickener is
-// a 2.5j stub that always reports "couldn't"), so the builder falls through to a
+// a 2.5f stub that always reports "couldn't"), so the builder falls through to a
 // best-effort weaker Track. Raise once the real thickener can actually fill holes.
 export const TRACK_MAX_THICKEN_ATTEMPTS = 1;

@@ -1,9 +1,9 @@
 // Phase 2.5e-3: the spine-thickener seam — a real interface with a stubbed body
-// until 2.5j builds the thickener.
+// until 2.5f builds the thickener.
 //
 // When the composer judges a concept's resources insufficient for the target
 // mastery (resourceSufficiency.enough === false), the Track builder asks the
-// thickener to source more — then rebuilds. 2.5j will fill this in with the
+// thickener to source more — then rebuilds. 2.5f will fill this in with the
 // targeted per-concept discovery → validate/upsert/embed → re-judge → re-attach →
 // recompute-readiness loop (the same machinery as spine-hole remediation; only the
 // trigger differs). Until then this no-ops and reports it couldn't, so the builder
@@ -31,5 +31,5 @@ export async function thickenSpine(req: ThickenRequest): Promise<ThickenResult> 
     pathId: req.pathId,
     underResourced: req.underResourced.map((u) => u.conceptSlug),
   });
-  return { thickened: false, reason: 'spine thickener not implemented (2.5j)' };
+  return { thickened: false, reason: 'spine thickener not implemented (2.5f)' };
 }
