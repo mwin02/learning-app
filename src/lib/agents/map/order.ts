@@ -17,14 +17,25 @@ export type OrderEdge = { fromSlug: string; toSlug: string };
 
 // Linearize the DAG into a single teaching order: every concept appears after
 // all of its prerequisites. Kahn's algorithm with a deterministic tie-break —
-// among concepts whose prerequisites are all satisfied, the lexicographically
-// smallest slug goes next — so the same map always yields the same order (a
-// requirement for reproducible, immutable Track snapshots).
+// among concepts whose prerequisites are all satisfied, the one with the smaller
+// `priority` rank goes next, falling back to the lexicographically smallest slug.
+// So the same map + priority always yields the same order (a requirement for
+// reproducible, immutable Track snapshots).
+//
+// `priority` lets a caller carry an *intended* order (e.g. the Track composer's
+// emission order) into the otherwise-free choices the DAG leaves open, without
+// ever violating a prerequisite — the DAG still wins, priority only breaks ties.
+// Omit it for the original pure-lexical behavior (the map inspector's layering
+// relies on that, and so does the pre-composer concept ordering).
 //
 // Concepts with no edge to them and no edge from them still appear (isolated
 // nodes are valid spine concepts). If a cycle slips through, the nodes trapped
-// in it are appended in slug order after the acyclic prefix rather than dropped.
-export function topoSort(concepts: OrderConcept[], edges: OrderEdge[]): string[] {
+// in it are appended in tie-break order after the acyclic prefix rather than dropped.
+export function topoSort(
+  concepts: OrderConcept[],
+  edges: OrderEdge[],
+  priority?: ReadonlyMap<string, number>,
+): string[] {
   const slugs = concepts.map((c) => c.slug);
   const slugSet = new Set(slugs);
   const indegree = new Map<string, number>();
@@ -41,8 +52,18 @@ export function topoSort(concepts: OrderConcept[], edges: OrderEdge[]): string[]
     indegree.set(e.toSlug, indegree.get(e.toSlug)! + 1);
   }
 
-  // Ready = indegree 0, kept slug-sorted so the smallest is always taken next.
-  const ready = slugs.filter((s) => indegree.get(s) === 0).sort();
+  // Lower priority rank first; an unranked slug sorts after every ranked one;
+  // ties (including no priority at all) fall back to lexical slug order.
+  const RANK_LAST = Number.MAX_SAFE_INTEGER;
+  const compare = (a: string, b: string): number => {
+    const pa = priority?.get(a) ?? RANK_LAST;
+    const pb = priority?.get(b) ?? RANK_LAST;
+    if (pa !== pb) return pa - pb;
+    return a < b ? -1 : a > b ? 1 : 0;
+  };
+
+  // Ready = indegree 0, kept tie-break-sorted so the next one is always at the front.
+  const ready = slugs.filter((s) => indegree.get(s) === 0).sort(compare);
   const order: string[] = [];
   while (ready.length > 0) {
     const node = ready.shift()!;
@@ -50,15 +71,15 @@ export function topoSort(concepts: OrderConcept[], edges: OrderEdge[]): string[]
     for (const child of adjacency.get(node)!) {
       const d = indegree.get(child)! - 1;
       indegree.set(child, d);
-      if (d === 0) insertSorted(ready, child);
+      if (d === 0) insertSorted(ready, child, compare);
     }
   }
 
   // Defensive: any concept never reaching indegree 0 is in a cycle. Append the
-  // remainder in slug order so the caller still gets every concept.
+  // remainder in tie-break order so the caller still gets every concept.
   if (order.length < slugs.length) {
     const placed = new Set(order);
-    for (const s of slugs.filter((s) => !placed.has(s)).sort()) order.push(s);
+    for (const s of slugs.filter((s) => !placed.has(s)).sort(compare)) order.push(s);
   }
   return order;
 }
@@ -93,14 +114,19 @@ export function layerBySlug(
   return layer;
 }
 
-// Insert into an already slug-sorted array keeping it sorted (binary search).
-// Keeps Kahn's ready set ordered without re-sorting the whole array each step.
-function insertSorted(sorted: string[], value: string): void {
+// Insert into an array already sorted by `compare`, keeping it sorted (binary
+// search). Keeps Kahn's ready set ordered without re-sorting the whole array each
+// step. With no priority, `compare` is lexical, matching the original behavior.
+function insertSorted(
+  sorted: string[],
+  value: string,
+  compare: (a: string, b: string) => number,
+): void {
   let lo = 0;
   let hi = sorted.length;
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
-    if (sorted[mid] < value) lo = mid + 1;
+    if (compare(sorted[mid], value) < 0) lo = mid + 1;
     else hi = mid;
   }
   sorted.splice(lo, 0, value);

@@ -191,12 +191,26 @@ export function validateComposition(args: {
     };
   });
 
-  // --- order lessons by the DAG, not by the model ------------------------
+  // --- order lessons by the DAG, then by the composer's intent -----------
+  // The DAG is the hard constraint (a concept always follows its prerequisites);
+  // the composer's emission order only breaks the ties the DAG leaves open. We
+  // derive that intended order from the sequence concepts first appear across the
+  // composer's lessons and feed it to topoSort as the tie-break priority, so a
+  // model slip can never violate a prereq but its pedagogical sequencing of
+  // prereq-free siblings is honored. Unranked slugs (pulled in by closure, not
+  // emitted by the composer) fall back to lexical, last.
+  const composerPriority = new Map<string, number>();
+  for (const l of composition.lessons) {
+    for (const s of l.conceptSlugs) {
+      if (included.has(s) && !composerPriority.has(s)) composerPriority.set(s, composerPriority.size);
+    }
+  }
   const includedSlugs = [...included];
   const rank = new Map<string, number>();
   topoSort(
     includedSlugs.map((slug) => ({ slug })),
     edges.filter((e) => included.has(e.fromSlug) && included.has(e.toSlug)),
+    composerPriority,
   ).forEach((slug, i) => rank.set(slug, i));
   // A lesson's position = the latest topo rank among its concepts (so a merged
   // lesson follows every prerequisite of every concept it teaches). Ties keep the

@@ -37,6 +37,31 @@ check('isolated node present', order.includes('e'));
 check('deterministic across runs', JSON.stringify(topoSort(concepts, edges)) === JSON.stringify(order), order);
 check('deterministic tie-break (a first, then b before c)', order[0] === 'a' && pos.get('b')! < pos.get('c')!, order);
 
+// Priority tie-break (Phase 2.5e order fix): among prereq-free siblings the
+// priority rank wins, but the DAG always wins over priority, and unranked slugs
+// fall back to lexical, last.
+{
+  // Same diamond. Without priority, ties are lexical: b before c.
+  // With priority c<b, the sibling order flips to c before b — but `a` must still
+  // lead (DAG) and `d` must still sink (DAG), regardless of their priority.
+  const prio = new Map([['c', 0], ['b', 1], ['a', 2], ['d', 3]]);
+  const pOrder = topoSort(concepts, edges, prio);
+  const pp = new Map(pOrder.map((s, i) => [s, i]));
+  check('priority breaks sibling ties (c before b)', pp.get('c')! < pp.get('b')!, pOrder);
+  check('DAG still wins over priority (a first despite rank 2)', pOrder[0] === 'a', pOrder);
+  check('DAG still wins over priority (d after both b and c despite rank 3)', pp.get('d')! > pp.get('b')! && pp.get('d')! > pp.get('c')!, pOrder);
+  check('respects every edge under priority', edges.every((e) => pp.get(e.fromSlug)! < pp.get(e.toSlug)!), pOrder);
+  check('deterministic under priority', JSON.stringify(topoSort(concepts, edges, prio)) === JSON.stringify(pOrder), pOrder);
+
+  // Partial priority: only `c` ranked; unranked siblings fall back to lexical, after c.
+  const partial = topoSort(concepts, edges, new Map([['c', 0]]));
+  const ppart = new Map(partial.map((s, i) => [s, i]));
+  check('unranked falls back to lexical, after ranked (c before b)', ppart.get('c')! < ppart.get('b')!, partial);
+
+  // Empty priority map === no priority === pure lexical (back-compat).
+  check('empty priority == lexical default', JSON.stringify(topoSort(concepts, edges, new Map())) === JSON.stringify(order), order);
+}
+
 // Cycle defense: a → b → a should not loop; both still appear.
 const cyc = topoSort([{ slug: 'a' }, { slug: 'b' }], [
   { fromSlug: 'a', toSlug: 'b' },
