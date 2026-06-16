@@ -115,6 +115,15 @@ export const SPINE_MAX_CONCEPTS = 15;
 // author calls = 1 + up to this many. Mirrors CRITIC_MAX_REVISIONS' bounded loop.
 export const SPINE_MAX_REPAIRS = 2;
 
+// Phase 2.5d (spine hardening): max times the semantic reviewer (review-spine.ts)
+// re-runs the author after a structurally-valid spine is judged incomplete (a cold
+// open / missing onboarding root, an assumed-but-absent foundation, an orphan
+// concept, a backbone gap). Separate from SPINE_MAX_REPAIRS so semantic revisions
+// don't starve the structural-repair budget. Bounded at 1: the review is advisory
+// (it never gates spine_ready — the resource gate does), so one revision keeps the
+// extra Pro call cost low and converges in practice.
+export const SPINE_MAX_REVIEW_REPAIRS = 1;
+
 // Phase 2.5d-2 (candidate attachment): per spine concept, how many pickable
 // library resources to pull as candidates before the LLM judge scores them.
 // Small — the Track builder only needs a primary + a few frozen alternates per

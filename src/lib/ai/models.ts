@@ -13,6 +13,7 @@ type AgentName =
   | 'curriculumCritic'
   | 'curriculumFallback'
   | 'mapSpineAuthor'
+  | 'mapSpineReviewer'
   | 'mapCandidateJudge'
   | 'trackComposer'
   | 'tagCanonicalizer'
@@ -86,6 +87,18 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     modelId: 'gemini-2.5-pro',
     temperature: 0.2,
     maxOutputTokens: 32768,
+  },
+  mapSpineReviewer: {
+    // Phase 2.5d (spine hardening): the semantic critic over a structurally-valid
+    // spine — judges completeness, missing foundations, a cold open (onboarding),
+    // and connectivity, emitting advisory findings that drive one bounded author
+    // revision. Pro, same tier + reasoning as the author it critiques: catching a
+    // missing on-ramp or an assumed-but-absent foundation is judgment, not rule
+    // application. Temperature low for stable findings. 16k output: the findings
+    // array is small, but Pro spends budget on internal thinking first.
+    modelId: 'gemini-2.5-pro',
+    temperature: 0.2,
+    maxOutputTokens: 16384,
   },
   mapCandidateJudge: {
     // Phase 2.5d-2: scores a spine concept's candidate resources — assigns each
