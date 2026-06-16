@@ -412,8 +412,9 @@ model Section {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
+  // No separate @@index([trackId]): the composite unique above already provides a
+  // trackId left-prefix index for the sectioner/renderer's trackId-only lookups.
   @@unique([trackId, orderInTrack])
-  @@index([trackId])
 }
 
 // Join row between a Lesson and a Resource. `role` distinguishes the canonical
