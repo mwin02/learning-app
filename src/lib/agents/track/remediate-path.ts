@@ -1,13 +1,19 @@
-// Phase 2.5f-3b: the remediation orchestrator — fills a `building` Path's spine
-// holes so it can reach `spine_ready`, ties together everything 2.5f built.
+// Phase 2.5f-3b/4b: the remediation orchestrator — fills a `building` Path's spine
+// holes so it can reach `spine_ready`, tying together everything 2.5f built.
 //
-//   recomputeReadiness → claim job → per hole:
-//     classifyHole
+//   recomputeReadiness → claim job → BOUNDED LOOP over passes:
+//     per current hole: classifyHole
 //       gap        → sourceForConcept (web search) → judge the sourced rows →
 //                    attach the keepers as ConceptResource links, promoting ONLY
 //                    those we attach from pending_review to active → recompute
-//       conflation → record `needs_split` (the SPLIT action is 2.5f-4); escalate
-//   then: relax remaining gap holes that have any candidate (best-effort primary),
+//       conflation → splitConcept (decompose into finer nodes + re-attach); if the
+//                    author DECLINES (the concept is actually atomic), fall back to
+//                    sourcing it as a gap in the same pass
+//   A split creates finer nodes that become the NEXT pass's holes, so the loop
+//   iterates: a finer node is re-classified and resolved (covered / sourced /
+//   split again) like any other hole. The loop stops on no-holes, a no-progress
+//   pass, or MAX_REMEDIATION_PASSES.
+//   Then: relax remaining holes that have any candidate (best-effort primary),
 //   escalate the truly uncoverable ones, finish the job.
 //
 // Single-flight is the RemediationJob row (2.5f-1). Invoked manually this block;
@@ -21,11 +27,13 @@
 
 import { ConceptResourceRole, PathStatus } from '@prisma/client';
 import { prisma } from '@/lib/db';
+import { MAX_REMEDIATION_PASSES } from '@/lib/config';
 import { recomputeReadiness } from '@/lib/agents/map/recompute-readiness';
 import { judgeCandidates } from '@/lib/agents/map/candidate-judge';
 import type { SearchResult } from '@/lib/agents/tools/search-resources';
 import { sourceForConcept } from '@/lib/agents/tools/web-fallback';
 import { classifyHole, type HoleCandidate } from '@/lib/agents/track/classify-hole';
+import { splitConcept, type SliceEvidence } from '@/lib/agents/track/split-concept';
 import { claimRemediationJob, finishJob } from '@/lib/agents/track/remediation-job';
 
 export type RemediateResult = {
@@ -38,11 +46,15 @@ export type RemediateResult = {
   escalatedConceptSlugs: string[];
 };
 
+// The classifier needs role/coverage/conceptsTaught; the splitter also needs each
+// candidate's title for its slice evidence — so we carry title alongside.
+type HoleEvidenceCandidate = HoleCandidate & { title: string };
+
 type HoleConcept = {
   conceptId: string;
   slug: string;
   title: string;
-  candidates: HoleCandidate[];
+  candidates: HoleEvidenceCandidate[];
 };
 
 export async function remediatePath(
@@ -64,28 +76,46 @@ export async function remediatePath(
   }
 
   try {
-    const { topic, holes } = await loadHoleEvidence(pathId, initial.holes);
+    // --- bounded loop: each pass fixes the current holes; a split adds finer
+    // nodes that become the next pass's holes -------------------------------
+    for (let pass = 0; pass < MAX_REMEDIATION_PASSES; pass++) {
+      const current = await recomputeReadiness(pathId);
+      if (current.holes.length === 0) break;
+      const { topic, holes } = await loadHoleEvidence(pathId, current.holes);
 
-    // --- per-hole: classify → source gaps, defer conflations to split ---------
-    const conflationSlugs: string[] = [];
-    for (const hole of holes) {
-      const cls = classifyHole(hole.candidates);
-      console.log('[remediate] hole', { pathId, concept: hole.slug, kind: cls.kind, reason: cls.reason });
-      if (cls.kind === 'conflation') {
-        // The SPLIT action is 2.5f-4; until then a conflation hole is escalated
-        // as needs_split rather than mis-sourced.
-        conflationSlugs.push(hole.slug);
-        continue;
+      let progress = false;
+      for (const hole of holes) {
+        const cls = classifyHole(hole.candidates);
+        console.log('[remediate] hole', { pathId, pass, concept: hole.slug, kind: cls.kind, reason: cls.reason });
+
+        if (cls.kind === 'conflation') {
+          const split = await splitConcept({
+            pathId,
+            topic,
+            concept: { id: hole.conceptId, slug: hole.slug, title: hole.title },
+            evidence: sliceEvidence(hole),
+          });
+          if (split.split) {
+            progress = true;
+            continue;
+          }
+          // Author declined (concept is actually atomic) → fall through and treat
+          // it as a gap in this same pass.
+        }
+        if (await sourceAndAttach(pathId, topic, hole)) progress = true;
       }
-      await sourceAndAttach(pathId, topic, hole);
+
+      if (!progress) {
+        console.log('[remediate] no progress this pass; stopping loop', { pathId, pass });
+        break;
+      }
     }
 
-    // --- relax / escalate the leftovers ---------------------------------------
+    // --- relax / escalate whatever holes remain -------------------------------
     const after = await recomputeReadiness(pathId);
-    const remaining = after.holes.filter((s) => !conflationSlugs.includes(s));
     const relaxable: string[] = [];
     const uncoverable: string[] = [];
-    for (const slug of remaining) {
+    for (const slug of after.holes) {
       ((await conceptHasCandidate(pathId, slug)) ? relaxable : uncoverable).push(slug);
     }
 
@@ -101,22 +131,20 @@ export async function remediatePath(
       return recomputeReadiness(pathId, tx);
     });
 
-    const escalated = [...conflationSlugs, ...uncoverable];
     const state = final.holes.length === 0 ? 'succeeded' : 'escalated';
-    await finishJob(claim.job.id, { state, relaxedConceptSlugs: relaxable, escalatedConceptSlugs: escalated });
+    await finishJob(claim.job.id, { state, relaxedConceptSlugs: relaxable, escalatedConceptSlugs: uncoverable });
 
-    if (escalated.length > 0) {
+    if (uncoverable.length > 0) {
       // The "page a developer" signal — a structured, greppable record. Real
       // alerting/email is deferred (Phase 3 for email; paging is infra).
       console.error('[remediate] ESCALATION — concepts left uncoverable', {
         pathId,
-        needsSplit: conflationSlugs,
         uncoverable,
         status: final.status,
       });
     }
-    console.log('[remediate] done', { pathId, status: final.status, state, relaxed: relaxable, escalated });
-    return { outcome: state, status: final.status, holes: final.holes, relaxedConceptSlugs: relaxable, escalatedConceptSlugs: escalated };
+    console.log('[remediate] done', { pathId, status: final.status, state, relaxed: relaxable, escalated: uncoverable });
+    return { outcome: state, status: final.status, holes: final.holes, relaxedConceptSlugs: relaxable, escalatedConceptSlugs: uncoverable };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await finishJob(claim.job.id, { state: 'failed', error: message }).catch(() => {});
@@ -128,21 +156,22 @@ export async function remediatePath(
 // Source one gap concept, judge the sourced rows, and attach the keepers —
 // promoting ONLY the rows we attach from pending_review to active (the locked
 // promote-on-attach policy), then recompute readiness, all in one transaction.
-async function sourceAndAttach(pathId: string, topic: string, hole: HoleConcept): Promise<void> {
+// Returns true when it attached at least one candidate (the loop's progress signal).
+async function sourceAndAttach(pathId: string, topic: string, hole: HoleConcept): Promise<boolean> {
   const sourced = await sourceForConcept({ topic, concept: { slug: hole.slug, title: hole.title } });
   if (sourced.insertedIds.length === 0) {
     console.log('[remediate] sourced nothing', { pathId, concept: hole.slug });
-    return;
+    return false;
   }
 
   const rows = await loadAsSearchResults(sourced.insertedIds);
-  if (rows.length === 0) return;
+  if (rows.length === 0) return false;
 
   const judged = await judgeCandidates({ conceptTitle: hole.title, conceptSlug: hole.slug, candidates: rows });
   const kept = judged.filter((j) => j.coverageScore > 0).sort((a, b) => b.coverageScore - a.coverageScore);
   if (kept.length === 0) {
     console.log('[remediate] sourced rows all judged irrelevant', { pathId, concept: hole.slug, sourced: rows.length });
-    return;
+    return false;
   }
 
   const keptIds = kept.map((k) => k.resourceId);
@@ -168,6 +197,16 @@ async function sourceAndAttach(pathId: string, topic: string, hole: HoleConcept)
     attached: kept.length,
     topPrimary: kept[0].role === ConceptResourceRole.teaches ? kept[0].coverageScore : null,
   });
+  return true;
+}
+
+// Slice evidence for the splitter: the hole's `teaches` candidates (title + what
+// each teaches). A conflation hole has ≥2 sub-floor teaches by construction; fall
+// back to all candidates if somehow none are tagged teaches.
+function sliceEvidence(hole: HoleConcept): SliceEvidence[] {
+  const teaches = hole.candidates.filter((c) => c.role === ConceptResourceRole.teaches);
+  const src = teaches.length > 0 ? teaches : hole.candidates;
+  return src.map((c) => ({ title: c.title, conceptsTaught: c.conceptsTaught }));
 }
 
 // Load the Path topic + the hole concepts with their candidate evidence (role,
@@ -185,7 +224,12 @@ async function loadHoleEvidence(
       slug: true,
       title: true,
       resources: {
-        select: { resourceId: true, role: true, coverageScore: true, resource: { select: { conceptsTaught: true } } },
+        select: {
+          resourceId: true,
+          role: true,
+          coverageScore: true,
+          resource: { select: { title: true, conceptsTaught: true } },
+        },
       },
     },
   });
@@ -198,6 +242,7 @@ async function loadHoleEvidence(
       role: r.role,
       coverageScore: r.coverageScore,
       conceptsTaught: r.resource.conceptsTaught,
+      title: r.resource.title,
     })),
   }));
   return { topic: path.topic, holes };
