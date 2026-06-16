@@ -223,6 +223,7 @@ model Path {
   concepts             Concept[]
   tracks               Track[]
   enrollments          EnrolledPath[]
+  remediationJobs      RemediationJob[]
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 
@@ -489,6 +490,12 @@ model Concept {
   slug       String
   title      String
   membership ConceptMembership @default(spine)
+  // Phase 2.5f: set when remediation, unable to source a `teaches` candidate at
+  // or above MAP_SPINE_MIN_PRIMARY_COVERAGE, accepts the best available sub-floor
+  // primary so the learner still gets a (weaker) course. Readiness (2.5f-3) treats
+  // a relaxed concept with any candidate as covered, not a spine hole. Column only
+  // this block; the readiness honoring + the writer land in 2.5f-3.
+  primaryRelaxed Boolean        @default(false)
   // Prereq edges in both directions: `prereqsOut` are edges where this concept
   // is the prerequisite; `prereqsIn` are edges where it is the dependent.
   prereqsOut ConceptPrereq[]   @relation("PrereqFrom")
@@ -552,4 +559,45 @@ enum ConceptResourceRole {
   teaches
   uses
   assesses
+}
+
+// Phase 2.5f — the durable record + single-flight claim for one spine-hole
+// remediation pass over a Path. A `building` Path (or a hard-deprecation
+// regression) gets ONE active job; concurrent claims are blocked by a PARTIAL
+// unique index on (pathId) WHERE state IN ('queued','running') — Prisma can't
+// express partial indexes, so that index is created in raw SQL in the migration
+// (NOT here). Terminal rows (succeeded/failed/escalated) accumulate as an audit
+// trail and don't block a future re-claim. The async poller + request-path
+// enqueue that drive this automatically are 2.5g; this block invokes it manually.
+model RemediationJob {
+  id     String           @id @default(cuid())
+  pathId String
+  path   Path             @relation(fields: [pathId], references: [id], onDelete: Cascade)
+  state  RemediationState @default(queued)
+  // Set when state→running; the basis for stale-claim reclaim (a job whose worker
+  // died mid-run), which the 2.5g poller acts on. The manual driver uses --force.
+  claimedAt             DateTime?
+  // The spine-hole slugs this job set out to fix (snapshot at claim time).
+  holeSlugs             String[]
+  // Concepts where remediation accepted a sub-floor best-effort primary (relaxed
+  // the bar) so the Path could still reach spine_ready.
+  relaxedConceptSlugs   String[]  @default([])
+  // Concepts left uncoverable even after sourcing — parked in the review queue and
+  // (2.5g) paged. The Path stays `building`; the job lands `escalated`.
+  escalatedConceptSlugs String[]  @default([])
+  // Failure diagnostic when state=failed (an unexpected error, not an escalation).
+  error                 String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([pathId])
+}
+
+enum RemediationState {
+  queued
+  running
+  succeeded
+  failed
+  // Finished, but ≥1 concept was left uncoverable (Path remains `building`).
+  escalated
 }
