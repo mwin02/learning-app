@@ -1,8 +1,8 @@
 // Phase 2.5d-6: DB-backed readiness recompute — the persistent counterpart to the
 // pure computeReadiness (readiness.ts). ensurePathMap (2.5d-3) computed readiness
 // once, from the in-memory attachment plan it had just built. Any later mutation
-// of a persisted map — the edit API here, the async thickener (2.5j), the reject
-// pipeline's candidate-deprecation (2.5f) — needs to recompute it from the rows on
+// of a persisted map — the edit API here, the async thickener (2.5f), the reject
+// pipeline's candidate-deprecation (2.5g) — needs to recompute it from the rows on
 // disk. So this loads the Path's spine concepts + their ConceptResource links,
 // reshapes them into the ConceptAttachment shape the pure policy already speaks,
 // and writes back Path.status.
@@ -10,7 +10,7 @@
 // It trusts each link's stored role + coverageScore (it does NOT re-check that the
 // underlying Resource is still pickable). The edit API enforces pickability at
 // attach time, so the links are pickable when written; reacting to a resource that
-// later becomes non-pickable (hard-deprecation) is explicitly the 2.5j/2.5f
+// later becomes non-pickable (hard-deprecation) is explicitly the 2.5f/2.5g
 // reject-pipeline's job, not this structural recompute's.
 //
 // Status policy: a mutating edit always lands the Path at `spine_ready` (no holes)

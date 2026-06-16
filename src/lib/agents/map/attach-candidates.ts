@@ -6,7 +6,7 @@
 // assign each a role + coverageScore. The result is an in-memory plan; writing it
 // as ConceptResource rows is 2.5d-3. A concept that turns up no usable candidate
 // yields an empty attachment — the spine-hole signal the persistence block and
-// the async thickener (2.5j) act on, not an error here.
+// the async thickener (2.5f) act on, not an error here.
 
 import { searchResources } from '@/lib/agents/tools/search-resources';
 import { judgeCandidates, type JudgedCandidate } from '@/lib/agents/map/candidate-judge';

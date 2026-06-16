@@ -13,7 +13,7 @@
 //
 // NOTE: the thin launch libraries (calculus, linear-algebra, python-data-ml)
 // will mostly land `building` with spine holes — expected. The seed lays down
-// the spine STRUCTURE + whatever candidates exist; 2.5j remediation / library
+// the spine STRUCTURE + whatever candidates exist; 2.5f remediation / library
 // growth fills the holes to reach `spine_ready` later.
 
 import { prisma } from '../src/lib/db';

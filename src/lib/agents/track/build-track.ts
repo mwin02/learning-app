@@ -17,7 +17,7 @@
 // lesson writes run in a single transaction so a failure never leaves a half-Track.
 //
 // deliveryMode is hardcoded `newtab` (the safe default: open in a new tab + mark
-// complete) until the 2.5h classifier backfills per-resource embed/native modes.
+// complete) until the 2.5i classifier backfills per-resource embed/native modes.
 //
 // Synchronous today; structured to move async later (see thicken-seam.ts).
 
@@ -89,7 +89,7 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
   if (path.status !== PathStatus.spine_ready) {
     throw new TrackBuildError(
       `Path '${pathId}' is '${path.status}', not spine_ready — cannot build a Track. ` +
-        `Spine-hole remediation is the thickener's job (2.5j).`,
+        `Spine-hole remediation is the thickener's job (2.5f).`,
     );
   }
 
