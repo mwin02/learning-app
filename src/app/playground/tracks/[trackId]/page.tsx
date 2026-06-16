@@ -32,6 +32,68 @@ function ResourceItem({ r }: { r: ResourceRow }) {
   );
 }
 
+type LessonRow = {
+  id: string;
+  orderInTrack: number;
+  sectionId: string | null;
+  title: string;
+  summary: string;
+  conceptsTaught: string[];
+  estMinutes: number;
+  resources: ResourceRow[];
+};
+
+function LessonItem({ lesson }: { lesson: LessonRow }) {
+  // Resources arrive in allocator order (orderInLesson). The mandatory core is the
+  // role=primary set (multiple since 2.5e-7b); the rest are the frozen
+  // optional/substitute pool — kept so invalidation can promote one if a core
+  // resource dies (mandatory set degrades → promote an optional).
+  const core = lesson.resources.filter((r) => r.role === LessonResourceRole.primary);
+  const optional = lesson.resources.filter((r) => r.role !== LessonResourceRole.primary);
+  return (
+    <li className="border rounded p-3">
+      <div className="flex items-baseline gap-2">
+        <span className="text-xs text-gray-400 font-mono">{lesson.orderInTrack}</span>
+        <span className="font-medium">{lesson.title}</span>
+        <span className="text-xs text-gray-500">~{lesson.estMinutes} min</span>
+      </div>
+      {lesson.summary && <p className="text-sm text-gray-600 mt-1">{lesson.summary}</p>}
+      <div className="mt-1 flex flex-wrap gap-1">
+        {lesson.conceptsTaught.map((slug) => (
+          <code key={slug} className="text-xs bg-gray-50 text-gray-500 rounded px-1">
+            {slug}
+          </code>
+        ))}
+      </div>
+
+      <div className="mt-2 flex flex-col gap-2">
+        <div>
+          <p className="text-xs font-medium uppercase tracking-wide text-green-700">
+            Core{core.length > 1 ? ` (${core.length})` : ''}
+          </p>
+          <ul className="mt-0.5 flex flex-col gap-1">
+            {core.map((r) => (
+              <ResourceItem key={r.resource.id} r={r} />
+            ))}
+          </ul>
+        </div>
+        {optional.length > 0 && (
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-gray-400">
+              Optional ({optional.length})
+            </p>
+            <ul className="mt-0.5 flex flex-col gap-1">
+              {optional.map((r) => (
+                <ResourceItem key={r.resource.id} r={r} />
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </li>
+  );
+}
+
 // Phase 2.5e-4: read-only view of a built Track — its ordered Lessons, each with
 // the concepts it teaches, its primary resource, and the frozen alternates with
 // delivery mode. Just enough to verify the builder end-to-end before the polished
@@ -59,11 +121,19 @@ export default async function TrackDetailPage({
       hoursPerWeek: true,
       createdAt: true,
       path: { select: { id: true, topic: true } },
+      // Phase 2.5e (track sections): chapters grouping the lessons, in order. Empty
+      // when the best-effort sectioner didn't run / produced a flat track — the view
+      // then renders the lessons as one ungrouped list.
+      sections: {
+        orderBy: { orderInTrack: 'asc' },
+        select: { id: true, orderInTrack: true, title: true, intro: true },
+      },
       lessons: {
         orderBy: { orderInTrack: 'asc' },
         select: {
           id: true,
           orderInTrack: true,
+          sectionId: true,
           title: true,
           summary: true,
           conceptsTaught: true,
@@ -122,58 +192,44 @@ export default async function TrackDetailPage({
         )}
       </section>
 
-      <ol className="flex flex-col gap-3">
-        {track.lessons.map((lesson) => {
-          // Resources arrive in allocator order (orderInLesson). The mandatory core
-          // is the role=primary set (multiple since 2.5e-7b); the rest are the frozen
-          // optional/substitute pool — kept so invalidation can promote one if a core
-          // resource dies (mandatory set degrades → promote an optional).
-          const core = lesson.resources.filter((r) => r.role === LessonResourceRole.primary);
-          const optional = lesson.resources.filter((r) => r.role !== LessonResourceRole.primary);
-          return (
-            <li key={lesson.id} className="border rounded p-3">
-              <div className="flex items-baseline gap-2">
-                <span className="text-xs text-gray-400 font-mono">{lesson.orderInTrack}</span>
-                <span className="font-medium">{lesson.title}</span>
-                <span className="text-xs text-gray-500">~{lesson.estMinutes} min</span>
-              </div>
-              {lesson.summary && <p className="text-sm text-gray-600 mt-1">{lesson.summary}</p>}
-              <div className="mt-1 flex flex-wrap gap-1">
-                {lesson.conceptsTaught.map((slug) => (
-                  <code key={slug} className="text-xs bg-gray-50 text-gray-500 rounded px-1">
-                    {slug}
-                  </code>
-                ))}
-              </div>
-
-              <div className="mt-2 flex flex-col gap-2">
-                <div>
-                  <p className="text-xs font-medium uppercase tracking-wide text-green-700">
-                    Core{core.length > 1 ? ` (${core.length})` : ''}
-                  </p>
-                  <ul className="mt-0.5 flex flex-col gap-1">
-                    {core.map((r) => (
-                      <ResourceItem key={r.resource.id} r={r} />
-                    ))}
-                  </ul>
+      {track.sections.length > 0 ? (
+        // Grouped: each Section is a contentless chapter divider (title + intro)
+        // over a contiguous run of lessons. Lessons keep their global orderInTrack
+        // number — the header is a visual grouping, not a renumbering.
+        <div className="flex flex-col gap-6">
+          {track.sections.map((section) => {
+            const lessons = track.lessons.filter((l) => l.sectionId === section.id);
+            return (
+              <section key={section.id}>
+                <div className="border-b pb-1 mb-3">
+                  <h2 className="text-lg font-semibold">
+                    <span className="text-gray-400 font-mono text-sm mr-2">
+                      {section.orderInTrack}
+                    </span>
+                    {section.title}
+                  </h2>
+                  {section.intro && (
+                    <p className="text-sm text-gray-600 mt-1 max-w-2xl">{section.intro}</p>
+                  )}
                 </div>
-                {optional.length > 0 && (
-                  <div>
-                    <p className="text-xs font-medium uppercase tracking-wide text-gray-400">
-                      Optional ({optional.length})
-                    </p>
-                    <ul className="mt-0.5 flex flex-col gap-1">
-                      {optional.map((r) => (
-                        <ResourceItem key={r.resource.id} r={r} />
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            </li>
-          );
-        })}
-      </ol>
+                <ol className="flex flex-col gap-3">
+                  {lessons.map((lesson) => (
+                    <LessonItem key={lesson.id} lesson={lesson} />
+                  ))}
+                </ol>
+              </section>
+            );
+          })}
+        </div>
+      ) : (
+        // Flat fallback: no sections (sectioner didn't run, failed, or the track was
+        // too short / collapsed to a single chapter).
+        <ol className="flex flex-col gap-3">
+          {track.lessons.map((lesson) => (
+            <LessonItem key={lesson.id} lesson={lesson} />
+          ))}
+        </ol>
+      )}
     </main>
   );
 }
