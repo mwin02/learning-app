@@ -36,6 +36,7 @@ import {
 import { lessonPrereqKeys, budgetMinutesFor } from '@/lib/agents/track/plan';
 import { allocate, type AllocatorLesson } from '@/lib/agents/track/allocate';
 import { thickenSpine } from '@/lib/agents/track/thicken-seam';
+import { sectionTrack } from '@/lib/agents/track/section-track';
 import { TRACK_MAX_THICKEN_ATTEMPTS } from '@/lib/config';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 
@@ -226,6 +227,19 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
         },
       });
     });
+
+    // --- best-effort sectioning: group the frozen lessons into chapters --------
+    // A separate Flash pass over the just-persisted lessons (section-track.ts).
+    // Non-fatal: a failure leaves the Track flat (no Sections) but `ready`, so
+    // sectioning never costs the learner a build. Runs after the freeze so it sees
+    // the final, trimmed lesson order.
+    try {
+      const sectioning = await sectionTrack({ trackId: track.id, onTrace });
+      warnings.push(...sectioning.warnings);
+    } catch (err) {
+      console.warn('[track-build-track] sectioning failed (non-fatal)', { trackId: track.id, err });
+      warnings.push('sectioning failed; track left flat');
+    }
 
     const underResourced = composition.resourceSufficiency.enough
       ? []
