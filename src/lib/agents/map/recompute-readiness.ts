@@ -41,12 +41,14 @@ export async function recomputeReadiness(
     where: { pathId, membership: ConceptMembership.spine },
     select: {
       slug: true,
+      primaryRelaxed: true,
       resources: { select: { resourceId: true, role: true, coverageScore: true } },
     },
   });
 
   const attachments: ConceptAttachment[] = concepts.map((c) => ({
     conceptSlug: c.slug,
+    primaryRelaxed: c.primaryRelaxed,
     candidates: c.resources.map((r) => ({
       resourceId: r.resourceId,
       role: r.role,

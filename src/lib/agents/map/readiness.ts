@@ -28,12 +28,21 @@ export function hasQualifyingPrimary(attachment: ConceptAttachment): boolean {
   );
 }
 
+// Is this concept covered for readiness purposes? Either it has a qualifying
+// primary, or remediation relaxed the bar (2.5f) and there is some candidate to
+// stand in as a best-effort primary. A relaxed concept with NO candidate is still
+// a hole — relaxing can't conjure a resource (that path escalates instead).
+function isCovered(attachment: ConceptAttachment): boolean {
+  if (hasQualifyingPrimary(attachment)) return true;
+  return Boolean(attachment.primaryRelaxed) && attachment.candidates.length > 0;
+}
+
 // Compute readiness over all spine concepts' attachments. An empty spine is not
 // ready — a Path with no concepts can't gate a coherent Track.
 export function computeReadiness(attachments: ConceptAttachment[]): ReadinessResult {
   if (attachments.length === 0) return { ready: false, holes: [] };
   const holes = attachments
-    .filter((a) => !hasQualifyingPrimary(a))
+    .filter((a) => !isCovered(a))
     .map((a) => a.conceptSlug);
   return { ready: holes.length === 0, holes };
 }
