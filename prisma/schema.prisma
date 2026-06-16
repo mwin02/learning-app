@@ -335,6 +335,7 @@ model Track {
   title          String?
   summary        String?
   lessons     Lesson[]
+  sections    Section[]
   enrollments EnrolledPath[]
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
@@ -375,12 +376,44 @@ model Lesson {
   summary         String
   conceptsTaught  String[]
   estMinutes      Int
+  // Phase 2.5e (track sections): the chapter this lesson belongs to. Nullable so a
+  // flat, un-sectioned Track is always valid — sectioning is a best-effort
+  // post-build LLM pass (sectioner.ts), so a Track may render flat if it never ran,
+  // failed, or was too short to section. SetNull (not Cascade): deleting a Section
+  // ungroups its lessons rather than destroying them.
+  sectionId       String?
+  section         Section?         @relation(fields: [sectionId], references: [id], onDelete: SetNull)
   resources       LessonResource[]
   exercises       Exercise[]
   progress        Progress[]
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 
+  @@unique([trackId, orderInTrack])
+  @@index([sectionId])
+}
+
+// Phase 2.5e (track sections): a named chapter grouping a contiguous run of a
+// Track's Lessons, with a short learner-facing intro. Built by the post-build
+// sectioner (sectioner.ts / section-track.ts) — a separate LLM pass that groups
+// the already-ordered, already-trimmed lessons, so a Section is always a
+// contiguous run of `orderInTrack` and never references a budget-trimmed lesson.
+// A Section is the "contentless chapter divider": it owns title + intro but holds
+// no resources of its own, so the playground can render a header without
+// fabricating a filler Lesson. Re-sectioning is idempotent (delete + recreate).
+model Section {
+  id           String   @id @default(cuid())
+  trackId      String
+  track        Track    @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  orderInTrack Int
+  title        String
+  intro        String?
+  lessons      Lesson[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // No separate @@index([trackId]): the composite unique above already provides a
+  // trackId left-prefix index for the sectioner/renderer's trackId-only lookups.
   @@unique([trackId, orderInTrack])
 }
 
