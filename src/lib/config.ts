@@ -51,6 +51,13 @@ export const REMEDIATION_CONFLATION_MIN_TEACHES = 2;
 // counting as two. Conflation needs ≥2 distinct slices.
 export const REMEDIATION_CONFLATION_SLICE_SIMILARITY = 0.6;
 
+// Phase 2.5f-4a: splitting a conflation concept must yield at least this many
+// finer nodes (a split into one isn't a split) and at most this many (a sane
+// fan-out; the author declines or we reject beyond it). Bounds the authored
+// decomposition, NOT the whole spine (so it's separate from SPINE_*_CONCEPTS).
+export const REMEDIATION_SPLIT_MIN_NODES = 2;
+export const REMEDIATION_SPLIT_MAX_NODES = 6;
+
 // Phase 2.5-AR: `searchResources` only spends an embedding call to rank when a
 // topic's matching candidate set exceeds this size. At or below it, the set is
 // small enough to hand to the agent wholesale (today's load-all behavior), so
