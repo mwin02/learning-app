@@ -16,6 +16,7 @@ type AgentName =
   | 'mapSpineReviewer'
   | 'mapCandidateJudge'
   | 'trackComposer'
+  | 'trackSectioner'
   | 'tagCanonicalizer'
   | 'topicClassifier'
   | 'conceptDeriver'
@@ -124,6 +125,19 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     modelId: 'gemini-2.5-pro',
     temperature: 0.3,
     maxOutputTokens: 32768,
+  },
+  trackSectioner: {
+    // Phase 2.5e (track sections): a separate post-build pass that groups an
+    // already-ordered, already-trimmed lesson list into named chapters. Flash, not
+    // Pro — far lighter than the composer: it sees only lesson titles/summaries (no
+    // map, edges, or candidates) and just draws chapter boundaries + writes short
+    // intros. Best-effort (a failure leaves the Track flat), so the cheap tier is
+    // right. Temperature low-ish so chaptering is stable but intros aren't robotic.
+    // 8k output: the boundaries array is small, but Flash 2.5 spends budget on
+    // internal thinking first and caps mid-JSON on a tighter ceiling.
+    modelId: 'gemini-2.5-flash',
+    temperature: 0.2,
+    maxOutputTokens: 8192,
   },
   tagCanonicalizer: {
     // Plain JSON shape, no grounding. Deterministic mapping job, but the input

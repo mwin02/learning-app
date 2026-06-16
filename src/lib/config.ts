@@ -163,3 +163,9 @@ export const MAP_RESOURCE_PICKER_LIMIT = 20;
 // a 2.5f stub that always reports "couldn't"), so the builder falls through to a
 // best-effort weaker Track. Raise once the real thickener can actually fill holes.
 export const TRACK_MAX_THICKEN_ATTEMPTS = 1;
+
+// Phase 2.5e (track sections): a built Track with FEWER than this many lessons is
+// not sectioned — it renders as a flat list. Chaptering a 2–3 lesson Track buys
+// nothing (the headers would outnumber the content), so the post-build sectioner
+// (section-track.ts) skips the LLM call entirely below this floor.
+export const TRACK_MIN_LESSONS_FOR_SECTIONS = 4;
