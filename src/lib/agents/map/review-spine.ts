@@ -35,6 +35,13 @@ export const REVIEW_FINDING_KINDS = [
   'connectivity',
   // A backbone idea the topic genuinely needs is absent (a true gap, not enrichment).
   'completeness',
+  // A concept is too COARSE — it bundles several distinct teachable ideas into one
+  // node (e.g. "Linear Independence, Basis, and Dimension"). This is not cosmetic:
+  // candidate coverage is scored per (resource, concept), so a conflated node gets
+  // several resources that each teach only one of its ideas — none clearing the
+  // teachability floor — and reads as an unteachable "spine hole" even though the
+  // material exists. The fix is to SPLIT it into one concept per idea.
+  'granularity',
 ] as const;
 
 export type ReviewFindingKind = (typeof REVIEW_FINDING_KINDS)[number];
@@ -134,6 +141,7 @@ Look for exactly these kinds of gap:
 - \`missing-foundation\`: a concept is taught that clearly assumes knowledge the spine never establishes as its own concept (an implicit prerequisite). Name the foundational concept to ADD and which concept depends on it.
 - \`connectivity\`: a concept is orphaned (no prerequisite edges in or out when it plainly should have them), or the graph splits into disconnected pieces that should link. Name the missing edge(s).
 - \`completeness\`: a backbone concept the topic genuinely requires is absent. This is for a TRUE gap in the required core only — NOT optional enrichment, niche subtopics, or tooling (those are the opt-in "frontier", added later). Name the concept to ADD.
+- \`granularity\`: a concept is too COARSE — it bundles several distinct teachable ideas into one node, so no single learning resource could teach all of it well. A title that lists multiple ideas (e.g. "Linear Independence, Basis, and Dimension", "Symmetric Matrices and Singular Value Decomposition") is the clearest tell, but also flag a node whose scope plainly spans separate concepts a learner would study in distinct lessons. Each concept must be ONE coherent teachable idea. Name the concepts to SPLIT it into and the prerequisite order among them (e.g. split "Linear Independence, Basis, and Dimension" into linear-independence → basis → dimension). This applies EVEN to elementary basics that are conventionally said in one breath: "Variables, Data Types, and Operators" is still three ideas and should be split (variables-and-data-types → operators-and-expressions) — do not excuse a bundle just because it is foundational or commonly grouped. Do NOT flag a concept that is merely broad-but-single (one idea taught at length is fine); only flag genuine bundles of separate ideas. ONE deliberate exception: the foundational onboarding/orientation ROOT (the on-ramp concept with no prerequisites that opens the spine — see \`onboarding\`) is INTENTIONALLY a single on-ramp idea even though its description spans "what it is, the mental model, and how to set up / run / read it". Do NOT flag the onboarding root for \`granularity\` — that bundle is by design and a single intro resource is expected to cover it.
 
 For every finding, write a \`message\` that states the gap AND the concrete fix (the concept to add with a short description, or the edge to add), so the author can act on it directly.`;
 

@@ -118,11 +118,17 @@ export const SPINE_MAX_REPAIRS = 2;
 // Phase 2.5d (spine hardening): max times the semantic reviewer (review-spine.ts)
 // re-runs the author after a structurally-valid spine is judged incomplete (a cold
 // open / missing onboarding root, an assumed-but-absent foundation, an orphan
-// concept, a backbone gap). Separate from SPINE_MAX_REPAIRS so semantic revisions
-// don't starve the structural-repair budget. Bounded at 1: the review is advisory
-// (it never gates spine_ready — the resource gate does), so one revision keeps the
-// extra Pro call cost low and converges in practice.
-export const SPINE_MAX_REVIEW_REPAIRS = 1;
+// concept, a backbone gap, or an over-coarse/conflated node). Separate from
+// SPINE_MAX_REPAIRS so semantic revisions don't starve the structural-repair budget.
+// Set to 3: the reviewer now hunts five finding kinds (onboarding, missing-
+// foundation, connectivity, completeness, granularity), so a single revision often
+// can't land them all — and crucially, every revision below the budget IS re-
+// reviewed (the budget check sits before the review call), so a higher bar buys
+// genuine convergence + verification of the fix, not just more blind re-authors.
+// Still advisory (never gates spine_ready — the resource gate does) and bounded, so
+// the worst-case extra cost is 3 author + 3 review Pro calls. The loop's
+// maxIterations (SPINE_MAX_REPAIRS + SPINE_MAX_REVIEW_REPAIRS + 1) scales with this.
+export const SPINE_MAX_REVIEW_REPAIRS = 3;
 
 // Phase 2.5d-2 (candidate attachment): per spine concept, how many pickable
 // library resources to pull as candidates before the LLM judge scores them.
