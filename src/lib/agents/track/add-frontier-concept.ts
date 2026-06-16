@@ -43,7 +43,10 @@ const AuthorSchema = z.object({
   // create: the new frontier node + its direct prerequisites (existing slugs).
   slug: z.string().optional(),
   title: z.string().optional(),
-  prerequisiteSlugs: z.array(z.string()).default([]),
+  // Required (not .default([])): a defaulted field is marked optional in Gemini's
+  // response schema and the model then routinely omits it, leaving frontier nodes
+  // dangling. Forcing it makes the model actually choose prerequisites.
+  prerequisiteSlugs: z.array(z.string()),
   reason: z.string().default(''),
 });
 
@@ -179,6 +182,7 @@ Return one of three decisions:
 - "create": a genuine, more-specialized concept that is not yet on the map. Provide:
   - slug: new, kebab-case, unique, descriptive (e.g. "reinforcement-learning", "gradient-boosting").
   - title: short human-readable name.
-  - prerequisiteSlugs: the EXISTING concept slugs (from the list given) that are direct prerequisites a learner needs before this concept. Choose only genuine, direct prerequisites; pick from the existing slugs only; omit transitive/indirect ones. An empty list is acceptable if it builds directly on nothing already on the map.
+  - prerequisiteSlugs: the EXISTING concept slugs (from the list given) a learner must understand BEFORE this concept. A specialized concept almost always builds on foundational concepts already on the map, so DO identify the closest existing concept(s) it depends on — anchoring it under nothing leaves it dangling. Prefer the most direct (immediate) prerequisites and omit distant/transitive ones already implied by a closer prerequisite. Pick ONLY from the existing slugs — never invent a slug. Return an empty list only if the concept genuinely has no prerequisite among the existing concepts (rare for a real specialization).
+    Example: requesting "convolutional neural networks" on a map that contains "neural-networks" and "supervised-learning" → prerequisiteSlugs: ["neural-networks"] (CNNs build directly on neural networks). Requesting "reinforcement learning" on a map with "introduction-to-machine-learning" → prerequisiteSlugs: ["introduction-to-machine-learning"]. Do NOT return [] in cases like these where a clear foundation is present.
 
 This concept will be added as a FRONTIER concept — optional enrichment beyond the required backbone — so it is fine for it to be specialized or advanced. Never invent prerequisite slugs that are not in the provided list.`;
