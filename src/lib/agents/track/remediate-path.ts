@@ -29,11 +29,9 @@ import { ConceptResourceRole, PathStatus } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { MAX_REMEDIATION_PASSES } from '@/lib/config';
 import { recomputeReadiness } from '@/lib/agents/map/recompute-readiness';
-import { judgeCandidates } from '@/lib/agents/map/candidate-judge';
-import type { SearchResult } from '@/lib/agents/tools/search-resources';
-import { sourceForConcept } from '@/lib/agents/tools/web-fallback';
 import { classifyHole, type HoleCandidate } from '@/lib/agents/track/classify-hole';
 import { splitConcept, type SliceEvidence } from '@/lib/agents/track/split-concept';
+import { sourceAndAttachConcept } from '@/lib/agents/track/source-concept';
 import { claimRemediationJob, finishJob } from '@/lib/agents/track/remediation-job';
 
 export type RemediateResult = {
@@ -102,7 +100,16 @@ export async function remediatePath(
           // Author declined (concept is actually atomic) → fall through and treat
           // it as a gap in this same pass.
         }
-        if (await sourceAndAttach(pathId, topic, hole)) progress = true;
+        // Gap (or declined conflation): source mastery-agnostically (remediation
+        // is pre-Track). attached > 0 is the loop's progress signal.
+        const attached = await sourceAndAttachConcept({
+          pathId,
+          topic,
+          conceptId: hole.conceptId,
+          slug: hole.slug,
+          title: hole.title,
+        });
+        if (attached > 0) progress = true;
       }
 
       if (!progress) {
@@ -153,53 +160,6 @@ export async function remediatePath(
   }
 }
 
-// Source one gap concept, judge the sourced rows, and attach the keepers —
-// promoting ONLY the rows we attach from pending_review to active (the locked
-// promote-on-attach policy), then recompute readiness, all in one transaction.
-// Returns true when it attached at least one candidate (the loop's progress signal).
-async function sourceAndAttach(pathId: string, topic: string, hole: HoleConcept): Promise<boolean> {
-  const sourced = await sourceForConcept({ topic, concept: { slug: hole.slug, title: hole.title } });
-  if (sourced.insertedIds.length === 0) {
-    console.log('[remediate] sourced nothing', { pathId, concept: hole.slug });
-    return false;
-  }
-
-  const rows = await loadAsSearchResults(sourced.insertedIds);
-  if (rows.length === 0) return false;
-
-  const judged = await judgeCandidates({ conceptTitle: hole.title, conceptSlug: hole.slug, candidates: rows });
-  const kept = judged.filter((j) => j.coverageScore > 0).sort((a, b) => b.coverageScore - a.coverageScore);
-  if (kept.length === 0) {
-    console.log('[remediate] sourced rows all judged irrelevant', { pathId, concept: hole.slug, sourced: rows.length });
-    return false;
-  }
-
-  const keptIds = kept.map((k) => k.resourceId);
-  await prisma.$transaction(async (tx) => {
-    await tx.resource.updateMany({
-      where: { id: { in: keptIds }, status: 'pending_review' },
-      data: { status: 'active' },
-    });
-    await tx.conceptResource.createMany({
-      data: kept.map((k) => ({
-        conceptId: hole.conceptId,
-        resourceId: k.resourceId,
-        role: k.role,
-        coverageScore: k.coverageScore,
-      })),
-      skipDuplicates: true,
-    });
-    await recomputeReadiness(pathId, tx);
-  });
-  console.log('[remediate] attached', {
-    pathId,
-    concept: hole.slug,
-    attached: kept.length,
-    topPrimary: kept[0].role === ConceptResourceRole.teaches ? kept[0].coverageScore : null,
-  });
-  return true;
-}
-
 // Slice evidence for the splitter: the hole's `teaches` candidates (title + what
 // each teaches). A conflation hole has ≥2 sub-floor teaches by construction; fall
 // back to all candidates if somehow none are tagged teaches.
@@ -246,20 +206,6 @@ async function loadHoleEvidence(
     })),
   }));
   return { topic: path.topic, holes };
-}
-
-// Hydrate freshly-sourced rows into the SearchResult shape the judge consumes,
-// loading them directly by id (see the embedding-race note at the top).
-async function loadAsSearchResults(ids: string[]): Promise<SearchResult[]> {
-  const rows = await prisma.resource.findMany({
-    where: { id: { in: ids } },
-    select: {
-      id: true, slug: true, topic: true, title: true, url: true, type: true, tier: true,
-      difficulty: true, durationMin: true, summary: true, prerequisiteConcepts: true,
-      conceptsTaught: true, requiresPurchase: true, trustScore: true, decompositionStatus: true,
-    },
-  });
-  return rows.map((r) => ({ ...r, distance: null }));
 }
 
 async function conceptHasCandidate(pathId: string, slug: string): Promise<boolean> {

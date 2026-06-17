@@ -21,6 +21,7 @@
 
 import { generateText, generateObject } from 'ai';
 import { z } from 'zod';
+import type { Difficulty } from '@prisma/client';
 import { getModel } from '@/lib/ai/models';
 import { vertex } from '@/lib/ai/vertex';
 import {
@@ -104,18 +105,22 @@ export async function runWebFallback({
 }
 
 // Phase 2.5f: source resources that TEACH one specific concept, for spine-hole
-// remediation. Same engine + persistence tail as the topic fallback, but a
-// concept-focused discovery prompt and a tighter budget. Returns insertedIds so
-// the remediation re-judge can attach via searchResources({ includeIds }) before
-// the post-commit embed lands.
+// remediation and the in-track thickener. Same engine + persistence tail as the
+// topic fallback, but a concept-focused discovery prompt and a tighter budget.
+// Returns insertedIds so the re-judge can attach via searchResources({ includeIds })
+// before the post-commit embed lands. `targetMastery` (set by the in-track
+// thickener, omitted by mastery-agnostic spine-hole remediation) biases discovery
+// toward that learner level.
 export async function sourceForConcept({
   topic,
   concept,
   targetCount = REMEDIATION_SOURCE_TARGET_COUNT,
+  targetMastery,
 }: {
   topic: string;
   concept: { slug: string; title: string };
   targetCount?: number;
+  targetMastery?: Difficulty;
 }): Promise<WebFallbackResult> {
   const label = `${topic}::${concept.slug}`;
   const { survivors, iterations, totalDiscovered } = await collectSurvivors({
@@ -123,7 +128,7 @@ export async function sourceForConcept({
     targetCount,
     oversample: REMEDIATION_DISCOVERY_OVERSAMPLE,
     maxIterations: REMEDIATION_MAX_DISCOVERY_ITERATIONS,
-    discover: (oversample, denyList) => discoverForConcept(topic, concept.title, oversample, denyList),
+    discover: (oversample, denyList) => discoverForConcept(topic, concept.title, oversample, denyList, targetMastery),
   });
   return persistDiscovered(topic, survivors, { label, iterations, totalDiscovered, targetCount });
 }
@@ -319,13 +324,14 @@ async function discoverForConcept(
   conceptTitle: string,
   oversample: number,
   denyList: string[],
+  targetMastery?: Difficulty,
 ): Promise<DiscoveredResource[]> {
   return runDiscovery({
     label: `${topic}::${conceptTitle}`,
     oversample,
     denyListSize: denyList.length,
     system: CONCEPT_DISCOVERY_SYSTEM_PROMPT,
-    prompt: buildConceptDiscoveryPrompt(topic, conceptTitle, oversample, denyList),
+    prompt: buildConceptDiscoveryPrompt(topic, conceptTitle, oversample, denyList, targetMastery),
   });
 }
 
@@ -423,12 +429,21 @@ function buildConceptDiscoveryPrompt(
   conceptTitle: string,
   oversample: number,
   denyList: string[],
+  targetMastery?: Difficulty,
 ): string {
   const lines = [
     `Target concept: ${conceptTitle}`,
     `Topic (context): ${topic}`,
     `Target count: ${oversample} resources that TEACH "${conceptTitle}". Use Google Search.`,
   ];
+  if (targetMastery) {
+    // The in-track thickener sources because the existing material is too shallow
+    // for the learner's target mastery — bias discovery toward that depth (but
+    // don't hard-exclude adjacent levels; the composer makes the final pick).
+    lines.push(
+      `Target learner level: ${targetMastery}. Prefer resources pitched at or approaching ${targetMastery} depth (adjacent levels are acceptable if strong).`,
+    );
+  }
   appendDenyList(lines, denyList);
   return lines.join('\n');
 }
