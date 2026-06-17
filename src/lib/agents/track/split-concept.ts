@@ -62,23 +62,17 @@ export async function splitConcept(args: {
 }): Promise<SplitResult> {
   const { pathId, topic, subject, concept, evidence } = args;
 
-  // Invariant: this operation is DESTRUCTIVE — it DELETEs the coarse concept. A
-  // Track's Lessons reference concepts only by denormalized `conceptsTaught` slug
-  // (no FK Lesson→Concept, so no cascade catches a stale reference), so splitting a
-  // concept AFTER a Track is built would strand those slugs with no finer-node
-  // lessons. Splitting is only ever reached via remediatePath on a `building` Path,
-  // which has no Tracks yet — remediatePath early-exits once the spine is whole,
-  // before build-track runs. Assert that here so a future caller can't silently
-  // corrupt a live Track; throw (don't degrade to the gap path) — a Track present
-  // means a programming error, not an atomic concept.
-  const trackCount = await prisma.track.count({ where: { pathId } });
-  if (trackCount > 0) {
-    throw new Error(
-      `splitConcept refused: Path ${pathId} has ${trackCount} Track(s) — splitting ` +
-        `concept "${concept.slug}" post-build would strand Lesson conceptsTaught slugs.`,
-    );
-  }
-
+  // This operation is DESTRUCTIVE — it DELETEs the coarse concept — but that is
+  // safe even on a Path that already has live Tracks (the spine-hole regression
+  // case, responsibility 3). A Track is an immutable SNAPSHOT: its Lessons reference
+  // concepts only by denormalized `conceptsTaught` slug strings (no FK
+  // Lesson→Concept), rendered as plain labels and never re-joined to live Concept
+  // rows. Deleting/splitting the coarse Concept here only cascades Path-layer rows
+  // (ConceptPrereq, ConceptResource); old Tracks keep their snapshot labels
+  // (historically accurate for what they taught) and are otherwise untouched. The
+  // Path is mutable and ever-growing, so it heals — future Tracks built off it are
+  // sound — while past snapshots stay as they were. So: NO guard against existing
+  // Tracks; that would forbid exactly the regression-remediation this exists for.
   const authored = await authorSplit({ concept, subject, evidence });
   if (!authored.canSplit) {
     console.log('[split] author declined', { pathId, concept: concept.slug, reason: authored.reason });
