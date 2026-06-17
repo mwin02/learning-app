@@ -37,6 +37,20 @@ export const REMEDIATION_SOURCE_TARGET_COUNT = 3;
 export const REMEDIATION_DISCOVERY_OVERSAMPLE = 6;
 export const REMEDIATION_MAX_DISCOVERY_ITERATIONS = 2;
 
+// Phase 2.5f-3a: hole-legitimacy classifier (gap vs conflation). A spine hole is
+// a CONFLATION (over-coarse concept → split, not source) only when ≥
+// REMEDIATION_CONFLATION_MIN_TEACHES `teaches` candidates sit in the sub-floor
+// band [BAND_MIN, MAP_SPINE_MIN_PRIMARY_COVERAGE) AND cover distinct slices. A
+// `teaches` below BAND_MIN is noise (excluded as conflation evidence); a lone
+// sub-floor `teaches`, or several covering the SAME slice, is a GAP (source a
+// better resource, relax on exhaustion) — splitting finer wouldn't help.
+export const REMEDIATION_CONFLATION_BAND_MIN = 0.3;
+export const REMEDIATION_CONFLATION_MIN_TEACHES = 2;
+// Two sub-floor `teaches` are the "same slice" when their conceptsTaught Jaccard
+// similarity is at or above this — so they cluster into one slice rather than
+// counting as two. Conflation needs ≥2 distinct slices.
+export const REMEDIATION_CONFLATION_SLICE_SIMILARITY = 0.6;
+
 // Phase 2.5-AR: `searchResources` only spends an embedding call to rank when a
 // topic's matching candidate set exceeds this size. At or below it, the set is
 // small enough to hand to the agent wholesale (today's load-all behavior), so

@@ -20,6 +20,11 @@ export type ConceptAttachment = {
   // Judged candidates with coverageScore > 0, sorted coverage-desc so the Track
   // builder can take the head as primary. Empty = spine hole (no usable resource).
   candidates: JudgedCandidate[];
+  // Phase 2.5f: when remediation could not source a qualifying `teaches` and
+  // accepted the best sub-floor candidate as a best-effort primary, readiness
+  // treats this concept as covered (not a hole) provided it has any candidate.
+  // Absent/false on a freshly-built map (set only by remediation, 2.5f-3b).
+  primaryRelaxed?: boolean;
 };
 
 export async function attachCandidates(args: {
