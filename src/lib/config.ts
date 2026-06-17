@@ -29,6 +29,14 @@ export const FALLBACK_DISCOVERY_OVERSAMPLE = 12;
 // search); this is the belt-and-suspenders cost guard.
 export const FALLBACK_MAX_DISCOVERY_ITERATIONS = 3;
 
+// Phase 2.5f: targeted per-concept sourcing (sourceForConcept) budgets — the
+// thickener's spine-hole remediation. Deliberately smaller than the topic-level
+// FALLBACK_* above: a single narrow concept has far fewer good resources on the
+// open web, so we ask for a handful of teaches candidates, not a topic's worth.
+export const REMEDIATION_SOURCE_TARGET_COUNT = 3;
+export const REMEDIATION_DISCOVERY_OVERSAMPLE = 6;
+export const REMEDIATION_MAX_DISCOVERY_ITERATIONS = 2;
+
 // Phase 2.5-AR: `searchResources` only spends an embedding call to rank when a
 // topic's matching candidate set exceeds this size. At or below it, the set is
 // small enough to hand to the agent wholesale (today's load-all behavior), so

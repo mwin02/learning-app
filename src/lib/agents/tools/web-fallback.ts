@@ -1,11 +1,19 @@
-// Web fallback for the curriculum agent.
+// Web fallback / targeted sourcing for the curriculum agent.
 //
-// Triggered by `loadCandidates` in curriculum-agent.ts when a topic's active
-// Resource count is below FALLBACK_THRESHOLD. Loops Vertex-grounded discovery
-// against the validation pipeline (liveness + rules-agent) with a growing
-// deny-list until either FALLBACK_TARGET_COUNT survivors are collected or
-// FALLBACK_MAX_DISCOVERY_ITERATIONS is hit. Survivors get canonicalized tags
-// and are upserted as Resource(origin='agent', status='pending_review').
+// Two entry points share one discovery engine (discover → validate → maybe
+// re-discover) and one persistence tail (decompose → canonicalize → file →
+// upsert):
+//
+//   runWebFallback({ topic })       — topic-level scattershot. Triggered by
+//     `loadCandidates` in curriculum-agent.ts when a topic's active Resource
+//     count is below FALLBACK_THRESHOLD; grows a sparse library before a path
+//     composes. SLATED FOR RETIREMENT — see the note on runWebFallback below.
+//
+//   sourceForConcept({ topic, concept }) — Phase 2.5f targeted per-concept
+//     sourcing for spine-hole remediation: find resources that TEACH one
+//     specific concept. Returns insertedIds so the remediation re-judge (2.5f-3)
+//     can attach them via searchResources({ includeIds }) without waiting on the
+//     post-commit embed.
 //
 // Locked by ROADMAP: grounded search via Vertex's googleSearch tool, NOT an
 // agent-with-tools loop. The "loop" here is in the application layer
@@ -18,6 +26,9 @@ import { vertex } from '@/lib/ai/vertex';
 import {
   FALLBACK_DISCOVERY_OVERSAMPLE,
   FALLBACK_MAX_DISCOVERY_ITERATIONS,
+  REMEDIATION_SOURCE_TARGET_COUNT,
+  REMEDIATION_DISCOVERY_OVERSAMPLE,
+  REMEDIATION_MAX_DISCOVERY_ITERATIONS,
 } from '@/lib/config';
 import { runValidationPipeline } from '@/lib/agents/validation';
 import { livenessValidator } from '@/lib/agents/validation/validators/liveness';
@@ -68,6 +79,13 @@ export type WebFallbackResult = {
 
 const VALIDATORS = [livenessValidator, rulesAgentValidator];
 
+// TODO(retire — 2.5g cutover): the topic-level scattershot fallback. It exists to
+// pad a sparse library before the OLD generate-path (PathItem) flow composes, fired
+// by loadCandidates < FALLBACK_THRESHOLD. Under the 2.5c+ concept-map/Track
+// architecture, library growth is driven by TARGETED spine-hole remediation
+// (sourceForConcept) instead of coarse per-topic dumps. Once the 2.5g cutover
+// removes the generate-path fallback trigger, this entry point retires; keep the
+// shared engine (collectSurvivors/persistDiscovered) and sourceForConcept.
 export async function runWebFallback({
   topic,
   targetCount,
@@ -75,16 +93,64 @@ export async function runWebFallback({
   topic: string;
   targetCount: number;
 }): Promise<WebFallbackResult> {
+  const { survivors, iterations, totalDiscovered } = await collectSurvivors({
+    label: topic,
+    targetCount,
+    oversample: FALLBACK_DISCOVERY_OVERSAMPLE,
+    maxIterations: FALLBACK_MAX_DISCOVERY_ITERATIONS,
+    discover: (oversample, denyList) => discoverResources(topic, oversample, denyList),
+  });
+  return persistDiscovered(topic, survivors, { label: topic, iterations, totalDiscovered, targetCount });
+}
+
+// Phase 2.5f: source resources that TEACH one specific concept, for spine-hole
+// remediation. Same engine + persistence tail as the topic fallback, but a
+// concept-focused discovery prompt and a tighter budget. Returns insertedIds so
+// the remediation re-judge can attach via searchResources({ includeIds }) before
+// the post-commit embed lands.
+export async function sourceForConcept({
+  topic,
+  concept,
+  targetCount = REMEDIATION_SOURCE_TARGET_COUNT,
+}: {
+  topic: string;
+  concept: { slug: string; title: string };
+  targetCount?: number;
+}): Promise<WebFallbackResult> {
+  const label = `${topic}::${concept.slug}`;
+  const { survivors, iterations, totalDiscovered } = await collectSurvivors({
+    label,
+    targetCount,
+    oversample: REMEDIATION_DISCOVERY_OVERSAMPLE,
+    maxIterations: REMEDIATION_MAX_DISCOVERY_ITERATIONS,
+    discover: (oversample, denyList) => discoverForConcept(topic, concept.title, oversample, denyList),
+  });
+  return persistDiscovered(topic, survivors, { label, iterations, totalDiscovered, targetCount });
+}
+
+// ── shared engine ─────────────────────────────────────────────────────────────
+
+// The discover → validate → dedupe → collect loop, parameterized by a discover
+// callback so the topic-level and per-concept entry points share it. Returns the
+// surviving rows (deduped by url) plus run stats.
+async function collectSurvivors(args: {
+  label: string;
+  targetCount: number;
+  oversample: number;
+  maxIterations: number;
+  discover: (oversample: number, denyList: string[]) => Promise<DiscoveredResource[]>;
+}): Promise<{ survivors: DiscoveredResource[]; iterations: number; totalDiscovered: number }> {
+  const { label, targetCount, oversample, maxIterations, discover } = args;
   const survivors = new Map<string, DiscoveredResource>();
   const denyList = new Set<string>();
   let iterations = 0;
   let totalDiscovered = 0;
 
-  while (survivors.size < targetCount && iterations < FALLBACK_MAX_DISCOVERY_ITERATIONS) {
+  while (survivors.size < targetCount && iterations < maxIterations) {
     iterations += 1;
     const need = targetCount - survivors.size;
 
-    const discovered = await discoverResources(topic, FALLBACK_DISCOVERY_OVERSAMPLE, [...denyList]);
+    const discovered = await discover(oversample, [...denyList]);
     totalDiscovered += discovered.length;
 
     // Always block URLs we've already seen this run from re-discovery, even
@@ -95,7 +161,7 @@ export async function runWebFallback({
     // in iteration 2+ if Google Search returns them).
     const fresh = discovered.filter((r) => !survivors.has(r.url));
     if (fresh.length === 0) {
-      console.log('[web-fallback] iteration produced no fresh URLs', { topic, iteration: iterations });
+      console.log('[web-fallback] iteration produced no fresh URLs', { label, iteration: iterations });
       continue;
     }
 
@@ -111,7 +177,7 @@ export async function runWebFallback({
     }
 
     console.log('[web-fallback] iteration', {
-      topic,
+      label,
       iteration: iterations,
       discovered: discovered.length,
       fresh: fresh.length,
@@ -121,9 +187,20 @@ export async function runWebFallback({
     });
   }
 
-  const finalRows = [...survivors.values()];
+  return { survivors: [...survivors.values()], iterations, totalDiscovered };
+}
+
+// The persistence tail shared by both entry points: decompose → canonicalize →
+// file under home topic → upsert. `topic` is the request topic (the filing anchor);
+// survivors are filed under topic ∪ related per the classifier.
+async function persistDiscovered(
+  topic: string,
+  finalRows: DiscoveredResource[],
+  meta: { label: string; iterations: number; totalDiscovered: number; targetCount: number },
+): Promise<WebFallbackResult> {
+  const { label, iterations, totalDiscovered, targetCount } = meta;
   if (finalRows.length === 0) {
-    console.log('[web-fallback] no survivors', { topic, iterations, totalDiscovered });
+    console.log('[web-fallback] no survivors', { label, iterations, totalDiscovered });
     return { insertedCount: 0, skippedCount: 0, discoveredCount: totalDiscovered, iterations, insertedIds: [] };
   }
 
@@ -206,7 +283,7 @@ export async function runWebFallback({
   }
 
   console.log('[web-fallback] summary', {
-    topic,
+    label,
     iterations,
     discoveredCount: totalDiscovered,
     survivors: finalRows.length,
@@ -225,23 +302,58 @@ async function discoverResources(
   oversample: number,
   denyList: string[],
 ): Promise<DiscoveredResource[]> {
+  return runDiscovery({
+    label: topic,
+    oversample,
+    denyListSize: denyList.length,
+    system: DISCOVERY_SYSTEM_PROMPT,
+    prompt: buildDiscoveryPrompt(topic, oversample, denyList),
+  });
+}
+
+// Phase 2.5f: concept-focused discovery — find resources that TEACH one concept,
+// within its topic for context. Biased toward `teaches` (remediation needs a
+// qualifying primary), but otherwise the same grounded-search engine.
+async function discoverForConcept(
+  topic: string,
+  conceptTitle: string,
+  oversample: number,
+  denyList: string[],
+): Promise<DiscoveredResource[]> {
+  return runDiscovery({
+    label: `${topic}::${conceptTitle}`,
+    oversample,
+    denyListSize: denyList.length,
+    system: CONCEPT_DISCOVERY_SYSTEM_PROMPT,
+    prompt: buildConceptDiscoveryPrompt(topic, conceptTitle, oversample, denyList),
+  });
+}
+
+// One grounded-search discovery call + parse, shared by both prompts. Grounded
+// search + structured output don't compose in the AI SDK today — ask for JSON in a
+// fenced block and parse manually.
+async function runDiscovery(args: {
+  label: string;
+  oversample: number;
+  denyListSize: number;
+  system: string;
+  prompt: string;
+}): Promise<DiscoveredResource[]> {
   const { model, temperature, maxOutputTokens } = getModel('curriculumFallback');
 
-  // Grounded search + structured output don't compose in the AI SDK today —
-  // ask for JSON in a fenced block and parse manually.
   const result = await generateText({
     model,
     temperature,
     maxOutputTokens,
     tools: { google_search: vertex.tools.googleSearch({}) },
-    system: DISCOVERY_SYSTEM_PROMPT,
-    prompt: buildDiscoveryPrompt(topic, oversample, denyList),
+    system: args.system,
+    prompt: args.prompt,
   });
 
   console.log('[web-fallback] discovery call', {
-    topic,
-    oversample,
-    denyListSize: denyList.length,
+    label: args.label,
+    oversample: args.oversample,
+    denyListSize: args.denyListSize,
     sourceCount: result.sources?.length ?? 0,
     usage: result.usage,
     finishReason: result.finishReason,
@@ -256,20 +368,19 @@ async function discoverResources(
   return valid;
 }
 
-const DISCOVERY_SYSTEM_PROMPT = `You are a learning-resource scout. Given a topic, find authoritative free or freemium learning resources on the open web using Google Search.
-
-Rules:
+// Shared discovery rules + output spec, so the topic and concept system prompts
+// stay in lockstep (same validation contract, same anti-listicle rules).
+const DISCOVERY_RULES = `Rules:
 - Use Google Search to find real, currently-reachable URLs. Do NOT invent URLs.
 - Prefer official documentation, well-known educators, university courseware (MIT OCW, Stanford CS, etc.), and recognized free textbook sites.
 - AVOID sites that require login or paid signup for the main content (Coursera, DataCamp, Udemy, LinkedIn Learning, edX verified-track, Pluralsight).
 - AVOID listicles, link aggregators, and "Top 10 X" roundup pages. The resource itself must teach the topic.
 - AVOID marketing pages, course sales pages, and signup landing pages.
-- Cover a range of difficulties (beginner through advanced) and resource types (docs, video, article, course, book) where possible.
 - conceptsTaught and rawConceptsTaught are the agent's first-pass tags; concise, lowercase, hyphen-separated (e.g. "linear-regression", "list-comprehensions"). 3-8 per resource.
 - prerequisiteConcepts use the same vocabulary style; 0-5 per resource.
-- durationMin is your best estimate of time to consume end-to-end in minutes.
+- durationMin is your best estimate of time to consume end-to-end in minutes.`;
 
-Output: a single JSON array in a \`\`\`json fenced block. No prose before or after. Each element:
+const DISCOVERY_OUTPUT = `Output: a single JSON array in a \`\`\`json fenced block. No prose before or after. Each element:
 {
   "url": string,
   "title": string,
@@ -281,18 +392,52 @@ Output: a single JSON array in a \`\`\`json fenced block. No prose before or aft
   "rawConceptsTaught": string[]
 }`;
 
+const DISCOVERY_SYSTEM_PROMPT = `You are a learning-resource scout. Given a topic, find authoritative free or freemium learning resources on the open web using Google Search.
+
+${DISCOVERY_RULES}
+- Cover a range of difficulties (beginner through advanced) and resource types (docs, video, article, course, book) where possible.
+
+${DISCOVERY_OUTPUT}`;
+
+const CONCEPT_DISCOVERY_SYSTEM_PROMPT = `You are a learning-resource scout. Given a SPECIFIC CONCEPT within a topic, find authoritative free or freemium resources that TEACH that concept, using Google Search.
+
+${DISCOVERY_RULES}
+- PRIORITIZE resources that teach the target concept as a primary subject, from the ground up — not ones that merely use, apply, or mention it in passing.
+- The concept's broader topic is context for disambiguation; the resource must be about the CONCEPT, not the whole topic.
+- rawConceptsTaught must include the target concept (or its obvious synonym) for a genuine match.
+
+${DISCOVERY_OUTPUT}`;
+
 function buildDiscoveryPrompt(topic: string, oversample: number, denyList: string[]): string {
   const lines = [
     `Topic: ${topic}`,
     `Target count: ${oversample} resources.`,
     `Find a balanced spread across difficulty and resource type. Use Google Search.`,
   ];
-  if (denyList.length > 0) {
-    lines.push('');
-    lines.push('Do NOT return any of the following URLs (already tried this run):');
-    lines.push(JSON.stringify(denyList));
-  }
+  appendDenyList(lines, denyList);
   return lines.join('\n');
+}
+
+function buildConceptDiscoveryPrompt(
+  topic: string,
+  conceptTitle: string,
+  oversample: number,
+  denyList: string[],
+): string {
+  const lines = [
+    `Target concept: ${conceptTitle}`,
+    `Topic (context): ${topic}`,
+    `Target count: ${oversample} resources that TEACH "${conceptTitle}". Use Google Search.`,
+  ];
+  appendDenyList(lines, denyList);
+  return lines.join('\n');
+}
+
+function appendDenyList(lines: string[], denyList: string[]): void {
+  if (denyList.length === 0) return;
+  lines.push('');
+  lines.push('Do NOT return any of the following URLs (already tried this run):');
+  lines.push(JSON.stringify(denyList));
 }
 
 // ── canonicalization ────────────────────────────────────────────────────────
