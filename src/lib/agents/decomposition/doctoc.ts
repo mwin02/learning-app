@@ -111,7 +111,13 @@ export async function decomposeDocToc(args: {
 
   let html: string;
   try {
-    const res = await fetch(url, { headers: { 'user-agent': FETCH_UA, accept: 'text/html' } });
+    // Pin Accept-Language to English: docs sites (e.g. developers.google.com)
+    // content-negotiate by it and, absent a header, serve a locale-defaulted page
+    // — so section link text (→ child titles) came back in another language. The
+    // canonical URLs are language-neutral; only the extracted titles were affected.
+    const res = await fetch(url, {
+      headers: { 'user-agent': FETCH_UA, accept: 'text/html', 'accept-language': 'en-US,en;q=0.9' },
+    });
     if (!res.ok) return { ok: false, outcome: 'pending', reason: `HTTP ${res.status}` };
     html = (await res.text()).slice(0, DOC_TOC_MAX_HTML_CHARS);
   } catch (err) {
