@@ -62,6 +62,17 @@ export async function splitConcept(args: {
 }): Promise<SplitResult> {
   const { pathId, topic, subject, concept, evidence } = args;
 
+  // This operation is DESTRUCTIVE — it DELETEs the coarse concept — but that is
+  // safe even on a Path that already has live Tracks (the spine-hole regression
+  // case, responsibility 3). A Track is an immutable SNAPSHOT: its Lessons reference
+  // concepts only by denormalized `conceptsTaught` slug strings (no FK
+  // Lesson→Concept), rendered as plain labels and never re-joined to live Concept
+  // rows. Deleting/splitting the coarse Concept here only cascades Path-layer rows
+  // (ConceptPrereq, ConceptResource); old Tracks keep their snapshot labels
+  // (historically accurate for what they taught) and are otherwise untouched. The
+  // Path is mutable and ever-growing, so it heals — future Tracks built off it are
+  // sound — while past snapshots stay as they were. So: NO guard against existing
+  // Tracks; that would forbid exactly the regression-remediation this exists for.
   const authored = await authorSplit({ concept, subject, evidence });
   if (!authored.canSplit) {
     console.log('[split] author declined', { pathId, concept: concept.slug, reason: authored.reason });

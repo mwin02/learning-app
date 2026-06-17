@@ -63,12 +63,19 @@ export type FinishInput = {
   error?: string;
 };
 
-// Move a running job to a terminal state, recording what remediation did. A
+// Move a RUNNING job to a terminal state, recording what remediation did. A
 // terminal row no longer matches the partial unique index, so the Path is free to
 // be re-claimed later (a future regression or a retry).
-export async function finishJob(jobId: string, input: FinishInput): Promise<RemediationJob> {
-  return prisma.remediationJob.update({
-    where: { id: jobId },
+//
+// Guarded on state='running' (hence updateMany, not update — `update` needs a
+// unique where and can't filter on state): if a concurrent `--force` claim already
+// superseded this job (state→'failed'), this call must NOT resurrect it back to
+// 'succeeded'/'escalated' and corrupt the audit trail. A no-op (count 0) means the
+// job was already terminal; we log it rather than treat it as an error. Returns
+// whether this call actually performed the transition.
+export async function finishJob(jobId: string, input: FinishInput): Promise<{ finished: boolean }> {
+  const { count } = await prisma.remediationJob.updateMany({
+    where: { id: jobId, state: RemediationState.running },
     data: {
       state: input.state,
       ...(input.relaxedConceptSlugs ? { relaxedConceptSlugs: input.relaxedConceptSlugs } : {}),
@@ -76,4 +83,11 @@ export async function finishJob(jobId: string, input: FinishInput): Promise<Reme
       ...(input.error !== undefined ? { error: input.error } : {}),
     },
   });
+  if (count === 0) {
+    console.warn('[remediation-job] finishJob no-op; job already terminal (superseded by --force?)', {
+      jobId,
+      attemptedState: input.state,
+    });
+  }
+  return { finished: count > 0 };
 }
