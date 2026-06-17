@@ -58,6 +58,12 @@ export const REMEDIATION_CONFLATION_SLICE_SIMILARITY = 0.6;
 export const REMEDIATION_SPLIT_MIN_NODES = 2;
 export const REMEDIATION_SPLIT_MAX_NODES = 6;
 
+// Phase 2.5f-4b: hard ceiling on remediation passes per run. A pass fixes the
+// current holes (source gaps, split conflations); a split creates finer nodes
+// that become next pass's holes, so remediation iterates. The loop also stops on
+// no-holes or a no-progress pass; this caps pathological re-splitting regardless.
+export const MAX_REMEDIATION_PASSES = 3;
+
 // Phase 2.5-AR: `searchResources` only spends an embedding call to rank when a
 // topic's matching candidate set exceeds this size. At or below it, the set is
 // small enough to hand to the agent wholesale (today's load-all behavior), so
