@@ -9,11 +9,18 @@
 // `pending_review` and uses them in the very run that found them — so a
 // pending_review row can already sit in a persisted Path. The PENDING_REVIEW_GATE
 // then hides un-approved rows from *future* runs once a topic's library fills up.
-// Approving lifts that gate; rejecting deprecates the row AND pulls it from any
-// path it leaked into (PathItem active → removed).
+// Approving lifts that gate; rejecting deprecates the row AND drops it from every
+// concept map's candidate pool (delete its ConceptResource links), then recomputes
+// each affected Path's readiness — the Phase 2.5g-5 cutover of the old PathItem
+// flip. Only the Path (the living concept map) is kept accurate; built Tracks are
+// immutable snapshots and are NOT touched (they may keep pointing at a now-deprecated
+// resource — the row still exists; broken Tracks are triaged manually). See the
+// Track immutability note in schema.prisma.
 
-import { prisma } from '@/lib/db';
+import { PathStatus } from '@prisma/client';
 import type { ResourceStatus, DecompositionStatus, DeprecationSeverity } from '@prisma/client';
+import { prisma } from '@/lib/db';
+import { recomputeReadiness } from '@/lib/agents/map/recompute-readiness';
 
 // A container whose shape is still unsettled isn't meaningfully approvable —
 // flipping its status can't make an unpickable container pickable. These are
@@ -99,7 +106,19 @@ export async function listPendingReview(limit?: number): Promise<PendingReviewRo
 
 export type ApplyResult =
   | { kind: 'approved'; resourceId: string; approved: number }
-  | { kind: 'rejected'; resourceId: string; deprecated: number; pathItemsRemoved: number }
+  | {
+      kind: 'rejected';
+      resourceId: string;
+      deprecated: number;
+      // ConceptResource candidate links removed (the deprecated rows dropped from
+      // every concept map's candidate pool).
+      conceptLinksRemoved: number;
+      // Distinct Paths whose readiness was recomputed after the removal.
+      pathsRecomputed: number;
+      // Of those, how many regressed spine_ready → building (the deprecation
+      // reopened a spine hole; the worker refills it on the next request).
+      pathsRegressed: number;
+    }
   | { kind: 'not_found' }
   | { kind: 'blocked'; decompositionStatus: DecompositionStatus }
   | { kind: 'raced' };
@@ -151,19 +170,43 @@ export async function applyPendingReview(input: ApplyInput): Promise<ApplyResult
     return { kind: 'approved', resourceId: root.id, approved: count };
   }
 
-  // reject: deprecate the resource(s) AND pull them from any path they leaked
-  // into, in one transaction so a path never points at a deprecated resource via
-  // an still-active item.
+  // reject: deprecate the resource(s) AND drop them from every concept map's
+  // candidate pool, recomputing readiness — all in one transaction so a map's
+  // status never disagrees with its candidate rows.
   return prisma.$transaction(async (tx) => {
     const { count } = await tx.resource.updateMany({
       where: { id: { in: ids }, status: { in: ['pending_review', 'active'] } },
       data: { status: 'deprecated', deprecationSeverity: input.severity },
     });
     if (!input.cascade && count === 0) return { kind: 'raced' as const };
-    const { count: pathItemsRemoved } = await tx.pathItem.updateMany({
-      where: { resourceId: { in: ids }, status: 'active' },
-      data: { status: 'removed' },
+
+    // Path-side candidate-deprecation. recomputeReadiness trusts each link's stored
+    // coverage and does NOT re-check resource pickability, so the link MUST be
+    // deleted for a reopened spine hole to surface — otherwise the map would keep
+    // reporting spine_ready off a deprecated resource. Capture affected Paths
+    // BEFORE deleting (the join is gone afterwards).
+    const links = await tx.conceptResource.findMany({
+      where: { resourceId: { in: ids } },
+      select: { concept: { select: { pathId: true } } },
     });
-    return { kind: 'rejected' as const, resourceId: root.id, deprecated: count, pathItemsRemoved };
+    const affectedPathIds = [...new Set(links.map((l) => l.concept.pathId))];
+    const { count: conceptLinksRemoved } = await tx.conceptResource.deleteMany({
+      where: { resourceId: { in: ids } },
+    });
+
+    let pathsRegressed = 0;
+    for (const pathId of affectedPathIds) {
+      const { status } = await recomputeReadiness(pathId, tx);
+      if (status === PathStatus.building) pathsRegressed++;
+    }
+
+    return {
+      kind: 'rejected' as const,
+      resourceId: root.id,
+      deprecated: count,
+      conceptLinksRemoved,
+      pathsRecomputed: affectedPathIds.length,
+      pathsRegressed,
+    };
   });
 }

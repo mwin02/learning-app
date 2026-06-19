@@ -89,7 +89,9 @@ export const POST = withAdminAuth(async (req) => {
           resourceId: result.resourceId,
           action: 'reject',
           deprecated: result.deprecated,
-          pathItemsRemoved: result.pathItemsRemoved,
+          conceptLinksRemoved: result.conceptLinksRemoved,
+          pathsRecomputed: result.pathsRecomputed,
+          pathsRegressed: result.pathsRegressed,
         });
     }
   } catch (err) {

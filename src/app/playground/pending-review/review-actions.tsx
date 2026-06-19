@@ -78,8 +78,11 @@ export function ReviewActions({ resourceId, buttons }: { resourceId: string; but
       const parts: string[] = [];
       if (typeof data.approved === 'number') parts.push(`approved ${data.approved}`);
       if (typeof data.deprecated === 'number') parts.push(`rejected ${data.deprecated}`);
-      if (typeof data.pathItemsRemoved === 'number' && data.pathItemsRemoved > 0) {
-        parts.push(`${data.pathItemsRemoved} path item(s) removed`);
+      if (typeof data.conceptLinksRemoved === 'number' && data.conceptLinksRemoved > 0) {
+        parts.push(`${data.conceptLinksRemoved} candidate link(s) removed`);
+      }
+      if (typeof data.pathsRegressed === 'number' && data.pathsRegressed > 0) {
+        parts.push(`${data.pathsRegressed} map(s) → building`);
       }
       setMsg({ ok: true, text: parts.join(' · ') || 'done' });
       startTransition(() => router.refresh());
