@@ -14,6 +14,7 @@
 
 import { Prisma, RemediationState, type RemediationJob } from '@prisma/client';
 import { prisma } from '@/lib/db';
+import { REMEDIATION_JOB_STALE_MS } from '@/lib/config';
 
 function isUniqueViolation(err: unknown): boolean {
   return err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
@@ -90,4 +91,25 @@ export async function finishJob(jobId: string, input: FinishInput): Promise<{ fi
     });
   }
   return { finished: count > 0 };
+}
+
+// Phase 2.5g-3: stale-claim reclaim BY AGE — the automatic counterpart to the
+// manual driver's --force. A job stuck `running` past the threshold is a worker
+// that died mid-run (the claim row outlives the process). Fail it so it no longer
+// matches the partial unique index `RemediationJob_active_per_path`, freeing the
+// Path to be re-claimed by a fresh remediatePath (which recomputes holes from disk,
+// so re-running is safe). The course worker calls this each poll cycle before
+// claiming work. Returns how many jobs were reclaimed.
+export async function reclaimStaleRemediationJobs(
+  olderThanMs: number = REMEDIATION_JOB_STALE_MS,
+): Promise<number> {
+  const cutoff = new Date(Date.now() - olderThanMs);
+  const { count } = await prisma.remediationJob.updateMany({
+    where: { state: RemediationState.running, claimedAt: { lt: cutoff } },
+    data: { state: RemediationState.failed, error: 'stale claim reclaimed by age (worker presumed dead)' },
+  });
+  if (count > 0) {
+    console.warn('[remediation-job] reclaimed stale running jobs → failed', { count, cutoff });
+  }
+  return count;
 }

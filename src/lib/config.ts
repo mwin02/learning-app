@@ -199,6 +199,19 @@ export const MAP_RESOURCE_PICKER_LIMIT = 20;
 // best-effort weaker Track. Raise once the real thickener can actually fill holes.
 export const TRACK_MAX_THICKEN_ATTEMPTS = 1;
 
+// Phase 2.5g-3: the course worker's poll interval — how long it sleeps after
+// draining the queue before checking again. Short enough that a freshly-enqueued
+// request starts promptly, long enough not to hammer the DB while idle. 5s.
+export const COURSE_WORKER_POLL_MS = 5_000;
+
+// Phase 2.5g-3: a RemediationJob left `running` longer than this is treated as a
+// dead worker's abandoned claim and reclaimed (→ `failed`, freeing the
+// active-per-path unique index so the Path can be re-claimed). Generous: a
+// remediation run is up to MAX_REMEDIATION_PASSES of per-concept web sourcing +
+// re-judge, minutes of work. This is the "process died" threshold, not a per-pass
+// timeout. Mirrors COURSE_REQUEST_STALE_MS. 15 minutes.
+export const REMEDIATION_JOB_STALE_MS = 15 * 60 * 1000;
+
 // Phase 2.5g-2: ensurePathMap reclaim. A `building` Path with zero concepts is a
 // claim that crashed before the lock-free populate phase (which runs ~30–60s after
 // the claim tx commits, writing nothing to Path until it finishes). Only reclaim/
