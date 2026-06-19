@@ -1,29 +1,38 @@
-// POST /api/generate-path — HTTP boundary for the curriculum agent.
+// POST /api/generate-path — HTTP boundary for course requests.
 //
-// Pipeline: withAuth → JSON parse → Zod validate → topic-validity gate →
-// PathService.createPath (generateCurriculum + Path/PathItem persistence).
+// Phase 2.5g-4 cutover: this route is now FIRE-AND-FORGET. It does NOT build a
+// path/track inline (that structurally exceeded the Vercel function timeout for
+// cold topics and wasted spend on client disconnects). Instead:
+//   withAuth → JSON parse → Zod validate → topic-validity gate → enqueue a
+//   CourseRequest → 202 Accepted { requestId }.
+// The out-of-band worker (scripts/course-worker.ts) drains the queue:
+// ensurePathMap → remediate → buildTrack → notify (console for now; email is
+// Phase 3). The caller is told the request is queued, not handed a result.
 //
-// Access control is delegated to withAuth (see src/lib/api/with-auth.ts).
-// Today that's a placeholder env check (DEV_AUTH=1); Phase 3 swaps the
-// internals to a real Supabase session lookup without touching this file.
+// The topic gate stays synchronous on purpose: it rejects unsupported topics with
+// an immediate 400 and produces the canonical slug we persist on CourseRequest.topic
+// (so the worker's get-or-create keys on a normalized topic). It is the only
+// non-trivial work left in the request and is bounded (one classification call).
+//
+// Access control is delegated to withAuth. Today that's a placeholder env check
+// (DEV_AUTH=1); Phase 3 swaps the internals to a real Supabase session lookup and
+// populates session.userId (which flows onto CourseRequest.userId) without touching
+// this file.
 
 import { ZodError } from 'zod';
 import { generatePathInputSchema } from '@/lib/api/generate-path-schema';
 import { withAuth } from '@/lib/api/with-auth';
-import { CurriculumAgentError } from '@/lib/agents/curriculum/curriculum-agent';
-import { createPath } from '@/lib/services/path-service';
+import { enqueueCourseRequest } from '@/lib/services/course-request';
 import { validateTopic } from '@/lib/agents/topic-gate';
 import { createTraceCollector } from '@/lib/agents/agent-trace';
 
-// Vercel Hobby allows up to 60s per function. Cold-topic runs (web fallback
-// + Pro discovery + validation) can exceed this; those will fail until we
-// move to Cloud Run. Documented in docs/ROADMAP.md.
+// Prisma + the Vertex SDK (topic gate) need the Node runtime, not Edge. The heavy
+// generation moved to the worker, so the request is just gate + insert; the gate's
+// worst case (a novel topic's grounded canonicalization) stays well under this.
 export const maxDuration = 60;
-
-// Prisma + the Vertex SDK need the Node runtime, not Edge.
 export const runtime = 'nodejs';
 
-type ErrorCode = 'INVALID_INPUT' | 'TOPIC_REJECTED' | 'GENERATION_FAILED' | 'INTERNAL';
+type ErrorCode = 'INVALID_INPUT' | 'TOPIC_REJECTED' | 'INTERNAL';
 
 function errorResponse(status: number, code: ErrorCode, error: string, details?: unknown) {
   const body: { error: string; code: ErrorCode; details?: unknown } = { error, code };
@@ -31,14 +40,10 @@ function errorResponse(status: number, code: ErrorCode, error: string, details?:
   return Response.json(body, { status });
 }
 
-// The agent trace exposes internal pipeline structure (stage/tool names, token
-// counts, registry/library internals, critic feedback). We always collect it
-// (it's cheap and side-effect-free), but only return it to the caller when
-// TRACE_RESPONSE=1. Today the route is internal-only (DEV_AUTH), but Phase 3
-// swaps in real auth without touching this handler — so gate the *return* here
-// rather than relying on the route staying private, or every customer would
-// receive the trace in their response. Don't reuse DEV_AUTH: it's removed in
-// Phase 3.
+// The gate trace exposes registry/library internals. We always collect it (cheap),
+// but only return it when TRACE_RESPONSE=1 — the route stays internal-only today
+// (DEV_AUTH), but Phase 3 swaps in real auth without touching this handler, so gate
+// the *return* here rather than relying on the route staying private.
 const traceInResponse = process.env.TRACE_RESPONSE === '1';
 
 export const POST = withAuth(async (req, session) => {
@@ -59,20 +64,11 @@ export const POST = withAuth(async (req, session) => {
     throw err;
   }
 
-  // Collect a structured agent trace spanning the full pipeline (gate →
-  // registry → retrieval → fallback → select → critique → revise). Collection
-  // is always on (cheap, no side effects); whether it's returned to the caller
-  // is gated by TRACE_RESPONSE (see `traceInResponse`). Ephemeral — not stored.
   const { onTrace, events } = createTraceCollector();
   onTrace({
     kind: 'info',
     label: 'request received',
-    detail: {
-      topic: input.topic,
-      difficulty: input.difficulty,
-      timeframeWeeks: input.timeframeWeeks,
-      hoursPerWeek: input.hoursPerWeek,
-    },
+    detail: { topic: input.topic, timeframeWeeks: input.timeframeWeeks, hoursPerWeek: input.hoursPerWeek },
   });
 
   let gate;
@@ -90,25 +86,25 @@ export const POST = withAuth(async (req, session) => {
     });
   }
 
-  // Use the canonical slug from the gate so the persisted Path.topic is
-  // normalized (e.g. "Organic Chemistry" → "organic-chemistry").
-  const normalized = { ...input, topic: gate.canonical };
-
+  // Enqueue against the canonical slug so CourseRequest.topic (and the Path the
+  // worker get-or-creates) is normalized (e.g. "Organic Chemistry" → "organic-chemistry").
   try {
-    const { pathId } = await createPath(normalized, session, { onTrace });
+    const { id } = await enqueueCourseRequest({
+      topic: gate.canonical,
+      userId: session.userId,
+      priorKnowledge: input.priorKnowledge,
+      goal: input.goal,
+      timeframeWeeks: input.timeframeWeeks,
+      hoursPerWeek: input.hoursPerWeek,
+      targetMastery: input.targetMastery,
+    });
+    console.log('[generate-path] enqueued', { requestId: id, topic: gate.canonical, userId: session.userId });
     return Response.json(
-      { pathId, status: 'created', ...(traceInResponse ? { trace: events } : {}) },
-      { status: 201 },
+      { requestId: id, status: 'queued', topic: gate.canonical, ...(traceInResponse ? { trace: events } : {}) },
+      { status: 202 },
     );
   } catch (err) {
-    if (err instanceof CurriculumAgentError) {
-      // Semantic failure: agent returned junk or no usable resources even
-      // after web fallback. Distinct from infra failures (DB down, Vertex
-      // auth) which become 500.
-      console.error('[generate-path] agent failure', err);
-      return errorResponse(422, 'GENERATION_FAILED', err.message);
-    }
-    console.error('[generate-path] internal failure', err);
+    console.error('[generate-path] enqueue failure', err);
     return errorResponse(500, 'INTERNAL', 'Internal error.');
   }
 });
