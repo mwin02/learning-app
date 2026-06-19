@@ -199,6 +199,13 @@ export const MAP_RESOURCE_PICKER_LIMIT = 20;
 // best-effort weaker Track. Raise once the real thickener can actually fill holes.
 export const TRACK_MAX_THICKEN_ATTEMPTS = 1;
 
+// Phase 2.5g-1: a CourseRequest left `running` longer than this is treated as a
+// dead worker's abandoned claim and reclaimed (→ `queued`) by the g-3 worker on
+// its next tick. Generous — a cold-topic run (spine author + review + remediation
+// web-sourcing) legitimately takes minutes; this is the "the worker process died"
+// threshold, not a per-stage timeout. 15 minutes.
+export const COURSE_REQUEST_STALE_MS = 15 * 60 * 1000;
+
 // Phase 2.5e (track sections): a built Track with FEWER than this many lessons is
 // not sectioned — it renders as a flat list. Chaptering a 2–3 lesson Track buys
 // nothing (the headers would outnumber the content), so the post-build sectioner
