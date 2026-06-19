@@ -199,6 +199,15 @@ export const MAP_RESOURCE_PICKER_LIMIT = 20;
 // best-effort weaker Track. Raise once the real thickener can actually fill holes.
 export const TRACK_MAX_THICKEN_ATTEMPTS = 1;
 
+// Phase 2.5g-2: ensurePathMap reclaim. A `building` Path with zero concepts is a
+// claim that crashed before the lock-free populate phase (which runs ~30–60s after
+// the claim tx commits, writing nothing to Path until it finishes). Only reclaim/
+// rebuild such a Path once it's older than this, so a build that's legitimately
+// still in flight is never stolen. A `failed` Path is reclaimed immediately (its
+// builder is terminal), no age gate. 10 minutes — comfortably past a worst-case
+// cold-topic spine build (author + review repairs + candidate attach).
+export const PATH_BUILD_STALE_MS = 10 * 60 * 1000;
+
 // Phase 2.5g-1: a CourseRequest left `running` longer than this is treated as a
 // dead worker's abandoned claim and reclaimed (→ `queued`) by the g-3 worker on
 // its next tick. Generous — a cold-topic run (spine author + review + remediation
