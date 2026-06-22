@@ -176,6 +176,7 @@ model User {
   createdPaths  Path[]
   enrollments   EnrolledPath[]
   progress      Progress[]
+  courseRequests CourseRequest[]
 }
 
 // Scaffold only — Phase 3 (Stripe) will extend with stripeCustomerId,
@@ -304,6 +305,15 @@ model Progress {
 // agent's selection record (what + why); Track is the post-processed, dedup'd
 // delivery shape with generated content. Regenerable without re-running
 // expensive library matching + web fallback.
+//
+// IMMUTABILITY: a Track is an immutable SNAPSHOT of its Path at build time, kept
+// for future reference. Only the Path is maintained to stay accurate to current
+// resource quality (so future Tracks are valid); a built Track is never patched
+// when its Path or resources change. A Track may therefore point at a since-
+// rejected/deprecated Resource — the row still exists, the snapshot still reads.
+// Broken/stale Tracks are triaged manually (see the broken-tracks query page),
+// not auto-healed. The reject pipeline reaches only the Path side (ConceptResource
+// candidate-deprecation + readiness recompute), never live Tracks.
 model Track {
   id        String      @id @default(cuid())
   // Phase 2.5c: dropped @unique — one Path (concept map) → many Tracks (learner
@@ -338,6 +348,7 @@ model Track {
   lessons     Lesson[]
   sections    Section[]
   enrollments EnrolledPath[]
+  courseRequests CourseRequest[]
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
 
@@ -600,4 +611,55 @@ enum RemediationState {
   failed
   // Finished, but ≥1 concept was left uncoverable (Path remains `building`).
   escalated
+}
+
+// Phase 2.5g-1: a learner's request for a Track on a topic — the durable unit the
+// fire-and-forget route enqueues and the out-of-band worker drains. The route only
+// validates the topic + inserts a `queued` row and acks; the worker claims it,
+// runs ensurePathMap → remediate → buildTrack, then records the result here (the
+// hook for the eventual "course ready" notification, Phase 3).
+//
+// Deliberately NOT single-flighted (no partial unique index like RemediationJob):
+// each learner request is its own row → its own Track (per-learner snapshots). The
+// expensive work is deduped one layer down — ensurePathMap's advisory lock + the
+// RemediationJob active-per-path index — so two requests for the same building
+// topic serialize there, not here.
+model CourseRequest {
+  id             String              @id @default(cuid())
+  // Canonical topic slug (post topic-gate). NOT an FK to Path: the Path may not
+  // exist yet at enqueue time — the worker get-or-creates it (ensurePathMap).
+  topic          String
+  // Per-learner Track inputs, carried so the worker can build the Track once the
+  // Path reaches spine_ready. Mirror Track's nullable input columns. userId is
+  // null until Phase 3 auth wires a real session (mirrors the retiring
+  // Path.createdById); SetNull keeps the request if the User is later removed.
+  userId         String?
+  user           User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
+  priorKnowledge String?
+  goal           String?
+  timeframeWeeks Int?
+  hoursPerWeek   Int?
+  targetMastery  Difficulty?
+  status         CourseRequestStatus @default(queued)
+  // Set when status→running (worker claim); the basis for stale-claim reclaim by
+  // age (a worker that died mid-run), which the g-3 worker acts on each tick.
+  claimedAt      DateTime?
+  // The built Track on success; null until fulfilled. SetNull keeps the request
+  // row for audit if the (immutable) Track is later deleted in cleanup.
+  trackId        String?
+  track          Track?              @relation(fields: [trackId], references: [id], onDelete: SetNull)
+  // Failure diagnostic when status=failed.
+  error          String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  // Serves the claim query: status='queued' ORDER BY createdAt asc.
+  @@index([status, createdAt])
+}
+
+enum CourseRequestStatus {
+  queued
+  running
+  fulfilled
+  failed
 }
