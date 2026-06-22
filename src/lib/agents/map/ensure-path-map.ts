@@ -19,7 +19,7 @@
 // healthy `spine_ready` / holey-`building` / fresh-`building` Path is still
 // "exists, skip". See isReclaimable. The seed (2.5d-4) force-rebuilds by deleting first.
 
-import { ConceptMembership, Difficulty, PathStatus } from '@prisma/client';
+import { ConceptMembership, PathStatus } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { PATH_BUILD_STALE_MS } from '@/lib/config';
 import { buildSpine } from '@/lib/agents/map/build-spine';
@@ -102,16 +102,10 @@ export async function ensurePathMap(args: {
       return { path: { id: existing.id, status: PathStatus.building }, created: true as const, reclaimed: true as const };
     }
     const path = await tx.path.create({
-      // title/summary/difficulty are vestigial user-facing columns that retire
-      // with PathItem at the 2.5g cutover; a concept map has no single difficulty.
-      // Required (NOT NULL) until then, so set map-appropriate placeholders.
-      data: {
-        topic,
-        title: topic,
-        summary: `Concept map for ${topic}`,
-        difficulty: Difficulty.beginner,
-        status: PathStatus.building,
-      },
+      // A Path is now just { topic, status } + its concept-map relations — the
+      // user-facing columns (title/summary/difficulty/input*) retired with PathItem
+      // in 2.5g-7; they live on the Track (the per-learner snapshot).
+      data: { topic, status: PathStatus.building },
       select: { id: true, status: true },
     });
     return { path, created: true as const, reclaimed: false as const };

@@ -58,7 +58,6 @@ model Resource {
   // migration SQL (Prisma can't express it). See ROADMAP Phase 2.5-AR.
   embedding            Unsupported("vector(768)")?
   embeddedAt           DateTime?
-  pathItems            PathItem[]
   lessonResources      LessonResource[]
   conceptResources     ConceptResource[]
   createdAt            DateTime       @default(now())
@@ -173,7 +172,6 @@ model User {
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   subscription  Subscription?
-  createdPaths  Path[]
   enrollments   EnrolledPath[]
   progress      Progress[]
   courseRequests CourseRequest[]
@@ -201,26 +199,18 @@ model Subscription {
 // Trade-off: less Path reuse across users with similar-but-different inputs;
 // acceptable because (a) "no caching, same input = fresh path" is locked, and
 // (b) dedup, if it becomes worthwhile, belongs at the agent layer.
+// Phase 2.5c: Path is an input-agnostic concept map for a whole topic — one Path
+// per canonical topic, hence @@unique([topic]). Phase 2.5g-7 retired the last of its
+// user-specific columns (title/summary/difficulty/input*/createdById) together with
+// PathItem: those moved to Track (the per-learner snapshot) at the cutover, so a Path
+// is now purely { topic, status } + its concept-map relations.
 model Path {
   id                   String         @id @default(cuid())
   topic                String
-  title                String
-  summary              String
-  difficulty           Difficulty
-  inputPriorKnowledge  String?
-  inputTimeframeWeeks  Int?
-  inputHoursPerWeek    Int?
-  createdById          String?
-  createdBy            User?          @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  // Phase 2.5c: readiness gate. The map-builder authors the spine synchronously
-  // and flips the Path to `spine_ready`; the first Track build is gated on it.
+  // readiness gate. The map-builder authors the spine synchronously and flips the
+  // Path to `spine_ready`; the first Track build is gated on it.
   // `draft` (pre-spine) → `building` (spine in flight) → `spine_ready` | `failed`.
   status               PathStatus     @default(draft)
-  items                PathItem[]
-  // Phase 2.5c: Path becomes an input-agnostic concept map for a whole topic —
-  // one Path per canonical topic, hence @@unique([topic]). The user-specific
-  // columns above (createdById, difficulty, input*, title) retire WITH PathItem
-  // at the 2.5f cutover, not in this block.
   concepts             Concept[]
   tracks               Track[]
   enrollments          EnrolledPath[]
@@ -229,7 +219,6 @@ model Path {
   updatedAt            DateTime       @updatedAt
 
   @@unique([topic])
-  @@index([createdById])
 }
 
 // Phase 2.5c: Path readiness lifecycle for the spine-ready gate (see Path.status).
@@ -240,32 +229,9 @@ enum PathStatus {
   failed
 }
 
-model PathItem {
-  id            String         @id @default(cuid())
-  pathId        String
-  path          Path           @relation(fields: [pathId], references: [id], onDelete: Cascade)
-  resourceId    String
-  resource      Resource       @relation(fields: [resourceId], references: [id])
-  order         Int
-  rationale     String
-  status        PathItemStatus @default(active)
-  // Phase-5 scaffolding — created here per the locked plan but inert until
-  // the adaptive-branch feature lands. `branchOnFail` is a plain nullable
-  // string (not an FK) so Phase 5 can decide whether it points to a
-  // PathItem id, a Resource id, or something else without a migration.
-  isCheckpoint  Boolean        @default(false)
-  branchOnFail  String?
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-
-  @@unique([pathId, order])
-  @@index([resourceId])
-}
-
-enum PathItemStatus {
-  active
-  removed
-}
+// Phase 2.5g-7: PathItem (the old curriculum-record layer) + PathItemStatus retired
+// at the cutover. Concept / ConceptPrereq / ConceptResource are the curriculum
+// record now; Lesson / LessonResource / Exercise are the Track's delivery shape.
 
 // Phase 2.5c: enrollment keys on the pinned Track (the immutable instance the
 // learner walks), not the Path. `pathId` is kept denormalized for cross-version
