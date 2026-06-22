@@ -1,19 +1,18 @@
-// Web fallback / targeted sourcing for the curriculum agent.
-//
-// Two entry points share one discovery engine (discover → validate → maybe
-// re-discover) and one persistence tail (decompose → canonicalize → file →
-// upsert):
-//
-//   runWebFallback({ topic })       — topic-level scattershot. Triggered by
-//     `loadCandidates` in curriculum-agent.ts when a topic's active Resource
-//     count is below FALLBACK_THRESHOLD; grows a sparse library before a path
-//     composes. SLATED FOR RETIREMENT — see the note on runWebFallback below.
+// Targeted per-concept web sourcing.
 //
 //   sourceForConcept({ topic, concept }) — Phase 2.5f targeted per-concept
-//     sourcing for spine-hole remediation: find resources that TEACH one
-//     specific concept. Returns insertedIds so the remediation re-judge (2.5f-3)
-//     can attach them via searchResources({ includeIds }) without waiting on the
-//     post-commit embed.
+//     sourcing for spine-hole remediation + the in-track thickener: find resources
+//     that TEACH one specific concept. Returns insertedIds so the remediation
+//     re-judge (2.5f-3) can attach them by id without waiting on the post-commit
+//     embed.
+//
+// This was once a two-entry-point module — the topic-level scattershot
+// `runWebFallback` (the old generate-path library-floor fallback) shared this same
+// discover → validate → maybe re-discover engine + decompose → canonicalize → file
+// → upsert tail. That entry retired in the Phase 2.5g cutover: under the concept-
+// map/Track architecture, library growth is driven by TARGETED per-concept sourcing,
+// not coarse per-topic dumps. The shared engine (collectSurvivors / persistDiscovered
+// / runDiscovery) stays — sourceForConcept is now its only caller.
 //
 // Locked by ROADMAP: grounded search via Vertex's googleSearch tool, NOT an
 // agent-with-tools loop. The "loop" here is in the application layer
@@ -25,8 +24,6 @@ import type { Difficulty } from '@prisma/client';
 import { getModel } from '@/lib/ai/models';
 import { vertex } from '@/lib/ai/vertex';
 import {
-  FALLBACK_DISCOVERY_OVERSAMPLE,
-  FALLBACK_MAX_DISCOVERY_ITERATIONS,
   REMEDIATION_SOURCE_TARGET_COUNT,
   REMEDIATION_DISCOVERY_OVERSAMPLE,
   REMEDIATION_MAX_DISCOVERY_ITERATIONS,
@@ -73,36 +70,13 @@ export type WebFallbackResult = {
   skippedCount: number;
   discoveredCount: number;
   iterations: number;
-  // Newly-created atomic (pickable) resource ids from this run. The retrieval
-  // session uses them as a discovery allowlist (see curriculum-retrieval).
+  // Newly-created atomic (pickable) resource ids from this run. The remediation
+  // re-judge (source-concept.ts) loads them by id to attach as candidates before
+  // the post-commit embed lands.
   insertedIds: string[];
 };
 
 const VALIDATORS = [livenessValidator, rulesAgentValidator];
-
-// TODO(retire — 2.5g cutover): the topic-level scattershot fallback. It exists to
-// pad a sparse library before the OLD generate-path (PathItem) flow composes, fired
-// by loadCandidates < FALLBACK_THRESHOLD. Under the 2.5c+ concept-map/Track
-// architecture, library growth is driven by TARGETED spine-hole remediation
-// (sourceForConcept) instead of coarse per-topic dumps. Once the 2.5g cutover
-// removes the generate-path fallback trigger, this entry point retires; keep the
-// shared engine (collectSurvivors/persistDiscovered) and sourceForConcept.
-export async function runWebFallback({
-  topic,
-  targetCount,
-}: {
-  topic: string;
-  targetCount: number;
-}): Promise<WebFallbackResult> {
-  const { survivors, iterations, totalDiscovered } = await collectSurvivors({
-    label: topic,
-    targetCount,
-    oversample: FALLBACK_DISCOVERY_OVERSAMPLE,
-    maxIterations: FALLBACK_MAX_DISCOVERY_ITERATIONS,
-    discover: (oversample, denyList) => discoverResources(topic, oversample, denyList),
-  });
-  return persistDiscovered(topic, survivors, { label: topic, iterations, totalDiscovered, targetCount });
-}
 
 // Phase 2.5f: source resources that TEACH one specific concept, for spine-hole
 // remediation and the in-track thickener. Same engine + persistence tail as the
@@ -302,20 +276,6 @@ async function persistDiscovered(
 
 // ── discovery ───────────────────────────────────────────────────────────────
 
-async function discoverResources(
-  topic: string,
-  oversample: number,
-  denyList: string[],
-): Promise<DiscoveredResource[]> {
-  return runDiscovery({
-    label: topic,
-    oversample,
-    denyListSize: denyList.length,
-    system: DISCOVERY_SYSTEM_PROMPT,
-    prompt: buildDiscoveryPrompt(topic, oversample, denyList),
-  });
-}
-
 // Phase 2.5f: concept-focused discovery — find resources that TEACH one concept,
 // within its topic for context. Biased toward `teaches` (remediation needs a
 // qualifying primary), but otherwise the same grounded-search engine.
@@ -398,13 +358,6 @@ const DISCOVERY_OUTPUT = `Output: a single JSON array in a \`\`\`json fenced blo
   "rawConceptsTaught": string[]
 }`;
 
-const DISCOVERY_SYSTEM_PROMPT = `You are a learning-resource scout. Given a topic, find authoritative free or freemium learning resources on the open web using Google Search.
-
-${DISCOVERY_RULES}
-- Cover a range of difficulties (beginner through advanced) and resource types (docs, video, article, course, book) where possible.
-
-${DISCOVERY_OUTPUT}`;
-
 const CONCEPT_DISCOVERY_SYSTEM_PROMPT = `You are a learning-resource scout. Given a SPECIFIC CONCEPT within a topic, find authoritative free or freemium resources that TEACH that concept, using Google Search.
 
 ${DISCOVERY_RULES}
@@ -413,16 +366,6 @@ ${DISCOVERY_RULES}
 - rawConceptsTaught must include the target concept (or its obvious synonym) for a genuine match.
 
 ${DISCOVERY_OUTPUT}`;
-
-function buildDiscoveryPrompt(topic: string, oversample: number, denyList: string[]): string {
-  const lines = [
-    `Topic: ${topic}`,
-    `Target count: ${oversample} resources.`,
-    `Find a balanced spread across difficulty and resource type. Use Google Search.`,
-  ];
-  appendDenyList(lines, denyList);
-  return lines.join('\n');
-}
 
 function buildConceptDiscoveryPrompt(
   topic: string,
@@ -475,7 +418,7 @@ async function canonicalizeTags(
   // Canonicalization is a best-effort normalization pass, not a correctness
   // gate: every caller already falls back to the row's raw tags when a URL is
   // missing from this map (see the `?? { rawPrerequisiteConcepts, ... }`
-  // default in runWebFallback). A failure here — most commonly the model
+  // default in persistDiscovered). A failure here — most commonly the model
   // capping mid-JSON on a large batch, which surfaces as AI_JSONParseError
   // ("Unterminated string in JSON") from generateObject — must therefore
   // degrade to raw tags, NOT crash the whole cold-topic fallback flow and
