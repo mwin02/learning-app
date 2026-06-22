@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
-import Link from 'next/link';
 import type { TraceEvent } from '@/lib/agents/agent-trace';
 
 type ErrorBody = {
@@ -13,7 +12,7 @@ type ErrorBody = {
 type SubmitState =
   | { kind: 'idle' }
   | { kind: 'loading' }
-  | { kind: 'done'; pathId: string; trace: TraceEvent[] }
+  | { kind: 'done'; requestId: string; topic: string; trace: TraceEvent[] }
   | { kind: 'error'; body: ErrorBody | { error: string; code: 'NETWORK' } };
 
 export function PlaygroundForm() {
@@ -27,6 +26,8 @@ export function PlaygroundForm() {
     const rawTimeframe = String(data.get('timeframeWeeks') ?? '');
     const rawHours = String(data.get('hoursPerWeek') ?? '');
     const priorKnowledge = String(data.get('priorKnowledge') ?? '').trim();
+    const goal = String(data.get('goal') ?? '').trim();
+    const targetMastery = String(data.get('targetMastery') ?? '').trim();
 
     // Submit raw strings as-is for text fields so the server validates
     // exactly what the user typed. Number fields go through Number() so
@@ -34,11 +35,12 @@ export function PlaygroundForm() {
     // and trips INVALID_INPUT on the server — which is what we want to see.
     const payload: Record<string, unknown> = {
       topic: String(data.get('topic') ?? ''),
-      difficulty: String(data.get('difficulty') ?? ''),
       timeframeWeeks: rawTimeframe === '' ? '' : Number(rawTimeframe),
       hoursPerWeek: rawHours === '' ? '' : Number(rawHours),
     };
     if (priorKnowledge.length > 0) payload.priorKnowledge = priorKnowledge;
+    if (goal.length > 0) payload.goal = goal;
+    if (targetMastery.length > 0) payload.targetMastery = targetMastery;
 
     setState({ kind: 'loading' });
 
@@ -84,8 +86,12 @@ export function PlaygroundForm() {
       return;
     }
 
-    const { pathId, trace } = json as { pathId: string; trace?: TraceEvent[] };
-    setState({ kind: 'done', pathId, trace: trace ?? [] });
+    const { requestId, topic, trace } = json as {
+      requestId: string;
+      topic: string;
+      trace?: TraceEvent[];
+    };
+    setState({ kind: 'done', requestId, topic, trace: trace ?? [] });
   }
 
   const disabled = state.kind === 'loading';
@@ -104,11 +110,21 @@ export function PlaygroundForm() {
       </label>
 
       <label className="flex flex-col gap-1">
-        <span className="text-sm font-medium">difficulty (beginner | intermediate | advanced)</span>
+        <span className="text-sm font-medium">targetMastery (optional — beginner | intermediate | advanced)</span>
         <input
-          name="difficulty"
+          name="targetMastery"
           type="text"
           defaultValue="beginner"
+          className="border px-2 py-1 rounded"
+        />
+      </label>
+
+      <label className="flex flex-col gap-1">
+        <span className="text-sm font-medium">goal (optional, ≤2000 chars — the composer infers intent from this)</span>
+        <textarea
+          name="goal"
+          rows={2}
+          placeholder="e.g. refresh calculus before a stats course"
           className="border px-2 py-1 rounded"
         />
       </label>
@@ -148,12 +164,12 @@ export function PlaygroundForm() {
         disabled={disabled}
         className="border px-4 py-2 rounded bg-black text-white disabled:opacity-50 self-start"
       >
-        {disabled ? 'Generating…' : 'Generate path'}
+        {disabled ? 'Queueing…' : 'Request course'}
       </button>
 
       {state.kind === 'loading' && (
         <p className="text-sm text-gray-600">
-          May take up to a minute for cold topics (web fallback + Pro discovery + validation).
+          Validating the topic and queueing the request…
         </p>
       )}
 
@@ -174,10 +190,17 @@ export function PlaygroundForm() {
       {state.kind === 'done' && (
         <div className="flex flex-col gap-3 max-w-5xl">
           <div className="border border-green-500 bg-green-50 text-green-900 p-3 rounded text-sm">
-            Path generated.{' '}
-            <Link href={`/playground/path-generation/${state.pathId}`} className="font-medium underline">
-              View path →
-            </Link>
+            <div className="font-semibold">Request queued ✓</div>
+            <div>
+              requestId <code className="font-mono">{state.requestId}</code> · topic{' '}
+              <code className="font-mono">{state.topic}</code>
+            </div>
+            <div className="mt-1 text-green-800">
+              Fire-and-forget: the out-of-band worker builds the Track. Run{' '}
+              <code className="font-mono">tsx --env-file=.env.local scripts/course-worker.ts --once</code>{' '}
+              to process it; the built Track is logged to the worker console (the
+              &ldquo;course ready&rdquo; notification is Phase 3).
+            </div>
           </div>
           <AgentTracePanel trace={state.trace} />
         </div>
