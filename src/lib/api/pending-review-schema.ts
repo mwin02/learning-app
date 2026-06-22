@@ -8,13 +8,15 @@
 // A discriminated union on `action` so a caller (human button or autonomous
 // review agent) gets a precise, self-describing contract:
 //   approve — pending_review → active (the row becomes pickable by future runs)
-//   reject  — pending_review OR active → deprecated, AND any PathItem still
-//             pointing at it flips active → removed. `reject` accepts an *active*
-//             target on purpose: a child approved earlier can later be found
-//             broken (dead link) and pulled, dropping it from existing paths.
-//             `severity` records WHY: 'soft' (quality downgrade) vs 'hard'
-//             (broken/dead link). Persisted on the row for a future Track layer
-//             to branch on; defaults to 'soft'.
+//   reject  — pending_review OR active → deprecated, AND its ConceptResource
+//             candidate links are deleted from every concept map, with each
+//             affected Path's readiness recomputed (2.5g-5). `reject` accepts an
+//             *active* target on purpose: a child approved earlier can later be
+//             found broken (dead link) and pulled, dropping it from the maps'
+//             candidate pools. `severity` records WHY: 'soft' (quality downgrade)
+//             vs 'hard' (broken/dead link); persisted on the row for audit. Note:
+//             reject reaches the Path side only — immutable Track snapshots are not
+//             touched and may keep pointing at the deprecated row.
 //
 // `cascade` walks the whole decomposition subtree (multi-level: containers can
 // hold container children), so "approve all children of this container" /
