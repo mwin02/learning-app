@@ -76,8 +76,7 @@ export async function authorSpine(args: AuthorSpineArgs): Promise<AuthoredSpine>
     prompt: buildPrompt({ topic, subject, repairFeedback }),
   });
 
-  // TODO(observability): fold into the structured logger when it lands (see the
-  // matching note in curriculum-agent.ts).
+  // TODO(observability): fold into the structured logger when it lands.
   console.log('[map-spine-author]', {
     topic,
     modelId,

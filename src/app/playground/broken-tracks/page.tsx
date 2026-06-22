@@ -15,6 +15,12 @@ export const dynamic = 'force-dynamic';
 
 type Severity = 'all' | DeprecationSeverity;
 
+// Cap the broken-LessonResource scan. This is an internal force-dynamic triage
+// page, not a paginated list — the cap keeps a degenerate library (lots of
+// deprecated links) from scanning the whole table on every load. If we hit it,
+// the page says so; tighten the severity filter to see the rest.
+const ROW_CAP = 500;
+
 const SEV_BADGE: Record<DeprecationSeverity, string> = {
   hard: 'bg-red-100 text-red-800',
   soft: 'bg-amber-100 text-amber-900',
@@ -75,7 +81,9 @@ export default async function BrokenTracksPage({
       resource: { select: { title: true, url: true, deprecationSeverity: true } },
     },
     orderBy: [{ lesson: { orderInTrack: 'asc' } }],
+    take: ROW_CAP,
   });
+  const truncated = rows.length === ROW_CAP;
 
   // Group broken LessonResources by their Track.
   const byTrack = new Map<string, BrokenTrack>();
@@ -137,6 +145,13 @@ export default async function BrokenTracksPage({
         ))}
       </nav>
 
+      {truncated && (
+        <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+          Showing the first {ROW_CAP} broken resource links only. Tighten the severity filter to see
+          the rest.
+        </p>
+      )}
+
       {tracks.length === 0 ? (
         <p className="text-sm text-gray-600">
           No broken tracks{active === 'all' ? '' : ` with ${active} rejections`}. 🎉
@@ -167,8 +182,8 @@ export default async function BrokenTracksPage({
                 </span>
               </div>
               <ul className="flex flex-col gap-1 pl-1">
-                {t.entries.map((e, i) => (
-                  <li key={i} className="flex items-baseline gap-2 text-xs">
+                {t.entries.map((e) => (
+                  <li key={`${e.lessonOrder}-${e.role}-${e.url}`} className="flex items-baseline gap-2 text-xs">
                     <span className="text-gray-400 w-8 shrink-0 text-right">L{e.lessonOrder}</span>
                     <span className="text-gray-700 shrink-0">{e.lessonTitle}</span>
                     <span className="rounded px-1.5 bg-gray-200 text-gray-700 shrink-0">{e.role}</span>
