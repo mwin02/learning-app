@@ -8,12 +8,12 @@
 //
 // Phase 3: replace the body of `withAuth` with a real session lookup
 // (Supabase auth helper, cookie/JWT validation, etc.) and populate
-// session.userId from the authenticated user. Path.createdById flows from
-// session.userId — see PathService in 2d.2.
+// session.userId from the authenticated user. session.userId flows onto
+// CourseRequest.userId when /api/generate-path enqueues — see course-request.ts.
 
 export type Session = {
   // Null until Phase 3 wires real auth. Routes that persist user-owned data
-  // must tolerate null (write Path.createdById = null) until then.
+  // must tolerate null (write CourseRequest.userId = null) until then.
   userId: string | null;
 };
 

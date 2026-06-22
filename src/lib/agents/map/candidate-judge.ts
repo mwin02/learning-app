@@ -61,7 +61,7 @@ export async function judgeCandidates(args: {
     prompt: buildPrompt(conceptTitle, byHandle),
   });
 
-  // TODO(observability): fold into the structured logger (see curriculum-agent.ts).
+  // TODO(observability): fold into the structured logger when it lands.
   console.log('[map-candidate-judge]', {
     concept: conceptSlug,
     modelId,

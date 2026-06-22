@@ -113,7 +113,7 @@ export async function reviewSpine(args: ReviewSpineArgs): Promise<SpineReview> {
     findings: review.findings,
   };
 
-  // TODO(observability): fold into the structured logger (see curriculum-agent.ts).
+  // TODO(observability): fold into the structured logger when it lands.
   console.log('[map-spine-review]', {
     topic,
     modelId,

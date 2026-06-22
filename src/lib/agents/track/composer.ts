@@ -173,7 +173,7 @@ export async function composeTrack(args: {
   });
 
   const raw = result.experimental_output;
-  // TODO(observability): fold into the structured logger (see curriculum-agent.ts).
+  // TODO(observability): fold into the structured logger when it lands.
   console.log('[track-composer]', {
     topic,
     modelId,
