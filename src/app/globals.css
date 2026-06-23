@@ -9,6 +9,12 @@
      calc(100vh - var(--nav-h)), so the whole shell stays aligned from one edit. */
   --nav-h: 62px;
   --space-section: 26px; /* vertical rhythm between main-column cards */
+
+  /* Theme-dependent decoratives that can't be a single color token: the card
+     drop-shadow and the one-off "continue/resume" thumbnail gradient. Defined here
+     (not @theme) so the dark block below can override them. */
+  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04);
+  --gradient-thumb: linear-gradient(135deg, #eef2fb, #e1e8f6);
 }
 
 /* ===== Design tokens (the central palette) =====
@@ -32,6 +38,7 @@
   --color-line-faint: #f0f2f5;
 
   --color-surface: #f5f6f8; /* app background */
+  --color-card: #ffffff; /* raised surfaces: nav, sidebar, cards (flips in dark) */
   --color-fill: #f2f4f7; /* tinted control fill */
   --color-track: #eaedf2; /* progress-bar / ring track */
   --color-hairline: #cfd5dd; /* unfilled control outline */
@@ -39,6 +46,14 @@
   --color-success: #2f9e6f;
   --color-success-bg: #e7f4ee;
   --color-fill-soft: #f7f8fa; /* chip bg / section hover */
+
+  /* Per-resource-type accents (video reuses --color-brand). Tokens, not literals,
+     so they get dark variants — reused by the sidebar type icon + the lesson badge. */
+  --color-accent-embed: #c2872c;
+  --color-accent-embed-bg: #fbf3e6;
+  --color-accent-link: #2f9aa8;
+  --color-accent-exercise: #7c5cdb;
+  --color-accent-exercise-bg: #f3effc;
 }
 
 /* ===== Radius scale =====
@@ -74,10 +89,51 @@
   --font-mono: var(--font-plex-mono);
 }
 
+/* ===== Dark mode (OS preference) =====
+   The palette is centralized, so dark mode is one place: redefine each --color-*
+   token (and the two theme-dependent decoratives) on :root inside the media query.
+   Because the tokens use plain @theme (var indirection, not @theme inline), the
+   generated color utilities (text, bg, border) re-resolve to these values
+   app-wide — no per-component dark: variants. Values from the dark design files. */
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #0f1318;
+    --foreground: #e8ebf0;
+
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --gradient-thumb: linear-gradient(135deg, #1b2436, #161d2b);
+
+    --color-brand: #5d87ef;
+    --color-brand-dark: #5079e3;
+    --color-brand-bg: #1c2433;
+    --color-brand-bg-soft: #1c2433;
+
+    --color-ink: #e8ebf0;
+    --color-ink-soft: #c3cad3;
+    --color-body: #a3acb8;
+    --color-muted: #8b95a3;
+    --color-faint: #6f7884;
+    --color-faintest: #565f6b;
+
+    --color-line: #2a313c;
+    --color-line-soft: #222a33;
+    --color-line-faint: #262d37;
+
+    --color-surface: #0f1318;
+    --color-card: #181d25;
+    --color-fill: #20262f;
+    --color-track: #2a313c;
+    --color-hairline: #3a424d;
+
+    --color-success: #38b583;
+    --color-success-bg: #15291f;
+    --color-fill-soft: #20262f;
+
+    --color-accent-embed: #d99a3e;
+    --color-accent-embed-bg: #2c2415;
+    --color-accent-link: #46b2c1;
+    --color-accent-exercise: #9a7ce8;
+    --color-accent-exercise-bg: #231d33;
   }
 }
 
@@ -97,7 +153,7 @@ body {
     @apply font-mono text-2xs font-semibold tracking-[1.5px] text-muted;
   }
   .card {
-    @apply rounded-card border border-line bg-white shadow-[0_1px_2px_rgba(16,24,40,0.04)];
+    @apply rounded-card border border-line bg-card shadow-[var(--shadow-card)];
   }
   .meta {
     @apply font-mono text-xs font-medium text-body;

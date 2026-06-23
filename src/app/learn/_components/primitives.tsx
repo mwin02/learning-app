@@ -62,7 +62,7 @@ export function ProgressRing({
       }}
     >
       <div
-        className="flex items-center justify-center rounded-full bg-white font-semibold"
+        className="flex items-center justify-center rounded-full bg-card font-semibold"
         style={{ width: inner, height: inner }}
       >
         {children}
@@ -114,12 +114,12 @@ export function LessonStatusIcon({ status }: { status: LessonStatus }) {
   );
 }
 
-// Video reuses the brand; embed/link are bespoke type-accent colors (not core
-// palette tokens — kept literal on purpose).
+// Video reuses the brand; embed/link use the per-type accent tokens (so they flip
+// in dark mode alongside the rest of the palette).
 const TYPE_STYLE: Record<LessonTypeKind, { color: string; icon: React.ReactNode }> = {
   video: { color: 'var(--color-brand)', icon: <PlayIcon size={13} /> },
-  embed: { color: '#c2872c', icon: <EmbedIcon size={15} /> },
-  link: { color: '#2f9aa8', icon: <LinkIcon size={14} /> },
+  embed: { color: 'var(--color-accent-embed)', icon: <EmbedIcon size={15} /> },
+  link: { color: 'var(--color-accent-link)', icon: <LinkIcon size={14} /> },
 };
 
 export function LessonTypeIcon({ type }: { type: LessonTypeKind }) {

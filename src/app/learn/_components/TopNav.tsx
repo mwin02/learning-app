@@ -16,7 +16,7 @@ const BRAND = 'Adaptive';
 export function TopNav() {
   const { model } = useCourse();
   return (
-    <div className="sticky top-0 z-[5] flex h-[var(--nav-h)] items-center gap-5 border-b border-line bg-white px-[26px]">
+    <div className="sticky top-0 z-[5] flex h-[var(--nav-h)] items-center gap-5 border-b border-line bg-card px-[26px]">
       <div className="flex items-center gap-2.5">
         <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-brand font-mono text-sm font-semibold text-white">
           {BRAND.charAt(0)}
@@ -28,10 +28,10 @@ export function TopNav() {
         <a href="#my-courses" className="font-medium text-brand hover:underline">
           My Courses
         </a>
-        <a href="#catalog" className="text-[#6b7480] hover:text-ink-soft">
+        <a href="#catalog" className="text-body hover:text-ink-soft">
           Catalog
         </a>
-        <a href="#paths" className="text-[#6b7480] hover:text-ink-soft">
+        <a href="#paths" className="text-body hover:text-ink-soft">
           Paths
         </a>
       </nav>
@@ -42,7 +42,7 @@ export function TopNav() {
           submitting is a no-op (preventDefault) rather than navigating nowhere. */}
       <form
         onSubmit={(e) => e.preventDefault()}
-        className="flex h-[38px] w-60 items-center gap-2 rounded-control border border-line bg-surface px-3 text-faint focus-within:border-[#c3cdde]"
+        className="flex h-[38px] w-60 items-center gap-2 rounded-control border border-line bg-surface px-3 text-faint focus-within:border-hairline"
       >
         <SearchIcon size={16} />
         <input
