@@ -1,16 +1,29 @@
-// Phase 2.6 (learn UI), Block 1: the course-player shell. A two-pane layout shared
-// by the overview page and (Block 2) the per-lesson content page — both render into
-// {children}, so the sidebar syllabus + course header stay fixed while the content
-// pane swaps. Data loads here via the cached getTrackView; the child pages call the
-// same loader and the React cache() dedupes it to one query per request.
+// Phase 2.6 (learn UI), Block B: the course-player shell. Loads the Track once
+// (server), then renders the Home Summary (Hi-Fi) chrome — IBM Plex type, the
+// #f5f6f8 surface, the sticky TopNav, and the sticky CourseSidebar — around the
+// page content. Wraps everything in the client CourseProvider so the sidebar and
+// the main column share one localStorage-backed progress model.
 
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { IBM_Plex_Sans, IBM_Plex_Mono } from 'next/font/google';
 import { getTrackView } from '@/lib/track-view';
-import { formatDuration } from '@/lib/format-duration';
-import { Syllabus } from './Syllabus';
+import { CourseProvider } from '../_components/course-context';
+import { SANS } from '../_components/primitives';
+import { TopNav } from '../_components/TopNav';
+import { CourseSidebar } from '../_components/CourseSidebar';
 
 export const dynamic = 'force-dynamic';
+
+const plexSans = IBM_Plex_Sans({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700'],
+  variable: '--font-plex-sans',
+});
+const plexMono = IBM_Plex_Mono({
+  subsets: ['latin'],
+  weight: ['400', '500', '600'],
+  variable: '--font-plex-mono',
+});
 
 export default async function LearnLayout({
   children,
@@ -24,25 +37,16 @@ export default async function LearnLayout({
   if (!track) notFound();
 
   return (
-    // Explicit light surface: the app is light-only, but globals.css flips the
-    // body background to near-black under prefers-color-scheme: dark. Pin the
-    // learn shell to a light palette so device dark mode doesn't bleed through.
-    <div className="flex flex-1 min-h-0 bg-white text-gray-900">
-      <aside className="w-80 shrink-0 overflow-y-auto border-r bg-gray-50 p-4">
-        <Link href={`/learn/${track.id}`} className="block">
-          <h1 className="text-base font-semibold leading-snug text-gray-900 hover:underline">
-            {track.title ?? `${track.topic} course`}
-          </h1>
-        </Link>
-        <p className="mt-1 text-xs text-gray-500">
-          {track.lessons.length} lessons · {formatDuration(track.totalMinutes)}
-        </p>
-        <div className="mt-4">
-          <Syllabus track={track} />
+    <div
+      className={`${plexSans.variable} ${plexMono.variable} ${SANS} min-h-screen bg-[#f5f6f8] text-[#1f2730]`}
+    >
+      <CourseProvider track={track}>
+        <TopNav />
+        <div className="flex items-start">
+          <CourseSidebar />
+          <main className="min-h-[calc(100vh-62px)] flex-1 min-w-0">{children}</main>
         </div>
-      </aside>
-
-      <main className="flex-1 overflow-y-auto">{children}</main>
+      </CourseProvider>
     </div>
   );
 }
