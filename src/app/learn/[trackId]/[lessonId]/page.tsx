@@ -5,12 +5,27 @@
 // serializable view-model the client LessonView renders. The resource player itself
 // lands in Block 3; this block scaffolds everything around it.
 
+import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { getTrackView } from '@/lib/track-view';
 import { lessonTypeOf, humanizeConcept } from '@/lib/course-home-model';
 import { LessonView, type LessonViewModel } from '../../_components/LessonView';
 
 export const dynamic = 'force-dynamic';
+
+// Tab title: "<lesson> · <course>". getTrackView is cache()'d (shared with the
+// layout + page render), so this is free.
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ trackId: string; lessonId: string }>;
+}): Promise<Metadata> {
+  const { trackId, lessonId } = await params;
+  const track = await getTrackView(trackId);
+  const lesson = track?.lessons.find((l) => l.id === lessonId);
+  if (!track || !lesson) return {};
+  return { title: `${lesson.title} · ${track.title ?? track.topic}` };
+}
 
 export default async function LessonPage({
   params,
