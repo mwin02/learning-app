@@ -29,7 +29,10 @@ export function ContinueLearningCard({
 
   return (
     <div className="card mb-[var(--space-section)] flex items-center gap-[18px] p-4">
-      <div className="flex h-[78px] w-[122px] flex-none items-center justify-center rounded-button border border-[#e0e6f2] bg-[linear-gradient(135deg,#eef2fb,#e1e8f6)]">
+      <div
+        className="flex h-[78px] w-[122px] flex-none items-center justify-center rounded-button border border-line"
+        style={{ background: 'var(--gradient-thumb)' }}
+      >
         <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand shadow-[0_3px_10px_rgba(63,106,216,0.38)]">
           <PlayIcon size={15} className="text-white" />
         </div>

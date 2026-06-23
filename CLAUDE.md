@@ -88,4 +88,11 @@ Styling uses **Tailwind CSS v4**. The single source of truth for the visual lang
 4. **One-off decoratives may stay inline** — a single-use gradient, a lone max-width, a bespoke accent color. Keep it an arbitrary value and add a short comment if the intent isn't obvious. Don't over-abstract single uses into tokens.
 5. **To restyle globally, edit `globals.css`** — bump a `--text-*` step for sizing, a `--color-*` for palette, `--radius-*` for rounding, `--nav-h`/`--space-section` for layout rhythm. Don't reintroduce per-component hardcoded values.
 
+**Dark mode (OS preference).** The learn UI is dark-mode-aware via a `@media (prefers-color-scheme: dark)` block in `globals.css` that redefines the `--color-*` tokens (plus `--shadow-card` / `--gradient-thumb`) for dark. There are **no `dark:` variants in components** — utilities flip automatically because the tokens use plain `@theme` (var indirection), so overriding the CSS variable re-resolves every `text-*` / `bg-*` / `border-*`. To keep a new page dark-compatible:
+
+- **Build with token utilities only** (rule 1). A token-clean component is dark-clean for free. The failure mode is hardcoded surfaces: `bg-white`, `text-[#…]`, inline `style={{ background: '#fff' }}` — these don't flip. Use **`bg-card`** for raised surfaces (nav/sidebar/panels — `.card` already does), `bg-surface` for the app background, and the text/line/fill tokens for everything else.
+- **A color that must differ by theme but isn't a single `--color-*`** (a gradient, a theme-specific shadow) → make it a CSS variable in `:root` and override it in the dark block (see `--gradient-thumb`, `--shadow-card`), then reference `var(--…)`. Don't inline a light-only literal.
+- **Adding a token?** Give it a dark value in the dark block too, or it'll be stuck at its light value in dark mode.
+- ⚠️ **Never put `*/` inside a CSS comment** (e.g. writing `text-*/bg-*`) — it closes the comment early and crashes the Tailwind/PostCSS parse, after which the dev server silently serves stale CSS. Restart `next dev` after `@theme` changes if new tokens don't appear.
+
 Scope note: the centralized system currently styles the **learn UI** (`src/app/learn/`); the internal `playground` pages predate it and still use ad-hoc utilities — fine to leave, but new shared surfaces should follow the rules above.

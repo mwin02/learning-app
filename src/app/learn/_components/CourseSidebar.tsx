@@ -17,7 +17,7 @@ function LessonRow({ trackId, lesson }: { trackId: string; lesson: CourseHomeLes
   return (
     <Link
       href={`/learn/${trackId}/${lesson.id}`}
-      className={`relative mx-2.5 my-px flex items-center gap-[11px] rounded-control py-2 pl-3.5 pr-2.5 hover:bg-[#f3f5f8] ${
+      className={`relative mx-2.5 my-px flex items-center gap-[11px] rounded-control py-2 pl-3.5 pr-2.5 hover:bg-fill ${
         isCurrent ? 'bg-brand-bg-soft' : 'bg-transparent'
       }`}
     >
@@ -72,7 +72,7 @@ function SectionGroup({ trackId, section }: { trackId: string; section: CourseHo
 export function CourseSidebar() {
   const { model } = useCourse();
   return (
-    <aside className="sticky top-[var(--nav-h)] min-h-[calc(100vh-var(--nav-h))] w-[322px] flex-none self-start border-r border-line bg-white pb-5">
+    <aside className="sticky top-[var(--nav-h)] min-h-[calc(100vh-var(--nav-h))] w-[322px] flex-none self-start border-r border-line bg-card pb-5">
       <div className="border-b border-line-soft px-5 pb-[18px] pt-5">
         <div className="eyebrow text-muted">{model.topic.toUpperCase()}</div>
         <div className="mb-3 mt-[5px] text-lg font-semibold leading-tight">{model.title}</div>
