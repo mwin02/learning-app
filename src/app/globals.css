@@ -3,13 +3,75 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+
+  /* Layout constants (referenced via arbitrary utilities, e.g. top-[var(--nav-h)]).
+     --nav-h is load-bearing: the sticky sidebar/main heights derive from it via
+     calc(100vh - var(--nav-h)), so the whole shell stays aligned from one edit. */
+  --nav-h: 62px;
+  --space-section: 26px; /* vertical rhythm between main-column cards */
 }
 
+/* ===== Design tokens (the central palette) =====
+   Literal color values → become `text-*` / `bg-* / border-*` utilities, replacing
+   the per-component arbitrary `[#hex]` values. Change the brand here once. */
+@theme {
+  --color-brand: #3f6ad8;
+  --color-brand-dark: #3357be;
+  --color-brand-bg: #eaf0fc;
+  --color-brand-bg-soft: #eef3fc;
+
+  --color-ink: #1f2730; /* primary text */
+  --color-ink-soft: #3f4651; /* secondary text */
+  --color-body: #5a636f; /* paragraph body */
+  --color-muted: #8a93a0; /* meta text */
+  --color-faint: #9aa2ad; /* labels / eyebrows */
+  --color-faintest: #aab2bd; /* smallest meta */
+
+  --color-line: #e7eaef; /* card / divider borders */
+  --color-line-soft: #eef1f5;
+  --color-line-faint: #f0f2f5;
+
+  --color-surface: #f5f6f8; /* app background */
+  --color-fill: #f2f4f7; /* tinted control fill */
+  --color-track: #eaedf2; /* progress-bar / ring track */
+  --color-hairline: #cfd5dd; /* unfilled control outline */
+
+  --color-success: #2f9e6f;
+  --color-success-bg: #e7f4ee;
+  --color-fill-soft: #f7f8fa; /* chip bg / section hover */
+}
+
+/* ===== Radius scale =====
+   Semantic radii so corner rounding is consistent + adjustable in one place. */
+@theme {
+  --radius-control: 9px; /* inputs, list rows, badges */
+  --radius-button: 10px; /* buttons, media thumbnails */
+  --radius-card: 14px; /* cards / panels */
+}
+
+/* ===== Type scale (the central font-size ramp) =====
+   Single source for font sizes. Components reference these steps (text-2xs …
+   text-3xl) instead of hardcoded `text-[Npx]`, so a global size change is one edit
+   here. Overrides a few Tailwind defaults (xs/sm/2xl/3xl) and adds 2xs/md; base/lg/
+   xl keep their defaults. Sized ~1–2px above the original design. */
+@theme {
+  --text-2xs: 0.6875rem; /* 11px */
+  --text-2xs--line-height: 1rem;
+  --text-xs: 0.8125rem; /* 13px (was 12) */
+  --text-sm: 0.9375rem; /* 15px (was 14) */
+  --text-md: 1rem; /* 16px */
+  --text-md--line-height: 1.5rem;
+  --text-2xl: 1.75rem; /* 28px (was 24) */
+  --text-3xl: 2.125rem; /* 34px (was 30) */
+}
+
+/* Fonts + dark-mode bg/fg reference runtime vars, so they live in @theme inline
+   (the value is inlined into the generated utilities rather than re-emitted). */
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-plex-sans);
+  --font-mono: var(--font-plex-mono);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -22,5 +84,31 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
+
+/* ===== Semantic component classes =====
+   The genuinely-repeated patterns across the learn UI. Each is composed from
+   tokens, so they stay in sync with the palette. Color on `.eyebrow` is a default
+   — add a `text-*` utility (e.g. `text-brand`) to override it (utilities layer
+   wins over components). */
+@layer components {
+  .eyebrow {
+    @apply font-mono text-2xs font-semibold tracking-[1.5px] text-muted;
+  }
+  .card {
+    @apply rounded-card border border-line bg-white shadow-[0_1px_2px_rgba(16,24,40,0.04)];
+  }
+  .meta {
+    @apply font-mono text-xs font-medium text-body;
+  }
+  /* The smaller sibling of .meta — per-lesson + per-section micro-labels. Slightly
+     lighter than .meta to keep the size hierarchy, but darker/heavier than the
+     original faint regular weight. */
+  .meta-xs {
+    @apply font-mono text-2xs font-medium text-muted;
+  }
+  .stat-value {
+    @apply text-2xl font-bold tracking-[-0.5px];
+  }
 }

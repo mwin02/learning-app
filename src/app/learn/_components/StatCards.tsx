@@ -2,10 +2,7 @@
 // Summary (Hi-Fi) prototype, adapted to our data: the middle "Time spent" card
 // (no time tracking yet) is replaced by "Lessons completed".
 
-import { MONO, ProgressRing } from './primitives';
-
-const CARD = 'rounded-[14px] border border-[#e7eaef] bg-white p-5 shadow-[0_1px_2px_rgba(16,24,40,0.04)]';
-const LABEL = 'text-[10px] tracking-[1.5px] text-[#9aa2ad]';
+import { ProgressRing } from './primitives';
 
 export function StatCards({
   progressPct,
@@ -19,17 +16,17 @@ export function StatCards({
   timeRemainingLabel: string;
 }) {
   return (
-    <div className="mb-[26px] grid grid-cols-[1.5fr_1fr_1fr] gap-[14px]">
-      <div className={`flex items-center gap-4 ${CARD}`}>
+    <div className="mb-[var(--space-section)] grid grid-cols-[1.5fr_1fr_1fr] gap-[14px]">
+      <div className="card flex items-center gap-4 p-5">
         <ProgressRing pct={progressPct} size={62} thickness={8}>
-          <span className="text-[15px] font-bold">{progressPct}%</span>
+          <span className="text-md font-bold">{progressPct}%</span>
         </ProgressRing>
         <div>
-          <div className={`${LABEL} ${MONO}`}>OVERALL PROGRESS</div>
-          <div className="mt-[3px] text-[15px] font-semibold">
+          <div className="eyebrow">OVERALL PROGRESS</div>
+          <div className="mt-[3px] text-md font-semibold">
             {doneCount} of {totalLessons} lessons
           </div>
-          <div className="mt-px text-xs text-[#8a93a0]">
+          <div className="mt-px text-xs text-muted">
             {progressPct === 0
               ? 'Start when you’re ready'
               : progressPct === 100
@@ -39,16 +36,16 @@ export function StatCards({
         </div>
       </div>
 
-      <div className={CARD}>
-        <div className={`${LABEL} ${MONO}`}>LESSONS COMPLETED</div>
-        <div className="mt-2 text-[26px] font-bold tracking-[-0.5px]">{doneCount}</div>
-        <div className="mt-0.5 text-xs text-[#8a93a0]">of {totalLessons}</div>
+      <div className="card p-5">
+        <div className="eyebrow">LESSONS COMPLETED</div>
+        <div className="stat-value mt-2">{doneCount}</div>
+        <div className="mt-0.5 text-xs text-muted">of {totalLessons}</div>
       </div>
 
-      <div className={CARD}>
-        <div className={`${LABEL} ${MONO}`}>TIME REMAINING</div>
-        <div className="mt-2 text-[26px] font-bold tracking-[-0.5px]">{timeRemainingLabel}</div>
-        <div className="mt-0.5 text-xs text-[#8a93a0]">at your pace</div>
+      <div className="card p-5">
+        <div className="eyebrow">TIME REMAINING</div>
+        <div className="stat-value mt-2">{timeRemainingLabel}</div>
+        <div className="mt-0.5 text-xs text-muted">at your pace</div>
       </div>
     </div>
   );

@@ -5,7 +5,7 @@
 // for now (no Catalog/Paths routes yet); the progress ring reflects live course
 // progress from the course context.
 
-import { MONO, ProgressRing } from './primitives';
+import { ProgressRing } from './primitives';
 import { SearchIcon } from './icons';
 import { useCourse } from './course-context';
 
@@ -16,24 +16,22 @@ const BRAND = 'Adaptive';
 export function TopNav() {
   const { model } = useCourse();
   return (
-    <div className="sticky top-0 z-[5] flex h-[62px] items-center gap-5 border-b border-[#e7eaef] bg-white px-[26px]">
+    <div className="sticky top-0 z-[5] flex h-[var(--nav-h)] items-center gap-5 border-b border-line bg-white px-[26px]">
       <div className="flex items-center gap-2.5">
-        <div
-          className={`flex h-7 w-7 items-center justify-center rounded-lg bg-[#3f6ad8] text-sm font-semibold text-white ${MONO}`}
-        >
+        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-brand font-mono text-sm font-semibold text-white">
           {BRAND.charAt(0)}
         </div>
-        <span className="text-base font-semibold tracking-[-0.2px]">{BRAND}</span>
+        <span className="text-lg font-semibold tracking-[-0.2px]">{BRAND}</span>
       </div>
 
       <nav className="ml-4 flex gap-[22px] text-sm">
-        <a href="#my-courses" className="font-medium text-[#3f6ad8] hover:underline">
+        <a href="#my-courses" className="font-medium text-brand hover:underline">
           My Courses
         </a>
-        <a href="#catalog" className="text-[#6b7480] hover:text-[#3f4651]">
+        <a href="#catalog" className="text-[#6b7480] hover:text-ink-soft">
           Catalog
         </a>
-        <a href="#paths" className="text-[#6b7480] hover:text-[#3f4651]">
+        <a href="#paths" className="text-[#6b7480] hover:text-ink-soft">
           Paths
         </a>
       </nav>
@@ -44,21 +42,19 @@ export function TopNav() {
           submitting is a no-op (preventDefault) rather than navigating nowhere. */}
       <form
         onSubmit={(e) => e.preventDefault()}
-        className="flex h-[38px] w-60 items-center gap-2 rounded-[9px] border border-[#e7eaef] bg-[#f4f6f8] px-3 text-[#9aa2ad] focus-within:border-[#c3cdde]"
+        className="flex h-[38px] w-60 items-center gap-2 rounded-control border border-line bg-surface px-3 text-faint focus-within:border-[#c3cdde]"
       >
         <SearchIcon size={16} />
         <input
           type="search"
           placeholder="Search lessons"
           aria-label="Search lessons"
-          className="w-full bg-transparent text-[13px] text-[#3f4651] placeholder:text-[#9aa2ad] focus:outline-none"
+          className="w-full bg-transparent text-sm text-ink-soft placeholder:text-faint focus:outline-none"
         />
       </form>
 
-      <ProgressRing pct={model.progressPct} size={30} thickness={4} track="#e7eaef">
-        <span className={`text-[9px] font-semibold text-[#3f6ad8] ${MONO}`}>
-          {model.progressPct}
-        </span>
+      <ProgressRing pct={model.progressPct} size={30} thickness={4} track="var(--color-line)">
+        <span className="font-mono text-2xs font-semibold text-brand">{model.progressPct}</span>
       </ProgressRing>
 
       <div

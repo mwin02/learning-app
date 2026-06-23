@@ -7,8 +7,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { MONO, COLORS, ProgressBar, LessonStatusIcon, LessonTypeIcon } from './primitives';
-import { SECTION_STATUS_STYLE } from './primitives';
+import { ProgressBar, LessonStatusIcon, LessonTypeIcon, SECTION_STATUS_STYLE } from './primitives';
 import { ChevronDownIcon, ChevronRightIcon } from './icons';
 import { useCourse } from './course-context';
 import type { CourseHomeLesson, CourseHomeSection } from '@/lib/course-home-model';
@@ -18,19 +17,17 @@ function LessonRow({ trackId, lesson }: { trackId: string; lesson: CourseHomeLes
   return (
     <Link
       href={`/learn/${trackId}/${lesson.id}`}
-      className="relative mx-2.5 my-px flex items-center gap-[11px] rounded-[9px] py-2 pl-3.5 pr-2.5 hover:bg-[#f3f5f8]"
-      style={{ background: isCurrent ? '#eef3fc' : 'transparent' }}
+      className={`relative mx-2.5 my-px flex items-center gap-[11px] rounded-control py-2 pl-3.5 pr-2.5 hover:bg-[#f3f5f8] ${
+        isCurrent ? 'bg-brand-bg-soft' : 'bg-transparent'
+      }`}
     >
       {isCurrent && (
-        <span
-          className="absolute bottom-2 left-0 top-2 w-[3px] rounded-[3px]"
-          style={{ background: COLORS.brand }}
-        />
+        <span className="absolute bottom-2 left-0 top-2 w-[3px] rounded-[3px] bg-brand" />
       )}
       <LessonStatusIcon status={lesson.status} />
       <LessonTypeIcon type={lesson.type} />
-      <span className="flex-1 text-[13.5px] leading-tight text-[#293039]">{lesson.title}</span>
-      <span className={`text-[10px] text-[#aab2bd] ${MONO}`}>{lesson.meta}</span>
+      <span className="flex-1 text-sm leading-tight text-ink">{lesson.title}</span>
+      <span className="meta-xs">{lesson.meta}</span>
     </Link>
   );
 }
@@ -46,16 +43,16 @@ function SectionGroup({ trackId, section }: { trackId: string; section: CourseHo
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-2.5 px-5 py-2.5 text-left hover:bg-[#f7f8fa]"
+        className="flex w-full items-center gap-2.5 px-5 py-2.5 text-left hover:bg-fill-soft"
       >
         {open ? (
-          <ChevronDownIcon size={14} className="text-[#9aa2ad]" />
+          <ChevronDownIcon size={14} className="text-faint" />
         ) : (
-          <ChevronRightIcon size={14} className="text-[#9aa2ad]" />
+          <ChevronRightIcon size={14} className="text-faint" />
         )}
         <span className="flex-1">
           <span className="block text-sm font-medium leading-tight">{section.title}</span>
-          <span className={`mt-0.5 block text-[10px] text-[#9aa2ad] ${MONO}`}>
+          <span className="meta-xs mt-0.5 block">
             {section.fraction} · {section.durLabel}
           </span>
         </span>
@@ -75,26 +72,20 @@ function SectionGroup({ trackId, section }: { trackId: string; section: CourseHo
 export function CourseSidebar() {
   const { model } = useCourse();
   return (
-    <aside className="sticky top-[62px] min-h-[calc(100vh-62px)] w-[322px] flex-none self-start border-r border-[#e7eaef] bg-white pb-5">
-      <div className="border-b border-[#eef1f5] px-5 pb-[18px] pt-5">
-        <div className={`text-[10px] tracking-[1.5px] text-[#8a93a0] ${MONO}`}>
-          {model.topic.toUpperCase()}
-        </div>
-        <div className="mb-3 mt-[5px] text-[17px] font-semibold leading-tight">{model.title}</div>
+    <aside className="sticky top-[var(--nav-h)] min-h-[calc(100vh-var(--nav-h))] w-[322px] flex-none self-start border-r border-line bg-white pb-5">
+      <div className="border-b border-line-soft px-5 pb-[18px] pt-5">
+        <div className="eyebrow text-muted">{model.topic.toUpperCase()}</div>
+        <div className="mb-3 mt-[5px] text-lg font-semibold leading-tight">{model.title}</div>
         <ProgressBar pct={model.progressPct} />
         <div className="mt-2 flex justify-between">
-          <span className={`text-[11px] text-[#8a93a0] ${MONO}`}>
+          <span className="meta">
             {model.doneCount} / {model.totalLessons} lessons
           </span>
-          <span className={`text-[11px] font-medium text-[#3f6ad8] ${MONO}`}>
-            {model.progressPct}%
-          </span>
+          <span className="meta font-medium text-brand">{model.progressPct}%</span>
         </div>
       </div>
 
-      <div className={`px-5 pb-1.5 pt-4 text-[10px] tracking-[1.5px] text-[#9aa2ad] ${MONO}`}>
-        COURSE CONTENT
-      </div>
+      <div className="eyebrow px-5 pb-1.5 pt-4">COURSE CONTENT</div>
 
       {model.sections.map((section) => (
         <SectionGroup key={section.id} trackId={model.trackId} section={section} />
