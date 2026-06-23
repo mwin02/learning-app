@@ -70,7 +70,8 @@ export type CourseHomeModel = {
 // The lesson's representative type comes from its primary resource (the resources
 // arrive in allocator order, primary first). `interactive` / embed delivery → embed
 // icon; `video` → video; everything else (article/docs/book/course) → reading link.
-function lessonTypeOf(lesson: TrackLessonView): LessonTypeKind {
+// Exported so the lesson view derives the same type badge from the raw projection.
+export function lessonTypeOf(lesson: TrackLessonView): LessonTypeKind {
   const primary = lesson.resources[0];
   if (!primary) return 'link';
   if (primary.deliveryMode === 'embed') return 'embed';
@@ -85,7 +86,7 @@ function lessonTypeOf(lesson: TrackLessonView): LessonTypeKind {
 }
 
 // "vector-addition" → "Vector addition". conceptsTaught are stable per-Path slugs.
-function humanizeConcept(slug: string): string {
+export function humanizeConcept(slug: string): string {
   const spaced = slug.replace(/[-_]+/g, ' ').trim();
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }

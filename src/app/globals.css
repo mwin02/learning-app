@@ -52,6 +52,7 @@
   --color-accent-embed: #c2872c;
   --color-accent-embed-bg: #fbf3e6;
   --color-accent-link: #2f9aa8;
+  --color-accent-link-bg: #e3f3f5;
   --color-accent-exercise: #7c5cdb;
   --color-accent-exercise-bg: #f3effc;
 }
@@ -132,6 +133,7 @@
     --color-accent-embed: #d99a3e;
     --color-accent-embed-bg: #2c2415;
     --color-accent-link: #46b2c1;
+    --color-accent-link-bg: #14292e;
     --color-accent-exercise: #9a7ce8;
     --color-accent-exercise-bg: #231d33;
   }
