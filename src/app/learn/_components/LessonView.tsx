@@ -11,6 +11,7 @@ import Link from 'next/link';
 import type { TrackResourceView } from '@/lib/track-view';
 import type { LessonTypeKind } from '@/lib/course-home-model';
 import { useCourse } from './course-context';
+import { ResourcePane } from './ResourcePane';
 import { LessonTypeIcon } from './primitives';
 import {
   CheckIcon,
@@ -86,9 +87,7 @@ export function LessonView({ model }: { model: LessonViewModel }) {
           </span>
         </div>
 
-        {/* Resource player — Block 3 replaces this slot with the embed iframe /
-            newtab card renderer (primary + alternates). */}
-        <ResourceSlot resources={model.resources} />
+        <ResourcePane resources={model.resources} />
 
         {model.summary && (
           <p className="mt-[22px] text-md leading-[1.65] text-body">{model.summary}</p>
@@ -122,33 +121,6 @@ export function LessonView({ model }: { model: LessonViewModel }) {
         />
       </div>
     </div>
-  );
-}
-
-// Block-2 placeholder: a minimal card that opens the lesson's primary resource in a
-// new tab. Block 3 swaps it for the full embed-vs-newtab renderer + alternates.
-function ResourceSlot({ resources }: { resources: TrackResourceView[] }) {
-  const primary = resources[0];
-  if (!primary) {
-    return (
-      <div className="card flex aspect-[16/9] items-center justify-center text-sm text-muted">
-        No resource attached yet.
-      </div>
-    );
-  }
-  return (
-    <a
-      href={primary.resource.url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="card flex items-center gap-4 p-5 hover:border-hairline"
-    >
-      <div className="min-w-0 flex-1">
-        <div className="meta-xs text-faint">{primary.resource.type.toUpperCase()}</div>
-        <div className="mt-1 truncate text-md font-semibold">{primary.resource.title}</div>
-      </div>
-      <span className="flex-none text-sm font-semibold text-brand">Open ↗</span>
-    </a>
   );
 }
 

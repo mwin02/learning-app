@@ -5,6 +5,7 @@
 // one localStorage-backed progress model. (Fonts are now app-wide via the root
 // layout, so no local next/font instantiation here.)
 
+import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { getTrackView } from '@/lib/track-view';
 import { CourseProvider } from '../_components/course-context';
@@ -12,6 +13,19 @@ import { TopNav } from '../_components/TopNav';
 import { CourseSidebar } from '../_components/CourseSidebar';
 
 export const dynamic = 'force-dynamic';
+
+// Title the browser tab after the course (overrides the app default). The lesson
+// route refines this further; getTrackView is cache()'d, so this adds no DB query.
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ trackId: string }>;
+}): Promise<Metadata> {
+  const { trackId } = await params;
+  const track = await getTrackView(trackId);
+  if (!track) return {};
+  return { title: track.title ?? `${track.topic} course` };
+}
 
 export default async function LearnLayout({
   children,
