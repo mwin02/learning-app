@@ -34,8 +34,11 @@ export async function sourceAndAttachConcept(args: {
   // Biases discovery toward a learner level (the in-track thickener). Omitted by
   // mastery-agnostic spine-hole remediation.
   targetMastery?: Difficulty;
+  // Lever C: judge sourced rows with the strict on-ramp rubric when this concept
+  // is the orientation on-ramp, so re-sourcing it can't re-admit deep-dives.
+  isOnRamp?: boolean;
 }): Promise<number> {
-  const { pathId, topic, conceptId, slug, title, targetMastery } = args;
+  const { pathId, topic, conceptId, slug, title, targetMastery, isOnRamp = false } = args;
 
   const sourced = await sourceForConcept({ topic, concept: { slug, title }, targetMastery });
   if (sourced.insertedIds.length === 0) {
@@ -46,7 +49,7 @@ export async function sourceAndAttachConcept(args: {
   const rows = await loadAsSearchResults(sourced.insertedIds);
   if (rows.length === 0) return 0;
 
-  const judged = await judgeCandidates({ conceptTitle: title, conceptSlug: slug, candidates: rows });
+  const judged = await judgeCandidates({ conceptTitle: title, conceptSlug: slug, candidates: rows, isOnRamp });
   // Floor + cap the newly-judged set (Lever A) rather than attaching everything > 0.
   const kept = selectAttachable(judged);
   if (kept.length === 0) {

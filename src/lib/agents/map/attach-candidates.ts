@@ -152,8 +152,14 @@ async function attachOne(
   // Pickable == active + atomic (per ROADMAP: candidates are existing pickable
   // rows). pending_review is excluded — the spine is the gating backbone and
   // shouldn't rest on unvetted rows.
+  //
+  // Lever C: the on-ramp's bare title ("Introduction to Calculus") is a magnet —
+  // searched against a single-subject corpus it ranks the whole subject. Query it
+  // with orientation/setup wording instead, so the vector search leans toward
+  // overview/getting-started resources rather than deep subject content.
+  const query = concept.isOnRamp ? onRampQuery(concept.title) : concept.title;
   const candidates = await searchResources({
-    query: concept.title,
+    query,
     topics,
     statuses: ['active'],
     pickableOnly: true,
@@ -174,6 +180,7 @@ async function attachOne(
     conceptTitle: concept.title,
     conceptSlug: concept.slug,
     candidates,
+    isOnRamp: concept.isOnRamp ?? false,
   });
 
   // Floor + cap (Lever A) instead of keeping everything > 0, so a generic concept
@@ -181,4 +188,14 @@ async function attachOne(
   const kept = selectAttachable(judged);
 
   return { conceptSlug: concept.slug, candidates: kept };
+}
+
+// The discriminating embedding query for an on-ramp concept (Lever C). Augments
+// the concept title with orientation/setup wording so the vector search ranks
+// overview/getting-started resources over the subject's deep content. Subject-
+// agnostic phrasing — works for both programming ("setup, first steps") and math
+// ("big picture, notation, prerequisites"); the judge's on-ramp rubric is the
+// hard filter, this just improves what the search surfaces to it.
+export function onRampQuery(conceptTitle: string): string {
+  return `${conceptTitle}: overview and getting started for an absolute beginner — what it is, the core idea and big picture, notation and setup, prerequisites, and the very first steps`;
 }

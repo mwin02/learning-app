@@ -52,6 +52,7 @@ type HoleConcept = {
   conceptId: string;
   slug: string;
   title: string;
+  isOnRamp: boolean;
   candidates: HoleEvidenceCandidate[];
 };
 
@@ -108,6 +109,7 @@ export async function remediatePath(
           conceptId: hole.conceptId,
           slug: hole.slug,
           title: hole.title,
+          isOnRamp: hole.isOnRamp,
         });
         if (attached > 0) progress = true;
       }
@@ -183,6 +185,7 @@ async function loadHoleEvidence(
       id: true,
       slug: true,
       title: true,
+      isOnRamp: true,
       resources: {
         select: {
           resourceId: true,
@@ -197,6 +200,7 @@ async function loadHoleEvidence(
     conceptId: c.id,
     slug: c.slug,
     title: c.title,
+    isOnRamp: c.isOnRamp,
     candidates: c.resources.map((r) => ({
       resourceId: r.resourceId,
       role: r.role,

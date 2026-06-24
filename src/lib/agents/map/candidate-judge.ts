@@ -43,8 +43,12 @@ export async function judgeCandidates(args: {
   conceptTitle: string;
   conceptSlug: string;
   candidates: SearchResult[];
+  // Lever C: when the concept is the course's orientation on-ramp, judge with a
+  // stricter rubric so a deep-dive on a downstream subtopic can't score as
+  // `teaches` (the magnet behavior). See ON_RAMP_RUBRIC.
+  isOnRamp?: boolean;
 }): Promise<JudgedCandidate[]> {
-  const { conceptTitle, conceptSlug, candidates } = args;
+  const { conceptTitle, conceptSlug, candidates, isOnRamp = false } = args;
   if (candidates.length === 0) return [];
 
   // Stable handle ↔ resource map for this call only.
@@ -57,7 +61,7 @@ export async function judgeCandidates(args: {
     temperature,
     maxOutputTokens,
     output: Output.object({ schema: VerdictSchema }),
-    system: SYSTEM_PROMPT,
+    system: isOnRamp ? `${SYSTEM_PROMPT}\n\n${ON_RAMP_RUBRIC}` : SYSTEM_PROMPT,
     prompt: buildPrompt(conceptTitle, byHandle),
   });
 
@@ -112,6 +116,16 @@ Rules:
 - Judge ONLY against the candidate's provided metadata (title, summary, conceptsTaught, prerequisiteConcepts, type, difficulty). Do not invent facts about a resource.
 - Reference each candidate by its \`handle\` exactly as given. Score every candidate you are given, once each. Never invent a handle.
 - Be discriminating: a resource that merely mentions the concept is "uses" with low coverage, not "teaches".`;
+
+// Appended for the orientation on-ramp concept only (Lever C). The on-ramp is the
+// single deliberately-broad concept that gets an absolute beginner started; left
+// to the base rubric, the judge scores any strong subject resource as "teaches"
+// it, so deep-dives on downstream subtopics flood in (the calculus magnet: 45
+// candidates, mostly derivative/integral sessions scored teaches 0.9).
+const ON_RAMP_RUBRIC = `IMPORTANT — this target concept is the course's ORIENTATION / ON-RAMP: the single broad concept that gets an absolute beginner started in the subject (what it is, the core mental model, environment setup / notation, prerequisite review, the very first steps). Apply a STRICTER rubric for it:
+- Score "teaches" high ONLY for resources that genuinely ORIENT a newcomer in this way — overviews, "getting started" / setup guides, "what is X" introductions, big-picture conceptual primers.
+- A resource that deep-dives a SPECIFIC downstream subtopic (a particular technique, theorem, operation, data structure, or named method) does NOT teach the on-ramp. Score such a resource 0 for this concept, even if it is excellent on its own — it belongs to a later concept, not here.
+- When unsure whether a resource is broad orientation or a specific deep-dive, treat it as a deep-dive and score it 0.`;
 
 function buildPrompt(conceptTitle: string, byHandle: Map<string, SearchResult>): string {
   const list = [...byHandle.entries()].map(([handle, r]) => ({
