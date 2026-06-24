@@ -165,6 +165,24 @@ export const MAP_JUDGE_CONCURRENCY = 4;
 // it. Modest so we're not brittle against a thin library.
 export const MAP_SPINE_MIN_PRIMARY_COVERAGE = 0.5;
 
+// On-ramp magnet fix (Lever A) — attachment hygiene applied by selectAttachable
+// (attach-candidates.ts), to every concept (not just the on-ramp).
+//
+// MAP_ATTACH_MIN_COVERAGE: drop a judged candidate below this coverageScore
+// instead of attaching everything > 0. Kept at the conflation evidence-band floor
+// (REMEDIATION_CONFLATION_BAND_MIN = 0.3) ON PURPOSE: a higher floor would strip
+// the sub-floor [0.3, 0.5) `teaches` that classifyHole reads to tell a genuine gap
+// from an over-coarse (conflation) concept — so 0.3 trims search noise without
+// blinding remediation. (If you ever raise BAND_MIN, raise this in lockstep.)
+//
+// MAP_MAX_CANDIDATES_PER_CONCEPT: hard cap on how many candidate links one concept
+// keeps, enforced on the MERGED set so repeated thickening/remediation passes can't
+// accumulate unboundedly (the magnet held 45). selectAttachable always retains the
+// best qualifying `teaches` (>= MAP_SPINE_MIN_PRIMARY_COVERAGE) even if the cap
+// would evict it, so capping can never regress readiness.
+export const MAP_ATTACH_MIN_COVERAGE = 0.3;
+export const MAP_MAX_CANDIDATES_PER_CONCEPT = 6;
+
 // Phase 2.5d-7c (inspector attach-resource picker): max pickable candidates the
 // resource-search endpoint returns to the attach picker. Small — the operator is
 // scanning for one resource to attach to a concept, not browsing the library.
