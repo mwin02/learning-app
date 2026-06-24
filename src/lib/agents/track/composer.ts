@@ -47,11 +47,18 @@ export type ComposerCandidate = {
 };
 
 // One concept of the map, with its candidates sorted coverage-desc. Concepts are
-// passed in topo order so the model sees the teaching sequence.
+// passed in continuity-first teaching order (each builds on the previous) so the
+// model's grouping keys off real adjacency. The model follows this order within a
+// thread; its emission order matters only at branch points, where it breaks the tie
+// between independent threads (final order is derived in validate-composition).
 export type ComposerInputConcept = {
   slug: string;
   title: string;
   membership: ConceptMembership;
+  // Direct prerequisite slugs (incoming prereq edges). Given to the composer so it
+  // can SEE the branch structure — concepts that don't depend on each other are
+  // independent threads, and the composer orders those threads at branch points.
+  prerequisiteSlugs: string[];
   candidates: ComposerCandidate[];
 };
 
@@ -142,6 +149,7 @@ export async function composeTrack(args: {
     slug: c.slug,
     title: c.title,
     membership: c.membership,
+    prerequisiteSlugs: c.prerequisiteSlugs,
     candidates: c.candidates.map((cand) => {
       const handle = `r${++n}`;
       byHandle.set(handle, { conceptSlug: c.slug, resourceId: cand.resourceId });
@@ -252,7 +260,7 @@ You produce, in one pass:
 
 1. \`prune\` — the slugs of concepts the learner ALREADY KNOWS, judged from their prior-knowledge description. Be conservative: only prune a concept the description clearly covers. A wrongly pruned concept leaves a gap; a wrongly kept one is just a little redundant. Prune nothing if the description is empty. You MAY prune a SPINE (backbone) concept too — but only with clear evidence the learner knows it; hold spine to a higher bar than frontier, since a foundational concept is load-bearing for everything after it. When a learner says they are reviewing a topic they previously studied, pruning the early/foundational concepts they describe knowing is correct.
 
-2. \`lessons\` — entries in teaching order. YOU own this order. The concepts are GIVEN to you in one valid prerequisite order, but that is NOT necessarily the best teaching order — it is only a starting point, and adjacent concepts with no prerequisite between them may be poorly sequenced (e.g. data-structure breadth landing before the core syntax a beginner needs first). Emit your lessons in the sequence you judge best to learn in: among concepts that have NO prerequisite relationship to each other, lead with the more foundational, load-bearing one (typically core syntax → operators → control flow → functions before broader data-structure or enrichment topics). The one hard rule: never place a concept before something it depends on. Include every SPINE (backbone) concept you keep; include the FRONTIER (enrichment) concepts the target mastery warrants and omit the rest (omitting deep/tangential frontier is how mastery sets depth). If you include a concept, also include any concept it depends on — never include a concept while omitting its prerequisite. For each lesson:
+2. \`lessons\` — the concepts grouped into lessons, in teaching order. Each concept lists its direct \`prerequisiteSlugs\`. The suggested input order is ONE valid order, but it may sequence independent threads sub-optimally — do not just echo it. You do NOT need to micro-sequence within a thread: a deterministic pass downstream enforces every prerequisite and keeps each thread contiguous, so you cannot place a concept before something it depends on. Your sequencing job is at BRANCH POINTS. Two concepts are on INDEPENDENT THREADS when neither is a prerequisite (directly or transitively) of the other — e.g. when several concepts share the same prerequisite and none depends on the others (after \`limits-and-continuity\`, calculus forks into differentiation, integration, and infinite series — independent threads). At each such branch, LEAD WITH THE THREAD TAUGHT FIRST BY CONVENTION for this subject (for calculus: differentiation before integration before series), and follow a thread to its natural end before starting the next rather than interleaving them. Express your choice simply by the order you emit the lessons; the deterministic pass uses your order ONLY to pick which independent thread to start at each branch. Your other decisions: which concepts to INCLUDE, how to GROUP adjacent ones, and how to FRAME them. Include every SPINE (backbone) concept you keep; include the FRONTIER (enrichment) concepts the target mastery warrants and omit the rest (omitting deep/tangential frontier is how mastery sets depth). If you include a concept, also include any concept it depends on — never include a concept while omitting its prerequisite. For each lesson:
    - \`conceptSlugs\`: usually one slug. You MAY merge two or three TIGHTLY-COUPLED adjacent concepts into one lesson when they are naturally taught together — but never merge across an unrelated concept that sits between them in the order.
    - \`mandatoryHandles\`: the RANKED must-have resources for this lesson, best first — its "complementary core". These are the resources a learner genuinely needs; a bigger time budget will include more of them, but the FIRST is always used, so make it the single best one. Prefer "teaches" candidates difficulty-matched to the target mastery (beginner→beginner, advanced→advanced). The core MAY span functions — e.g. a "teaches" to learn it plus an "assesses" to practice it — when that genuinely complements. Keep it tight: usually 1, up to ~3; do NOT pad it with redundant overlapping resources. Use handles exactly as given; never invent one.
    - \`optionalHandles\`: the remaining useful candidates as a substitute/enrichment pool, graded best first. These are NOT scheduled by default — they are fallbacks if a core resource fails and extra reading for the keen. Leave empty if there are none. Never repeat a handle that is already in \`mandatoryHandles\`.
@@ -288,6 +296,7 @@ function buildPrompt(args: {
     slug: string;
     title: string;
     membership: ConceptMembership;
+    prerequisiteSlugs: string[];
     candidates: {
       handle: string;
       title: string;

@@ -21,20 +21,20 @@ function check(name: string, cond: boolean, detail?: unknown) {
 // --- fixture map: a → b → f (a,b spine; f frontier) ----------------------
 const concepts: ComposerInputConcept[] = [
   {
-    slug: 'a', title: 'A', membership: ConceptMembership.spine,
+    slug: 'a', title: 'A', membership: ConceptMembership.spine, prerequisiteSlugs: [],
     candidates: [
       { resourceId: 'r-a1', role: ConceptResourceRole.teaches, coverageScore: 0.9, title: 'A teach', type: 'article', difficulty: 'beginner', durationMin: 30 },
       { resourceId: 'r-a2', role: ConceptResourceRole.uses, coverageScore: 0.4, title: 'A uses', type: 'article', difficulty: 'beginner', durationMin: 20 },
     ],
   },
   {
-    slug: 'b', title: 'B', membership: ConceptMembership.spine,
+    slug: 'b', title: 'B', membership: ConceptMembership.spine, prerequisiteSlugs: ['a'],
     candidates: [
       { resourceId: 'r-b1', role: ConceptResourceRole.teaches, coverageScore: 0.8, title: 'B teach', type: 'video', difficulty: 'beginner', durationMin: 40 },
     ],
   },
   {
-    slug: 'f', title: 'F', membership: ConceptMembership.frontier,
+    slug: 'f', title: 'F', membership: ConceptMembership.frontier, prerequisiteSlugs: ['b'],
     candidates: [
       { resourceId: 'r-f1', role: ConceptResourceRole.teaches, coverageScore: 0.7, title: 'F teach', type: 'article', difficulty: 'advanced', durationMin: 25 },
     ],
@@ -111,11 +111,11 @@ console.log('validateComposition — frontier prerequisite of spine is force-inc
   // concept depending on a frontier one. The composer omits f0, but a depends on
   // it, so closure must pull f0 back in — never orphan the spine concept.
   const fgConcepts = [
-    { slug: 'f0', title: 'F0', membership: ConceptMembership.frontier,
+    { slug: 'f0', title: 'F0', membership: ConceptMembership.frontier, prerequisiteSlugs: [],
       candidates: [{ resourceId: 'r-f0', role: ConceptResourceRole.teaches, coverageScore: 0.6, title: 'F0 teach', type: 'article', difficulty: 'beginner', durationMin: 15 }] },
-    { slug: 'a', title: 'A', membership: ConceptMembership.spine,
+    { slug: 'a', title: 'A', membership: ConceptMembership.spine, prerequisiteSlugs: ['f0'],
       candidates: [{ resourceId: 'r-a1', role: ConceptResourceRole.teaches, coverageScore: 0.9, title: 'A teach', type: 'article', difficulty: 'beginner', durationMin: 30 }] },
-    { slug: 'b', title: 'B', membership: ConceptMembership.spine,
+    { slug: 'b', title: 'B', membership: ConceptMembership.spine, prerequisiteSlugs: ['a'],
       candidates: [{ resourceId: 'r-b1', role: ConceptResourceRole.teaches, coverageScore: 0.8, title: 'B teach', type: 'video', difficulty: 'beginner', durationMin: 40 }] },
   ];
   const fgEdges: OrderEdge[] = [
@@ -219,6 +219,7 @@ async function liveRun(topic: string) {
 
   const inputConcepts: ComposerInputConcept[] = path.concepts.map((c) => ({
     slug: c.slug, title: c.title, membership: c.membership,
+    prerequisiteSlugs: c.prereqsIn.map((e) => e.from.slug),
     candidates: c.resources.map((r) => ({
       resourceId: r.resource.id, role: r.role, coverageScore: r.coverageScore,
       title: r.resource.title, type: r.resource.type,
