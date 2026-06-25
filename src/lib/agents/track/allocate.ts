@@ -77,6 +77,10 @@ export type AllocatedLesson = {
   // Everything not chosen as a primary: the unfit mandatory tail, then the whole
   // optional pool. The frozen substitute pool for invalidation/promotion.
   alternates: AllocatorCandidate[];
+  // How many leading `alternates` are the demoted mandatory-core tail (vs. the
+  // optional pool that follows). The track cleanup pass keeps demoted-core but caps
+  // the pool — this is the boundary between the two segments of `alternates`.
+  demotedCoreCount: number;
   // Sum of primary durations (what the lesson actually costs).
   estMinutes: number;
   // The budget slice this lesson was allotted (null = no budget given).
@@ -203,6 +207,9 @@ export function allocate(args: {
       }
     });
     if (primaries.length < n.core.length) depthConstrained = true;
+    // `alternates` so far holds only the demoted mandatory-core tail; record the
+    // boundary before appending the optional pool.
+    const demotedCoreCount = alternates.length;
     alternates.push(...n.pool);
     return {
       key: n.l.key,
@@ -210,6 +217,7 @@ export function allocate(args: {
       masteryRelevant: n.l.masteryRelevant,
       primaries,
       alternates,
+      demotedCoreCount,
       estMinutes: used,
       sliceMinutes: slice,
     };

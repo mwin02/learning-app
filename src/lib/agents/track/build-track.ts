@@ -21,7 +21,7 @@
 //
 // Synchronous today; structured to move async later (see thicken-seam.ts).
 
-import { Difficulty, DeliveryMode, LessonResourceRole, PathStatus, TrackStatus } from '@prisma/client';
+import { ConceptResourceRole, Difficulty, DeliveryMode, LessonResourceRole, PathStatus, TrackStatus } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { topoSort, type OrderEdge } from '@/lib/agents/map/order';
 import {
@@ -35,6 +35,7 @@ import {
 } from '@/lib/agents/track/validate-composition';
 import { lessonPrereqKeys, budgetMinutesFor } from '@/lib/agents/track/plan';
 import { allocate, type AllocatorLesson } from '@/lib/agents/track/allocate';
+import { cleanupLessons } from '@/lib/agents/track/cleanup-lessons';
 import { thickenSpine } from '@/lib/agents/track/thicken-seam';
 import { sectionTrack } from '@/lib/agents/track/section-track';
 import { TRACK_MAX_THICKEN_ATTEMPTS } from '@/lib/config';
@@ -152,7 +153,12 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
     // Join real durations from the loaded candidates so the allocator can size
     // slices; map each validated lesson to the allocator's input contract.
     const durationById = new Map<string, number>();
-    for (const cpt of concepts) for (const cand of cpt.candidates) durationById.set(cand.resourceId, cand.durationMin);
+    const roleById = new Map<string, ConceptResourceRole>();
+    for (const cpt of concepts)
+      for (const cand of cpt.candidates) {
+        durationById.set(cand.resourceId, cand.durationMin);
+        roleById.set(cand.resourceId, cand.role);
+      }
     const durOf = (id: string) => durationById.get(id) ?? 0;
 
     const keyOf = (i: number) => `L${i}`;
@@ -175,10 +181,17 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
       throw new TrackBuildError(`Track build for Path '${pathId}' produced no lessons.`);
     }
 
+    // --- cleanup: cross-lesson resource dedup + alternate cap --------------
+    // One Resource can be a candidate of multiple Concepts (legitimate at the Path
+    // level); within this Track it must appear in at most one lesson. Also caps each
+    // lesson's optional-pool alternates to its primary count (demoted-core kept).
+    const cleaned = cleanupLessons({ lessons: allocation.kept, roleById });
+    warnings.push(...cleaned.warnings);
+
     // --- persist + freeze (one transaction) --------------------------------
     await prisma.$transaction(async (tx) => {
-      for (let i = 0; i < allocation.kept.length; i++) {
-        const a = allocation.kept[i];
+      for (let i = 0; i < cleaned.lessons.length; i++) {
+        const a = cleaned.lessons[i];
         const v = byKey.get(a.key)!;
         const lesson = await tx.lesson.create({
           data: {
