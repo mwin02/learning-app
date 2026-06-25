@@ -23,6 +23,7 @@ import { ConceptMembership, PathStatus } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { PATH_BUILD_STALE_MS } from '@/lib/config';
 import { buildSpine } from '@/lib/agents/map/build-spine';
+import { normalizeOnRamp } from '@/lib/agents/map/cycle';
 import { attachCandidates } from '@/lib/agents/map/attach-candidates';
 import { computeReadiness } from '@/lib/agents/map/readiness';
 import type { OnTrace } from '@/lib/agents/agent-trace';
@@ -128,7 +129,11 @@ export async function ensurePathMap(args: {
   let ready: boolean;
   try {
     const spine = await buildSpine({ topic, subject, onTrace });
-    const attachments = await attachCandidates({ topic, concepts: spine.concepts, onTrace });
+    // Enforce "exactly one on-ramp" before attach + persist, so the on-ramp-aware
+    // candidate sourcing (discriminating query + strict judge rubric) keys off a
+    // single, well-defined concept.
+    const concepts = normalizeOnRamp(spine);
+    const attachments = await attachCandidates({ topic, concepts, onTrace });
     const readiness = computeReadiness(attachments);
     holes = readiness.holes;
     ready = readiness.ready;
@@ -136,11 +141,12 @@ export async function ensurePathMap(args: {
     // --- tx2: populate ----------------------------------------------------
     await prisma.$transaction(async (tx) => {
       await tx.concept.createMany({
-        data: spine.concepts.map((c) => ({
+        data: concepts.map((c) => ({
           pathId,
           slug: c.slug,
           title: c.title,
           membership: ConceptMembership.spine,
+          isOnRamp: c.isOnRamp ?? false,
         })),
       });
       const conceptRows = await tx.concept.findMany({

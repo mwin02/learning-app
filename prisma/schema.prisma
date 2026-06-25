@@ -467,6 +467,16 @@ model Concept {
   slug       String
   title      String
   membership ConceptMembership @default(spine)
+  // Phase 2.5 (on-ramp magnet fix): marks the single orientation "on-ramp" concept
+  // the spine author opens every map with (what the subject is, core mental model,
+  // setup/first steps). It is deliberately BROAD — the one concept exempt from the
+  // "one idea per concept" rule — which makes it a semantic magnet: a generic title
+  // ("Introduction to Calculus") searched against a single-subject corpus pulls in
+  // the whole subject, and the per-concept judge (no map context) scores deep-dive
+  // resources high for it. This flag lets candidate attachment/sourcing source it
+  // with a discriminating query + a strict "orientation-only" judge rubric. Exactly
+  // one spine concept per Path carries it; split/frontier concepts never do.
+  isOnRamp   Boolean           @default(false)
   // Phase 2.5f: set when remediation, unable to source a `teaches` candidate at
   // or above MAP_SPINE_MIN_PRIMARY_COVERAGE, accepts the best available sub-floor
   // primary so the learner still gets a (weaker) course. Readiness (2.5f-3) treats
