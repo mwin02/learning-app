@@ -176,10 +176,13 @@ export const MAP_SPINE_MIN_PRIMARY_COVERAGE = 0.5;
 // blinding remediation. (If you ever raise BAND_MIN, raise this in lockstep.)
 //
 // MAP_MAX_CANDIDATES_PER_CONCEPT: hard cap on how many candidate links one concept
-// keeps, enforced on the MERGED set so repeated thickening/remediation passes can't
-// accumulate unboundedly (the magnet held 45). selectAttachable always retains the
-// best qualifying `teaches` (>= MAP_SPINE_MIN_PRIMARY_COVERAGE) even if the cap
-// would evict it, so capping can never regress readiness.
+// keeps, enforced on the MERGED set (via capCandidates, NOT selectAttachable) so
+// repeated thickening/remediation passes can't accumulate unboundedly (the magnet
+// held 45). The merged-set cap is count-only — no floor — so it drops just the
+// lowest-coverage excess beyond the cap and always retains the best qualifying
+// `teaches` (>= MAP_SPINE_MIN_PRIMARY_COVERAGE); it can never empty a concept or
+// regress readiness (incl. a 2.5f relaxed concept whose coverage rests on sub-floor
+// candidates). The floor above is admission-time only, on FRESH judge output.
 export const MAP_ATTACH_MIN_COVERAGE = 0.3;
 export const MAP_MAX_CANDIDATES_PER_CONCEPT = 6;
 

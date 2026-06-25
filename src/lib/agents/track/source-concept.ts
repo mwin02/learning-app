@@ -20,7 +20,7 @@ import { Difficulty } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { recomputeReadiness } from '@/lib/agents/map/recompute-readiness';
 import { judgeCandidates } from '@/lib/agents/map/candidate-judge';
-import { selectAttachable } from '@/lib/agents/map/attach-candidates';
+import { selectAttachable, capCandidates } from '@/lib/agents/map/attach-candidates';
 import { MAP_MAX_CANDIDATES_PER_CONCEPT } from '@/lib/config';
 import { sourceForConcept } from '@/lib/agents/tools/web-fallback';
 import type { SearchResult } from '@/lib/agents/tools/search-resources';
@@ -68,16 +68,21 @@ export async function sourceAndAttachConcept(args: {
       skipDuplicates: true,
     });
     // Enforce the per-concept cap on the MERGED set so repeated remediation/thicken
-    // passes can't accumulate unboundedly. selectAttachable retains the best
-    // qualifying primary, so pruning here can never regress readiness. Deleting a
-    // ConceptResource is Path-side only (the reject pipeline already does it);
-    // immutable Track snapshots reference LessonResource, never these links.
+    // passes can't accumulate unboundedly. capCandidates (NOT selectAttachable) so
+    // we only count-bound — it drops just the lowest-coverage excess beyond the cap
+    // and retains the best qualifying primary, so it can never empty a concept or
+    // regress readiness. We must NOT re-apply the coverage floor here: these rows
+    // were already admitted (possibly under 2.5f relaxed readiness, possibly under
+    // the legacy `> 0` rule), and re-flooring could delete a relaxed concept's only
+    // candidates. Deleting a ConceptResource is Path-side only (the reject pipeline
+    // already does it); immutable Track snapshots reference LessonResource, never
+    // these links.
     const links = await tx.conceptResource.findMany({
       where: { conceptId },
       select: { id: true, role: true, coverageScore: true },
     });
     if (links.length > MAP_MAX_CANDIDATES_PER_CONCEPT) {
-      const keepIds = new Set(selectAttachable(links).map((l) => l.id));
+      const keepIds = new Set(capCandidates(links).map((l) => l.id));
       const dropIds = links.filter((l) => !keepIds.has(l.id)).map((l) => l.id);
       if (dropIds.length > 0) await tx.conceptResource.deleteMany({ where: { id: { in: dropIds } } });
     }
