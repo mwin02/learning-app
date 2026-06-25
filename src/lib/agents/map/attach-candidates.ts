@@ -22,30 +22,42 @@ import { relatedTopics } from '@/types/resource';
 import type { AuthoredConcept } from '@/lib/agents/map/cycle';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 
-// Lever A — attachment hygiene. Given a concept's judged/attached candidates,
-// return the subset worth keeping: drop below the coverage floor, then cap to the
-// top MAP_MAX_CANDIDATES_PER_CONCEPT by coverage. The cap can never regress
-// readiness — the best qualifying `teaches` (>= MAP_SPINE_MIN_PRIMARY_COVERAGE) is
-// always retained, swapped in over the lowest-coverage kept item if the cap pushed
-// it out. Pure + generic so it serves both the fresh judge output (attach-
-// candidates / source-concept) and a re-cap over already-attached DB rows; tests
-// without a DB. Input order is not assumed; output is coverage-desc.
-export function selectAttachable<T extends { role: ConceptResourceRole; coverageScore: number }>(
+// Lever A — count bound only. Given a candidate set, keep the top
+// MAP_MAX_CANDIDATES_PER_CONCEPT by coverage, always retaining the single best
+// qualifying `teaches` (>= MAP_SPINE_MIN_PRIMARY_COVERAGE) — swapped in over the
+// lowest-coverage kept item if the cap pushed it out — so capping can never evict
+// a concept's qualifying primary. Deliberately applies NO coverage floor: it bounds
+// regrowth over an ALREADY-ADMITTED set (e.g. the merged DB rows in source-concept)
+// without re-litigating admission, so it can only ever drop the lowest-coverage
+// EXCESS beyond the cap and never empties a non-empty input. Pure; input order is
+// not assumed; output is coverage-desc.
+export function capCandidates<T extends { role: ConceptResourceRole; coverageScore: number }>(
   candidates: T[],
 ): T[] {
-  const sorted = candidates
-    .filter((c) => c.coverageScore >= MAP_ATTACH_MIN_COVERAGE)
-    .sort((a, b) => b.coverageScore - a.coverageScore);
+  const sorted = [...candidates].sort((a, b) => b.coverageScore - a.coverageScore);
   const kept = sorted.slice(0, MAP_MAX_CANDIDATES_PER_CONCEPT);
 
-  // Guarantee the single best qualifying primary survives the cap (it clears the
-  // floor by construction; only the cap could evict it when many higher-coverage
-  // uses/assesses crowd it out).
+  // Guarantee the single best qualifying primary survives the cap (only the cap
+  // could evict it when many higher-coverage uses/assesses crowd it out).
   const bestPrimary = sorted.find(
     (c) => c.role === ConceptResourceRole.teaches && c.coverageScore >= MAP_SPINE_MIN_PRIMARY_COVERAGE,
   );
   if (bestPrimary && !kept.includes(bestPrimary)) kept[kept.length - 1] = bestPrimary;
   return kept;
+}
+
+// Lever A — admission filter for FRESH judge output. Drops candidates below the
+// coverage floor (MAP_ATTACH_MIN_COVERAGE), then count-bounds via capCandidates.
+// The floor is an ADMISSION policy — "is this freshly-judged candidate good enough
+// to attach?" — so it belongs only on newly-judged sets, never on a re-cap of rows
+// already in the DB (those were admitted under whatever policy applied then, incl.
+// 2.5f relaxed readiness; re-flooring them can wrongly delete a relaxed concept's
+// only candidates and regress the Path). For the persisted re-cap use capCandidates.
+// Pure + generic; tests without a DB. Output is coverage-desc.
+export function selectAttachable<T extends { role: ConceptResourceRole; coverageScore: number }>(
+  candidates: T[],
+): T[] {
+  return capCandidates(candidates.filter((c) => c.coverageScore >= MAP_ATTACH_MIN_COVERAGE));
 }
 
 export type ConceptAttachment = {
