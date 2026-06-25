@@ -23,7 +23,7 @@
 
 import { ConceptResourceRole, Difficulty, DeliveryMode, LessonResourceRole, PathStatus, TrackStatus } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import { topoSort, type OrderEdge } from '@/lib/agents/map/order';
+import { continuityOrder, type OrderEdge } from '@/lib/agents/map/order';
 import {
   composeTrack,
   type ComposerInputConcept,
@@ -327,13 +327,17 @@ async function loadMap(
   const edges: OrderEdge[] = rows.flatMap((c) =>
     c.prereqsIn.map((e) => ({ fromSlug: e.from.slug, toSlug: c.slug })),
   );
-  const pos = new Map(topoSort(rows.map((r) => ({ slug: r.slug })), edges).map((s, i) => [s, i]));
+  // Present concepts to the composer in continuity-first teaching order (each builds
+  // on the previous), the same linearization validate-composition derives the final
+  // lesson order from — so the composer's merge decisions key off real adjacency.
+  const pos = new Map(continuityOrder(rows.map((r) => ({ slug: r.slug })), edges).map((s, i) => [s, i]));
 
   const concepts: ComposerInputConcept[] = rows
     .map((c) => ({
       slug: c.slug,
       title: c.title,
       membership: c.membership,
+      prerequisiteSlugs: c.prereqsIn.map((e) => e.from.slug),
       candidates: c.resources.map((r) => ({
         resourceId: r.resource.id,
         role: r.role,

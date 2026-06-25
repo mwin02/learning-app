@@ -84,6 +84,78 @@ export function topoSort(
   return order;
 }
 
+// Continuity-first linearization: a valid topological order that keeps consecutive
+// concepts CONNECTED, so each lesson builds on the one before it instead of fanning
+// out breadth-first. Same prerequisite guarantee as topoSort (a concept never
+// precedes a prerequisite), but where topoSort/Kahn drains the ready set by a flat
+// tie-break (introducing unrelated foundational concepts side by side), this picks
+// the ready concept whose most-recently-emitted prerequisite is latest — i.e. a
+// direct successor of the just-emitted concept wins (its prereq index is the highest
+// possible), continuing the current thread DFS-style; when a thread dead-ends it
+// resumes from the concept nearest the recent work. Ties break by `priority` then
+// slug, so the same map always yields the same order (reproducible Track snapshots).
+//
+// Pure + string-key agnostic, like topoSort. Cycle remnants (defensive only —
+// cycle.ts validates first) are appended in tie-break order rather than dropped.
+export function continuityOrder(
+  concepts: OrderConcept[],
+  edges: OrderEdge[],
+  priority?: ReadonlyMap<string, number>,
+): string[] {
+  const slugs = concepts.map((c) => c.slug);
+  const slugSet = new Set(slugs);
+  const indegree = new Map<string, number>();
+  const succ = new Map<string, string[]>();
+  const preds = new Map<string, string[]>();
+  for (const s of slugs) {
+    indegree.set(s, 0);
+    succ.set(s, []);
+    preds.set(s, []);
+  }
+  for (const e of edges) {
+    if (!slugSet.has(e.fromSlug) || !slugSet.has(e.toSlug)) continue;
+    succ.get(e.fromSlug)!.push(e.toSlug);
+    preds.get(e.toSlug)!.push(e.fromSlug);
+    indegree.set(e.toSlug, indegree.get(e.toSlug)! + 1);
+  }
+
+  const RANK_LAST = Number.MAX_SAFE_INTEGER;
+  const rank = (s: string) => priority?.get(s) ?? RANK_LAST;
+  const emittedAt = new Map<string, number>();
+  // The position of `s`'s most-recently-emitted prerequisite, or -1 if none is out
+  // yet (a root, or a thread not yet reached). Recomputed each step as more emit.
+  const recentPred = (s: string) =>
+    (preds.get(s) ?? []).reduce((m, p) => Math.max(m, emittedAt.get(p) ?? -1), -1);
+  // Higher recent-pred first (continuity), then lower priority rank, then slug.
+  const cmp = (a: string, b: string): number => {
+    const rp = recentPred(b) - recentPred(a);
+    if (rp !== 0) return rp;
+    const rk = rank(a) - rank(b);
+    if (rk !== 0) return rk;
+    return a < b ? -1 : a > b ? 1 : 0;
+  };
+
+  const ready = new Set(slugs.filter((s) => indegree.get(s) === 0));
+  const order: string[] = [];
+  while (ready.size > 0) {
+    const node = [...ready].sort(cmp)[0];
+    ready.delete(node);
+    emittedAt.set(node, order.length);
+    order.push(node);
+    for (const child of succ.get(node)!) {
+      const d = indegree.get(child)! - 1;
+      indegree.set(child, d);
+      if (d === 0) ready.add(child);
+    }
+  }
+
+  if (order.length < slugs.length) {
+    const placed = new Set(order);
+    for (const s of slugs.filter((s) => !placed.has(s)).sort(cmp)) order.push(s);
+  }
+  return order;
+}
+
 // Longest-path layering for display: layer 0 = a concept with no prerequisites,
 // else 1 + max(layer of its prerequisites). Concepts in the same layer have the
 // same prerequisite depth and render side by side. This reproduces the inspector's

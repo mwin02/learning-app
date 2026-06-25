@@ -19,15 +19,19 @@
 //     candidate is frozen into `optional` (the substitute/invalidation pool), so no
 //     runner-up is lost. Depth (how many mandatory become primaries) + budget are the
 //     allocator's job (allocate.ts), not this module's.
-//   - Ordering: lesson order is DERIVED from the prereq DAG (topoSort), not trusted
-//     from the model — a lesson comes after every prerequisite of every concept it
-//     teaches. Composer order only breaks ties within a layer.
+//   - Ordering: lesson order is DERIVED from the prereq DAG (continuityOrder), not
+//     trusted from the model — a lesson comes after every prerequisite of every
+//     concept it teaches, AND consecutive lessons stay connected (each builds on the
+//     last) rather than fanning out breadth-first. The model doesn't sequence within
+//     a thread; at branch points (independent threads both ready) the composer's
+//     emission order breaks the tie — which thread to teach first — and is consulted
+//     ONLY there (see composer.ts).
 //
 // Budget trimming + depth allocation are NOT here — that's allocate.ts, run by the
 // builder over these validated lessons (closure-aware breadth at floor cost).
 
 import { ConceptResourceRole } from '@prisma/client';
-import { topoSort, type OrderEdge } from '@/lib/agents/map/order';
+import { continuityOrder, type OrderEdge } from '@/lib/agents/map/order';
 import type { TimeWeight } from '@/lib/agents/track/allocate';
 import type {
   ComposerResult,
@@ -191,14 +195,18 @@ export function validateComposition(args: {
     };
   });
 
-  // --- order lessons by the DAG, then by the composer's intent -----------
-  // The DAG is the hard constraint (a concept always follows its prerequisites);
-  // the composer's emission order only breaks the ties the DAG leaves open. We
-  // derive that intended order from the sequence concepts first appear across the
-  // composer's lessons and feed it to topoSort as the tie-break priority, so a
-  // model slip can never violate a prereq but its pedagogical sequencing of
-  // prereq-free siblings is honored. Unranked slugs (pulled in by closure, not
-  // emitted by the composer) fall back to lexical, last.
+  // --- order lessons: continuity-first DAG, composer breaks thread ties ---
+  // The teaching order is derived deterministically by continuityOrder: it keeps
+  // each topic thread contiguous (consecutive lessons build on each other, not a
+  // breadth-first fan-out) and never places a concept before a prerequisite. The
+  // composer does NOT sequence within a thread — but at BRANCH POINTS, where two
+  // independent threads are both ready, the DAG leaves the order open, and there the
+  // composer's emission order decides which thread to pursue first (its conventional-
+  // teaching-order judgment — e.g. differentiation before integration before series).
+  // We derive that preference from the order concepts first appear across the
+  // composer's lessons and pass it as continuityOrder's tie-break, where it is only
+  // ever consulted at those fork points. Unranked slugs (closure-pulled, not emitted)
+  // fall back to lexical, last — a model slip can never violate a prerequisite.
   const composerPriority = new Map<string, number>();
   for (const l of composition.lessons) {
     for (const s of l.conceptSlugs) {
@@ -207,14 +215,14 @@ export function validateComposition(args: {
   }
   const includedSlugs = [...included];
   const rank = new Map<string, number>();
-  topoSort(
+  continuityOrder(
     includedSlugs.map((slug) => ({ slug })),
     edges.filter((e) => included.has(e.fromSlug) && included.has(e.toSlug)),
     composerPriority,
   ).forEach((slug, i) => rank.set(slug, i));
-  // A lesson's position = the latest topo rank among its concepts (so a merged
-  // lesson follows every prerequisite of every concept it teaches). Ties keep the
-  // composer's original order (stable sort over the as-built array index).
+  // A lesson's position = the latest order rank among its concepts (so a merged
+  // lesson follows every prerequisite of every concept it teaches). Ranks are
+  // unique, so ties are rare; the as-built index is a deterministic fallback.
   const lessons = lessonsUnordered
     .map((lesson, idx) => ({
       lesson,
