@@ -20,6 +20,8 @@ import { Difficulty } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { recomputeReadiness } from '@/lib/agents/map/recompute-readiness';
 import { judgeCandidates } from '@/lib/agents/map/candidate-judge';
+import { selectAttachable } from '@/lib/agents/map/attach-candidates';
+import { MAP_MAX_CANDIDATES_PER_CONCEPT } from '@/lib/config';
 import { sourceForConcept } from '@/lib/agents/tools/web-fallback';
 import type { SearchResult } from '@/lib/agents/tools/search-resources';
 
@@ -45,7 +47,8 @@ export async function sourceAndAttachConcept(args: {
   if (rows.length === 0) return 0;
 
   const judged = await judgeCandidates({ conceptTitle: title, conceptSlug: slug, candidates: rows });
-  const kept = judged.filter((j) => j.coverageScore > 0).sort((a, b) => b.coverageScore - a.coverageScore);
+  // Floor + cap the newly-judged set (Lever A) rather than attaching everything > 0.
+  const kept = selectAttachable(judged);
   if (kept.length === 0) {
     console.log('[source-concept] sourced rows all judged irrelevant', { pathId, concept: slug, sourced: rows.length });
     return 0;
@@ -61,6 +64,20 @@ export async function sourceAndAttachConcept(args: {
       data: kept.map((k) => ({ conceptId, resourceId: k.resourceId, role: k.role, coverageScore: k.coverageScore })),
       skipDuplicates: true,
     });
+    // Enforce the per-concept cap on the MERGED set so repeated remediation/thicken
+    // passes can't accumulate unboundedly. selectAttachable retains the best
+    // qualifying primary, so pruning here can never regress readiness. Deleting a
+    // ConceptResource is Path-side only (the reject pipeline already does it);
+    // immutable Track snapshots reference LessonResource, never these links.
+    const links = await tx.conceptResource.findMany({
+      where: { conceptId },
+      select: { id: true, role: true, coverageScore: true },
+    });
+    if (links.length > MAP_MAX_CANDIDATES_PER_CONCEPT) {
+      const keepIds = new Set(selectAttachable(links).map((l) => l.id));
+      const dropIds = links.filter((l) => !keepIds.has(l.id)).map((l) => l.id);
+      if (dropIds.length > 0) await tx.conceptResource.deleteMany({ where: { id: { in: dropIds } } });
+    }
     await recomputeReadiness(pathId, tx);
   });
   console.log('[source-concept] attached', { pathId, concept: slug, attached: kept.length, targetMastery: targetMastery ?? null });

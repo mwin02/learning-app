@@ -8,12 +8,45 @@
 // yields an empty attachment — the spine-hole signal the persistence block and
 // the async thickener (2.5f) act on, not an error here.
 
+import { ConceptResourceRole } from '@prisma/client';
 import { searchResources } from '@/lib/agents/tools/search-resources';
 import { judgeCandidates, type JudgedCandidate } from '@/lib/agents/map/candidate-judge';
-import { MAP_CANDIDATES_PER_CONCEPT, MAP_JUDGE_CONCURRENCY } from '@/lib/config';
+import {
+  MAP_CANDIDATES_PER_CONCEPT,
+  MAP_JUDGE_CONCURRENCY,
+  MAP_ATTACH_MIN_COVERAGE,
+  MAP_MAX_CANDIDATES_PER_CONCEPT,
+  MAP_SPINE_MIN_PRIMARY_COVERAGE,
+} from '@/lib/config';
 import { relatedTopics } from '@/types/resource';
 import type { AuthoredConcept } from '@/lib/agents/map/cycle';
 import type { OnTrace } from '@/lib/agents/agent-trace';
+
+// Lever A — attachment hygiene. Given a concept's judged/attached candidates,
+// return the subset worth keeping: drop below the coverage floor, then cap to the
+// top MAP_MAX_CANDIDATES_PER_CONCEPT by coverage. The cap can never regress
+// readiness — the best qualifying `teaches` (>= MAP_SPINE_MIN_PRIMARY_COVERAGE) is
+// always retained, swapped in over the lowest-coverage kept item if the cap pushed
+// it out. Pure + generic so it serves both the fresh judge output (attach-
+// candidates / source-concept) and a re-cap over already-attached DB rows; tests
+// without a DB. Input order is not assumed; output is coverage-desc.
+export function selectAttachable<T extends { role: ConceptResourceRole; coverageScore: number }>(
+  candidates: T[],
+): T[] {
+  const sorted = candidates
+    .filter((c) => c.coverageScore >= MAP_ATTACH_MIN_COVERAGE)
+    .sort((a, b) => b.coverageScore - a.coverageScore);
+  const kept = sorted.slice(0, MAP_MAX_CANDIDATES_PER_CONCEPT);
+
+  // Guarantee the single best qualifying primary survives the cap (it clears the
+  // floor by construction; only the cap could evict it when many higher-coverage
+  // uses/assesses crowd it out).
+  const bestPrimary = sorted.find(
+    (c) => c.role === ConceptResourceRole.teaches && c.coverageScore >= MAP_SPINE_MIN_PRIMARY_COVERAGE,
+  );
+  if (bestPrimary && !kept.includes(bestPrimary)) kept[kept.length - 1] = bestPrimary;
+  return kept;
+}
 
 export type ConceptAttachment = {
   conceptSlug: string;
@@ -143,9 +176,9 @@ async function attachOne(
     candidates,
   });
 
-  const kept = judged
-    .filter((j) => j.coverageScore > 0)
-    .sort((a, b) => b.coverageScore - a.coverageScore);
+  // Floor + cap (Lever A) instead of keeping everything > 0, so a generic concept
+  // can't hoard the long tail of low-coverage / off-target search hits.
+  const kept = selectAttachable(judged);
 
   return { conceptSlug: concept.slug, candidates: kept };
 }
