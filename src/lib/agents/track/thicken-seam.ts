@@ -43,7 +43,7 @@ export async function thickenSpine(req: ThickenRequest): Promise<ThickenResult> 
 
   const concepts = await prisma.concept.findMany({
     where: { pathId, slug: { in: slugs } },
-    select: { id: true, slug: true, title: true },
+    select: { id: true, slug: true, title: true, isOnRamp: true },
   });
 
   console.log('[track-thicken] sourcing', { pathId, concepts: concepts.map((c) => c.slug), targetMastery });
@@ -57,6 +57,7 @@ export async function thickenSpine(req: ThickenRequest): Promise<ThickenResult> 
       slug: c.slug,
       title: c.title,
       targetMastery,
+      isOnRamp: c.isOnRamp,
     });
   }
 
