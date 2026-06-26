@@ -14,6 +14,7 @@ import { z, ZodError } from 'zod';
 import { Difficulty } from '@prisma/client';
 import { withAdminAuth } from '@/lib/api/with-admin-auth';
 import { buildTrack, TrackBuildError } from '@/lib/agents/track/build-track';
+import { createTraceCollector } from '@/lib/agents/agent-trace';
 
 // buildTrack runs a Pro compose call — needs Node, and headroom over the default.
 export const runtime = 'nodejs';
@@ -54,9 +55,14 @@ export const POST = withAdminAuth(async (req) => {
     throw err;
   }
 
+  // Always collect the build trace on this admin-only inspector route — it's the
+  // window into the composer agent's tool calls (search_candidates, add_lesson, …) and
+  // is cheap/ephemeral. (Unlike generate-path, which gates trace behind TRACE_RESPONSE
+  // because it's the customer-facing enqueue path.)
+  const { onTrace, events } = createTraceCollector();
   try {
-    const result = await buildTrack(input);
-    return Response.json(result);
+    const result = await buildTrack({ ...input, onTrace });
+    return Response.json({ ...result, trace: events });
   } catch (err) {
     if (err instanceof TrackBuildError) {
       // Precondition failures (no Path / not spine_ready) carry no `cause`; a
