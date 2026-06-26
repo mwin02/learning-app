@@ -79,9 +79,21 @@ export function validateComposition(args: {
   composition: ComposerResult;
   concepts: ComposerInputConcept[];
   edges: OrderEdge[];
+  // 2.5e-8 block 2c: when true, a lesson MAY keep an explicitly-graded resource that
+  // belongs to a different concept in the Path (the composer agent's Tier-1 "re-purpose
+  // across concepts" — e.g. an exam-style `assesses` attached elsewhere). The fallback
+  // and substitute pool stay scoped to the lesson's own concepts. Off by default so the
+  // single-pass composer's resolution is byte-for-byte unchanged.
+  crossConceptResources?: boolean;
 }): ValidationOutput {
-  const { composition, concepts, edges } = args;
+  const { composition, concepts, edges, crossConceptResources = false } = args;
   const warnings: string[] = [];
+  // The accept-set for explicitly-graded mandatory/optional ids: the whole-Path candidate
+  // pool when cross-concept is allowed, else undefined (resolveResources falls back to the
+  // lesson's own pool — today's behavior).
+  const acceptIds = crossConceptResources
+    ? new Set(concepts.flatMap((c) => c.candidates.map((cand) => cand.resourceId)))
+    : undefined;
 
   const conceptBySlug = new Map(concepts.map((c) => [c.slug, c]));
   // Spine pruning is allowed (2.5e-5): a learner who already knows a backbone
@@ -158,7 +170,7 @@ export function validateComposition(args: {
   // --- resolve mandatory core + optional pool per group ------------------
   const lessonsUnordered = groups.map((g) => {
     const pool = poolFor(g.conceptSlugs, conceptBySlug);
-    const { mandatoryResourceIds, optionalResourceIds } = resolveResources(g, pool, warnings);
+    const { mandatoryResourceIds, optionalResourceIds } = resolveResources(g, pool, warnings, acceptIds);
     const isFrontier = g.conceptSlugs.every(
       (s) => conceptBySlug.get(s)!.membership === 'frontier',
     );
@@ -227,8 +239,12 @@ function resolveResources(
   g: { conceptSlugs: string[]; mandatoryResourceIds: string[]; optionalResourceIds: string[] },
   pool: ComposerCandidate[],
   warnings: string[],
+  // Accept-set for explicitly-graded ids. Defaults to the lesson's own pool (today);
+  // the agent passes the whole-Path pool so a borrowed cross-concept resource survives.
+  acceptIds?: Set<string>,
 ): { mandatoryResourceIds: string[]; optionalResourceIds: string[] } {
   const inPool = new Set(pool.map((c) => c.resourceId));
+  const accept = acceptIds ?? inPool;
   const dedupe = (ids: string[], exclude: Set<string> = new Set()): string[] => {
     const seen = new Set(exclude);
     const out: string[] = [];
@@ -240,7 +256,7 @@ function resolveResources(
     return out;
   };
 
-  let mandatory = dedupe(g.mandatoryResourceIds.filter((id) => inPool.has(id)));
+  let mandatory = dedupe(g.mandatoryResourceIds.filter((id) => accept.has(id)));
   if (mandatory.length === 0) {
     const fb = chooseFallback(pool);
     if (!fb) {
@@ -261,7 +277,7 @@ function resolveResources(
   }
 
   const mandatorySet = new Set(mandatory);
-  const optional = dedupe(g.optionalResourceIds.filter((id) => inPool.has(id)), mandatorySet);
+  const optional = dedupe(g.optionalResourceIds.filter((id) => accept.has(id)), mandatorySet);
   // Freeze every remaining candidate as a substitute, highest coverage first.
   const taken = new Set([...mandatory, ...optional]);
   for (const cand of [...pool].sort((a, b) => b.coverageScore - a.coverageScore)) {

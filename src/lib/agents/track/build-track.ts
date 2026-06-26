@@ -148,7 +148,14 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
               budgetMinutes,
               onTrace,
             });
-      const validation = validateComposition({ composition, concepts: loaded.concepts, edges });
+      const validation = validateComposition({
+        composition,
+        concepts: loaded.concepts,
+        edges,
+        // The agent composer may borrow a resource across concepts (2c); honor those
+        // explicit picks. The single-pass composer never does, so it's a no-op there.
+        crossConceptResources: TRACK_COMPOSER_MODE === 'agent',
+      });
       validatedLessons = validation.lessons;
       warnings = validation.warnings;
 

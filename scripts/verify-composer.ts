@@ -215,6 +215,24 @@ console.log('validateComposition — merged lesson pools + dedups alternates');
   check('merged lesson ordered before f', out.lessons[0].conceptSlugs.length === 2, out.lessons.map((l) => l.conceptSlugs));
 }
 
+console.log('validateComposition — cross-concept resource: dropped by default, kept under the agent flag (2.5e-8 block 2c)');
+{
+  // Lesson for concept a is graded with r-b1 — a resource that belongs to concept b.
+  const composition = comp({ lessons: [L(['a'], 'r-b1'), L(['b'], 'r-b1'), L(['f'], 'r-f1', { isFrontier: true })] });
+
+  // Default (single-pass): a's lesson can't keep b's resource → falls back to a's top teaches.
+  const off = validateComposition({ composition, concepts, edges });
+  const aOff = off.lessons.find((l) => l.conceptSlugs[0] === 'a')!;
+  check('default: cross-concept id dropped, fell back to r-a1', aOff.mandatoryResourceIds[0] === 'r-a1', aOff.mandatoryResourceIds);
+
+  // Agent flag on: a's lesson keeps b's resource as its primary (re-purposed across concepts).
+  const on = validateComposition({ composition, concepts, edges, crossConceptResources: true });
+  const aOn = on.lessons.find((l) => l.conceptSlugs[0] === 'a')!;
+  check('flag on: cross-concept id r-b1 kept as primary', aOn.mandatoryResourceIds[0] === 'r-b1', aOn.mandatoryResourceIds);
+  // b's own lesson still gets r-b1 too; cross-lesson dedup is cleanupLessons' job, not validate's.
+  check('flag on: unknown id still rejected', validateComposition({ composition: comp({ lessons: [L(['a'], 'does-not-exist')] }), concepts, edges, crossConceptResources: true }).lessons[0].mandatoryResourceIds[0] === 'r-a1', 'fallback expected');
+}
+
 // --- composition-core primitives (Block 2a): direct unit coverage --------
 // The extracted pure helpers that BOTH validateComposition and the Block 2b agent
 // tools depend on. Exercised directly so the contract is locked independent of the
