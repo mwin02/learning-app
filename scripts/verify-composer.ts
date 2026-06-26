@@ -9,6 +9,12 @@
 import { ConceptMembership, ConceptResourceRole, Difficulty, TrackIntent } from '@prisma/client';
 import { prisma } from '../src/lib/db';
 import { validateComposition } from '../src/lib/agents/track/validate-composition';
+import {
+  buildPrereqIndex,
+  computeInclusion,
+  assignConceptsToLessons,
+  orderConceptSlugs,
+} from '../src/lib/agents/track/composition-core';
 import { composeTrack, type ComposerInputConcept, type ComposerResult } from '../src/lib/agents/track/composer';
 import type { OrderEdge } from '../src/lib/agents/map/order';
 
@@ -207,6 +213,42 @@ console.log('validateComposition — merged lesson pools + dedups alternates');
   check('merged core = [r-a1]', JSON.stringify(merged.mandatoryResourceIds) === '["r-a1"]', merged.mandatoryResourceIds);
   check('merged optional pool = b1,a2 (non-core, coverage-desc)', JSON.stringify(merged.optionalResourceIds) === '["r-b1","r-a2"]', merged.optionalResourceIds);
   check('merged lesson ordered before f', out.lessons[0].conceptSlugs.length === 2, out.lessons.map((l) => l.conceptSlugs));
+}
+
+// --- composition-core primitives (Block 2a): direct unit coverage --------
+// The extracted pure helpers that BOTH validateComposition and the Block 2b agent
+// tools depend on. Exercised directly so the contract is locked independent of the
+// composer pipeline.
+console.log('composition-core — buildPrereqIndex / computeInclusion / order / assign');
+{
+  const slugs = concepts.map((c) => c.slug);
+  const prereqsOf = buildPrereqIndex(slugs, edges);
+  check('prereq index: b←a', JSON.stringify(prereqsOf.get('b')) === '["a"]', prereqsOf.get('b'));
+  check('prereq index: f←b', JSON.stringify(prereqsOf.get('f')) === '["b"]', prereqsOf.get('f'));
+  check('prereq index: a has no prereqs', JSON.stringify(prereqsOf.get('a')) === '[]', prereqsOf.get('a'));
+
+  // Closure from seed f pulls in its transitive prereqs b, a.
+  const fromF = computeInclusion({ prereqsOf, excluded: new Set(), seeds: ['f'] });
+  check('inclusion(f) = {a,b,f}', fromF.size === 3 && fromF.has('a') && fromF.has('b') && fromF.has('f'), [...fromF]);
+
+  // Excluding a (e.g. omitted/known) stops the walk: dependent b stays, a is not re-added.
+  const exclA = computeInclusion({ prereqsOf, excluded: new Set(['a']), seeds: ['b', 'f'] });
+  check('inclusion excl a = {b,f}', exclA.size === 2 && exclA.has('b') && exclA.has('f') && !exclA.has('a'), [...exclA]);
+
+  // Ordering respects the DAG regardless of seed/iteration order.
+  check('order = a,b,f', orderConceptSlugs(['f', 'a', 'b'], edges).join(',') === 'a,b,f', orderConceptSlugs(['f', 'a', 'b'], edges));
+
+  // assignConceptsToLessons: honors a grouping and synthesizes the leftover.
+  const warns: string[] = [];
+  const groups = assignConceptsToLessons({
+    lessons: [{ conceptSlugs: ['a', 'b'], title: 'A+B', summary: 's', masteryRelevant: false, timeWeight: 'normal', mandatoryResourceIds: ['r-a1'], optionalResourceIds: [] }],
+    included: new Set(['a', 'b', 'f']),
+    concepts,
+    warnings: warns,
+  });
+  check('assign: merged group [a,b] kept', JSON.stringify(groups[0].conceptSlugs) === '["a","b"]', groups[0].conceptSlugs);
+  check('assign: f synthesized as singleton', groups.length === 2 && JSON.stringify(groups[1].conceptSlugs) === '["f"]', groups.map((g) => g.conceptSlugs));
+  check('assign: synthesis warned', warns.some((w) => w.includes("'f'") && w.includes('synthesized')), warns);
 }
 
 console.log(failures === 0 ? '\nFIXTURES: ALL PASS' : `\nFIXTURES: ${failures} FAILED`);

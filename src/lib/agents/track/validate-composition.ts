@@ -31,8 +31,14 @@
 // builder over these validated lessons (closure-aware breadth at floor cost).
 
 import { ConceptResourceRole } from '@prisma/client';
-import { continuityOrder, type OrderEdge } from '@/lib/agents/map/order';
+import type { OrderEdge } from '@/lib/agents/map/order';
 import type { TimeWeight } from '@/lib/agents/track/allocate';
+import {
+  buildPrereqIndex,
+  computeInclusion,
+  assignConceptsToLessons,
+  orderConceptSlugs,
+} from '@/lib/agents/track/composition-core';
 import type {
   ComposerResult,
   ComposerInputConcept,
@@ -108,13 +114,10 @@ export function validateComposition(args: {
   // Seeds: every spine concept (always taught) + every concept the composer put
   // in a lesson. Then close over non-pruned prerequisites so nothing included is
   // left depending on an excluded concept.
-  const prereqsOf = new Map<string, string[]>();
-  for (const c of concepts) prereqsOf.set(c.slug, []);
-  for (const e of edges) {
-    if (conceptBySlug.has(e.fromSlug) && conceptBySlug.has(e.toSlug)) {
-      prereqsOf.get(e.toSlug)!.push(e.fromSlug);
-    }
-  }
+  const prereqsOf = buildPrereqIndex(
+    concepts.map((c) => c.slug),
+    edges,
+  );
 
   const composerSlugs = new Set<string>();
   for (const l of composition.lessons) {
@@ -126,14 +129,7 @@ export function validateComposition(args: {
     ...concepts.filter((c) => c.membership === 'spine' && !pruned.has(c.slug)).map((c) => c.slug),
     ...composerSlugs,
   ];
-  const included = new Set<string>();
-  const stack = [...seeds];
-  while (stack.length > 0) {
-    const s = stack.pop()!;
-    if (included.has(s) || pruned.has(s) || !conceptBySlug.has(s)) continue;
-    included.add(s);
-    for (const p of prereqsOf.get(s) ?? []) if (!included.has(p) && !pruned.has(p)) stack.push(p);
-  }
+  const included = computeInclusion({ prereqsOf, excluded: pruned, seeds });
   // Frontier the composer excluded that got pulled back as a prerequisite — note it.
   for (const s of included) {
     if (!composerSlugs.has(s) && conceptBySlug.get(s)!.membership === 'frontier') {
@@ -146,48 +142,12 @@ export function validateComposition(args: {
   // excluded concepts and ignoring duplicates; then sweep any included concept the
   // composer omitted (a forgotten spine, or a closure-forced frontier) into its own
   // single-concept lesson so nothing included is silently lost.
-  const assigned = new Set<string>();
-  type Group = {
-    conceptSlugs: string[];
-    title: string;
-    summary: string;
-    masteryRelevant: boolean;
-    timeWeight: TimeWeight;
-    // The composer's graded lists ([] for a synthesized lesson → fallback resolves).
-    mandatoryResourceIds: string[];
-    optionalResourceIds: string[];
-  };
-  const groups: Group[] = [];
-
-  for (const l of composition.lessons) {
-    const slugs = l.conceptSlugs.filter((s) => included.has(s) && !assigned.has(s));
-    if (slugs.length === 0) continue; // wholly excluded/duplicate/unknown lesson
-    slugs.forEach((s) => assigned.add(s));
-    groups.push({
-      conceptSlugs: slugs,
-      title: l.title,
-      summary: l.summary,
-      masteryRelevant: l.masteryRelevant,
-      timeWeight: l.timeWeight,
-      mandatoryResourceIds: l.mandatoryResourceIds,
-      optionalResourceIds: l.optionalResourceIds,
-    });
-  }
-
-  for (const c of concepts) {
-    if (!included.has(c.slug) || assigned.has(c.slug)) continue;
-    assigned.add(c.slug);
-    warnings.push(`composer omitted included concept '${c.slug}'; synthesized a lesson for it`);
-    groups.push({
-      conceptSlugs: [c.slug],
-      title: c.title,
-      summary: `Learn ${c.title}.`,
-      masteryRelevant: false,
-      timeWeight: 'normal',
-      mandatoryResourceIds: [],
-      optionalResourceIds: [],
-    });
-  }
+  const groups = assignConceptsToLessons({
+    lessons: composition.lessons,
+    included,
+    concepts,
+    warnings,
+  });
 
   if (groups.length === 0) {
     throw new CompositionError(
@@ -234,11 +194,7 @@ export function validateComposition(args: {
   }
   const includedSlugs = [...included];
   const rank = new Map<string, number>();
-  continuityOrder(
-    includedSlugs.map((slug) => ({ slug })),
-    edges.filter((e) => included.has(e.fromSlug) && included.has(e.toSlug)),
-    composerPriority,
-  ).forEach((slug, i) => rank.set(slug, i));
+  orderConceptSlugs(includedSlugs, edges, composerPriority).forEach((slug, i) => rank.set(slug, i));
   // A lesson's position = the latest order rank among its concepts (so a merged
   // lesson follows every prerequisite of every concept it teaches). Ranks are
   // unique, so ties are rare; the as-built index is a deterministic fallback.
