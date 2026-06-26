@@ -199,6 +199,21 @@ export const MAP_RESOURCE_PICKER_LIMIT = 20;
 // best-effort weaker Track. Raise once the real thickener can actually fill holes.
 export const TRACK_MAX_THICKEN_ATTEMPTS = 1;
 
+// Phase 2.5e-8 (block 2b): which composer backs a Track build.
+//   'single' — the one-shot Output.object pass (composer.ts), today's default.
+//   'agent'  — the tool-using loop (composer-agent.ts): reads the map/candidates and
+//              assembles the track through incremental build tools, with the SAME
+//              composition-core enforcement giving live feedback. Gated so we can A/B
+//              on one Path and keep the deterministic single-pass as a fallback until
+//              the agent proves out (cut over + delete 'single' after the 2d parity gate).
+export const TRACK_COMPOSER_MODE: 'single' | 'agent' = 'single';
+
+// Hard ceiling on model turns in the composer agent's loop. One step = one model turn
+// (which may issue several tool calls). Bounds cost/latency on the per-request path; the
+// model normally stops earlier by calling `finalize` once the track is complete. Sized
+// above a typical map's concept count so a one-lesson-per-turn worst case still finishes.
+export const TRACK_COMPOSER_MAX_STEPS = 40;
+
 // Phase 2.5g-3: the course worker's poll interval — how long it sleeps after
 // draining the queue before checking again. Short enough that a freshly-enqueued
 // request starts promptly, long enough not to hammer the DB while idle. 5s.

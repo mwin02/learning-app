@@ -29,6 +29,7 @@ import {
   type ComposerInputConcept,
   type ComposerResult,
 } from '@/lib/agents/track/composer';
+import { composeTrackAgent } from '@/lib/agents/track/composer-agent';
 import {
   validateComposition,
   type ValidatedLesson,
@@ -38,7 +39,7 @@ import { allocate, type AllocatorLesson } from '@/lib/agents/track/allocate';
 import { cleanupLessons } from '@/lib/agents/track/cleanup-lessons';
 import { thickenSpine } from '@/lib/agents/track/thicken-seam';
 import { sectionTrack } from '@/lib/agents/track/section-track';
-import { TRACK_MAX_THICKEN_ATTEMPTS } from '@/lib/config';
+import { TRACK_MAX_THICKEN_ATTEMPTS, TRACK_COMPOSER_MODE } from '@/lib/config';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 
 export type BuildTrackInput = {
@@ -123,15 +124,30 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
       const loaded = await loadMap(pathId);
       edges = loaded.edges;
       concepts = loaded.concepts;
-      composition = await composeTrack({
-        topic: path.topic,
-        concepts: loaded.concepts,
-        priorKnowledge,
-        goal,
-        targetMastery,
-        budgetMinutes,
-        onTrace,
-      });
+      // TRACK_COMPOSER_MODE selects the one-shot composer (today's default) or the
+      // tool-using agent (2.5e-8 block 2b); both return the same ComposerResult, so
+      // everything below — validate, allocate, freeze — is identical.
+      composition =
+        TRACK_COMPOSER_MODE === 'agent'
+          ? await composeTrackAgent({
+              topic: path.topic,
+              concepts: loaded.concepts,
+              edges: loaded.edges,
+              priorKnowledge,
+              goal,
+              targetMastery,
+              budgetMinutes,
+              onTrace,
+            })
+          : await composeTrack({
+              topic: path.topic,
+              concepts: loaded.concepts,
+              priorKnowledge,
+              goal,
+              targetMastery,
+              budgetMinutes,
+              onTrace,
+            });
       const validation = validateComposition({ composition, concepts: loaded.concepts, edges });
       validatedLessons = validation.lessons;
       warnings = validation.warnings;
