@@ -1,5 +1,5 @@
 import type { LanguageModel } from 'ai';
-import { vertex } from '@/lib/ai/vertex';
+import { vertex, chatModel } from '@/lib/ai/vertex';
 
 // Per-agent model configuration. Each call site declares its own sampling
 // params (temperature, maxOutputTokens) because those are call-site
@@ -120,8 +120,8 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // judgment-heavy, learner-facing artifact (same reasoning as mapSpineAuthor),
     // and it reasons over the whole map at once. Temperature low-ish so structure
     // and selection stay stable but the prose framing isn't robotic. 32k output:
-    // a lesson object per concept across a (frontier-thickened) map plus Pro's
-    // internal thinking; matches the spine-author budget.
+    // a lesson object per concept across a (frontier-thickened) map plus the
+    // model's internal thinking; matches the spine-author budget.
     modelId: 'gemini-2.5-pro',
     temperature: 0.3,
     maxOutputTokens: 32768,
@@ -220,7 +220,7 @@ export function getModel(name: AgentName): ResolvedModel {
   const override = process.env[envKey]?.trim();
   const modelId = override && override.length > 0 ? override : cfg.modelId;
   return {
-    model: vertex(modelId),
+    model: chatModel(modelId),
     modelId,
     temperature: cfg.temperature,
     maxOutputTokens: cfg.maxOutputTokens,
