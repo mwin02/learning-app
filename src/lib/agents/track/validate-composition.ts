@@ -83,7 +83,26 @@ export function validateComposition(args: {
   // from the seed set and skipped in the prereq walk, so it is never re-added, and
   // a dependent's prereq is considered satisfied by the learner's knowledge. The
   // composer (composer.ts) is told to prune spine only with clear evidence.
-  const pruned = new Set(composition.prune.filter((s) => conceptBySlug.has(s)));
+  //
+  // Intent-driven omission (2.5e-8) is the same exclusion with a different
+  // justification: `omitForIntent` drops introductory/foundational concepts the
+  // inferred intent makes unnecessary (cram/review), without an explicit
+  // prior-knowledge statement naming them. Structurally identical to prune — folded
+  // into the same excluded set — so a kept concept's prereq edge onto an omitted one
+  // is considered satisfied and the omitted concept is never re-seeded.
+  const pruned = new Set(
+    [
+      ...composition.prune,
+      ...composition.omitForIntent.map((o) => o.conceptSlug),
+    ].filter((s) => conceptBySlug.has(s)),
+  );
+  // Surface each intent-driven omission for the trace — these are not learner-stated
+  // (unlike prune), so they warrant a visible record for build review.
+  for (const o of composition.omitForIntent) {
+    if (!conceptBySlug.has(o.conceptSlug)) continue;
+    const m = conceptBySlug.get(o.conceptSlug)!.membership;
+    warnings.push(`omitted ${m} concept '${o.conceptSlug}' for intent: ${o.reason}`);
+  }
 
   // --- inclusion closure -------------------------------------------------
   // Seeds: every spine concept (always taught) + every concept the composer put

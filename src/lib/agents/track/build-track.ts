@@ -265,6 +265,8 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
       detail: {
         trackId: track.id,
         lessons: allocation.kept.length,
+        pruned: composition.prune.length,
+        omittedForIntent: composition.omitForIntent.length,
         budgetWeak: allocation.budgetWeak,
         depthConstrained: allocation.depthConstrained,
         underResourced,
@@ -275,6 +277,8 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
       trackId: track.id,
       lessons: allocation.kept.length,
       dropped: allocation.dropped.length,
+      pruned: composition.prune.length,
+      omittedForIntent: composition.omitForIntent.length,
       totalMinutes: allocation.totalMinutes,
       budgetWeak: allocation.budgetWeak,
       depthConstrained: allocation.depthConstrained,
