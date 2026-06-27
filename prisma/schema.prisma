@@ -33,6 +33,15 @@ model Resource {
   deprecationSeverity  DeprecationSeverity?
   language             String         @default("en")
   trustScore           Float          @default(0.5)
+  // Phase 2.5h: raw engagement signals persisted so trustScore is RECOMPUTABLE
+  // (when YouTube stats grow stale, or when our own up/down votes land as a second
+  // evidence term). Populated only for YouTube resources sourced via the Data API
+  // prong; null elsewhere. `youtubeChannelId` is the video's channel, used to
+  // resolve the right Source prior — fixing the hostname-collision bug where every
+  // youtube.com URL matched one seeded channel row. See curation/trust-score.ts.
+  viewCount            Int?
+  likeCount            Int?
+  youtubeChannelId     String?
   attribution          String?
   sourceId             String
   source               Source         @relation(fields: [sourceId], references: [id])
@@ -96,6 +105,11 @@ model Source {
   url        String
   kind       SourceKind
   trustScore Float      @default(0.5)
+  // Phase 2.5h: for YouTube-channel sources, the canonical channelId (UC…). The
+  // Data API prong resolves a video's Source by matching this against the video's
+  // channelId — hostname matching can't tell channels apart (all are youtube.com).
+  // Null for non-YouTube sources. Unique so one channel maps to one Source.
+  youtubeChannelId String? @unique
   resources  Resource[]
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @updatedAt

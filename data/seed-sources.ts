@@ -66,6 +66,7 @@ export const seedSources: SourceSeedInput[] = [
     url: 'https://www.youtube.com/@3blue1brown',
     kind: 'educator',
     trustScore: 0.95,
+    youtubeChannelId: 'UCYO_jab_esuFRV4b17AJtAw',
   },
   {
     slug: 'gilbert-strang',
@@ -80,6 +81,7 @@ export const seedSources: SourceSeedInput[] = [
     url: 'https://www.youtube.com/@coreyms',
     kind: 'educator',
     trustScore: 0.85,
+    youtubeChannelId: 'UCCezIgC97PvUuR4_gbFUs5g',
   },
   {
     slug: 'statquest',
@@ -87,6 +89,7 @@ export const seedSources: SourceSeedInput[] = [
     url: 'https://www.youtube.com/@statquest',
     kind: 'educator',
     trustScore: 0.85,
+    youtubeChannelId: 'UCtYLUTtgS3k1Fg4y5tAhLbw',
   },
   {
     slug: 'pauls-online-math-notes',
@@ -115,6 +118,7 @@ export const seedSources: SourceSeedInput[] = [
     url: 'https://www.youtube.com/@professorleonard',
     kind: 'educator',
     trustScore: 0.7,
+    youtubeChannelId: 'UCoHhuummRZaIVX7bD4t2czg',
   },
 
   // ── course_platform ──────────────────────────────────────────────────────
@@ -177,7 +181,20 @@ export const seedSources: SourceSeedInput[] = [
     trustScore: 0.7,
   },
 
-  // ── community (blanket bucket for agent-discovered web resources) ───────
+  // ── community (blanket buckets for agent-discovered resources) ──────────
+  // Phase 2.5h: neutral prior for YouTube videos from a channel we have NOT
+  // seeded above. The Data API prong resolves a video to its seeded channel
+  // Source by channelId; failing that, it lands here — a KNOWN PLATFORM but an
+  // unvetted channel, so trust sits just above the open-web bucket and lets the
+  // engagement signal do the discriminating. Fixes the old hostname collision
+  // where every youtube.com URL matched one seeded channel row.
+  {
+    slug: 'youtube',
+    name: 'YouTube (unseeded channel)',
+    url: 'https://www.youtube.com',
+    kind: 'community',
+    trustScore: 0.5,
+  },
   // The web-fallback agent attributes finds to a specific seeded Source when
   // the URL's domain matches one above; otherwise it falls back to this row.
   // trustScore deliberately below the 0.5 default so the sequencer prefers
