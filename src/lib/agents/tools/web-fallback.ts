@@ -21,6 +21,7 @@
 import { generateText, generateObject } from 'ai';
 import { z } from 'zod';
 import type { Difficulty } from '@prisma/client';
+import { prisma } from '@/lib/db';
 import { getModel } from '@/lib/ai/models';
 import { vertex } from '@/lib/ai/vertex';
 import {
@@ -35,6 +36,7 @@ import { decompose } from '@/lib/agents/decomposition/decompose';
 import { upsertResource } from '@/lib/agents/decomposition/upsert-resource';
 import { loadTopicVocab } from '@/lib/agents/decomposition/concepts';
 import { classifyDiscoveryTopics } from '@/lib/agents/tools/classify-topic';
+import { searchYouTubeForConcept, type YoutubeSourcedResource } from '@/lib/agents/tools/youtube-search';
 import { relatedTopics } from '@/types/resource';
 
 const RAW_RESOURCE_TYPES = ['article', 'video', 'course', 'interactive', 'docs', 'book'] as const;
@@ -52,6 +54,33 @@ const DiscoveredResourceSchema = z.object({
 });
 
 type DiscoveredResource = z.infer<typeof DiscoveredResourceSchema>;
+
+// A discovered row enriched with sourcing provenance. Grounded prongs produce
+// plain DiscoveredResource rows that still need validation; the YouTube prong
+// produces rows that are already live + stat-gated (`preValidated`) and carry the
+// engagement metadata (`youtube`) that upsertResource folds into trustScore.
+type SourcedResource = DiscoveredResource & {
+  youtube?: { channelId: string; viewCount: number; likeCount: number | null };
+  preValidated?: boolean;
+};
+
+// Adapt a YouTube-prong row into the common SourcedResource shape (the prong
+// already derived final concept tags; map them onto the raw* fields the
+// persistence tail expects, and mark it pre-validated to skip the URL validators).
+function youtubeToSourced(r: YoutubeSourcedResource): SourcedResource {
+  return {
+    url: r.url,
+    title: r.title,
+    type: r.type,
+    difficulty: r.difficulty,
+    durationMin: r.durationMin,
+    summary: r.summary,
+    rawPrerequisiteConcepts: r.prerequisiteConcepts,
+    rawConceptsTaught: r.conceptsTaught,
+    youtube: r.youtube,
+    preValidated: true,
+  };
+}
 
 const CanonicalizedTagsSchema = z.object({
   results: z
@@ -97,12 +126,24 @@ export async function sourceForConcept({
   targetMastery?: Difficulty;
 }): Promise<WebFallbackResult> {
   const label = `${topic}::${concept.slug}`;
+  // The sourcing LADDER (replaces the old "same vague open-web query, repeated"):
+  //   rung 1 (iteration 1) — allowlisted fan-out: the YouTube Data API prong +
+  //     a grounded prong hard-restricted to the curated source domains. Distinct
+  //     queries against high-quality sources, so a concept usually fills here.
+  //   rung 2 (iteration 2+) — open-web relaxation: today's broad grounded prompt,
+  //     run only when rung 1 came up short (protects coverage on thin/niche concepts).
+  // collectSurvivors carries the deny-list across rungs so a rung never re-surfaces
+  // what an earlier rung already returned.
+  const allowDomains = await loadAllowlistDomains();
   const { survivors, iterations, totalDiscovered } = await collectSurvivors({
     label,
     targetCount,
     oversample: REMEDIATION_DISCOVERY_OVERSAMPLE,
     maxIterations: REMEDIATION_MAX_DISCOVERY_ITERATIONS,
-    discover: (oversample, denyList) => discoverForConcept(topic, concept.title, oversample, denyList, targetMastery),
+    discover: (oversample, denyList, iteration) =>
+      iteration === 1
+        ? discoverAllowlisted(topic, concept.title, oversample, denyList, allowDomains, targetMastery)
+        : discoverForConcept(topic, concept.title, oversample, denyList, targetMastery),
   });
   return persistDiscovered(topic, survivors, { label, iterations, totalDiscovered, targetCount });
 }
@@ -117,10 +158,12 @@ async function collectSurvivors(args: {
   targetCount: number;
   oversample: number;
   maxIterations: number;
-  discover: (oversample: number, denyList: string[]) => Promise<DiscoveredResource[]>;
-}): Promise<{ survivors: DiscoveredResource[]; iterations: number; totalDiscovered: number }> {
+  // `iteration` is 1-based so the ladder can pick a rung (1 = allowlisted, 2+ =
+  // open-web relaxation). The deny-list carries across rungs.
+  discover: (oversample: number, denyList: string[], iteration: number) => Promise<SourcedResource[]>;
+}): Promise<{ survivors: SourcedResource[]; iterations: number; totalDiscovered: number }> {
   const { label, targetCount, oversample, maxIterations, discover } = args;
-  const survivors = new Map<string, DiscoveredResource>();
+  const survivors = new Map<string, SourcedResource>();
   const denyList = new Set<string>();
   let iterations = 0;
   let totalDiscovered = 0;
@@ -129,7 +172,7 @@ async function collectSurvivors(args: {
     iterations += 1;
     const need = targetCount - survivors.size;
 
-    const discovered = await discover(oversample, [...denyList]);
+    const discovered = await discover(oversample, [...denyList], iterations);
     totalDiscovered += discovered.length;
 
     // Always block URLs we've already seen this run from re-discovery, even
@@ -144,13 +187,22 @@ async function collectSurvivors(args: {
       continue;
     }
 
-    const { valid, rejected } = await runValidationPipeline<DiscoveredResource>(fresh, VALIDATORS);
+    // The YouTube prong's rows are already live (API) + view-floor-gated, so they
+    // skip the URL validators (liveness/rules-agent); only the grounded-prong rows
+    // run the pipeline.
+    const preValidated = fresh.filter((r) => r.preValidated);
+    const needValidation = fresh.filter((r) => !r.preValidated);
+    const { valid, rejected } = await runValidationPipeline<SourcedResource>(needValidation, VALIDATORS);
 
     for (const r of rejected) {
       console.log('[web-fallback] rejected', { url: r.row.url, validator: r.validator, reason: r.reason });
     }
 
-    for (const r of valid) {
+    // Interleave the prongs rather than taking all YouTube first, so when one prong
+    // alone could fill the target it doesn't starve the other — a concept's library
+    // entries stay a MIX of video + allowlisted docs/courseware/textbook, giving the
+    // downstream judge/composer a real choice of format.
+    for (const r of interleave(preValidated, valid)) {
       if (survivors.size >= targetCount) break;
       survivors.set(r.url, r);
     }
@@ -158,8 +210,10 @@ async function collectSurvivors(args: {
     console.log('[web-fallback] iteration', {
       label,
       iteration: iterations,
+      rung: iterations === 1 ? 'allowlisted' : 'open-web',
       discovered: discovered.length,
       fresh: fresh.length,
+      preValidated: preValidated.length,
       valid: valid.length,
       survivors: survivors.size,
       need,
@@ -169,12 +223,23 @@ async function collectSurvivors(args: {
   return { survivors: [...survivors.values()], iterations, totalDiscovered };
 }
 
+// Round-robin merge of two prongs' rows, so neither is systematically crowded out
+// when the target fills before both are exhausted. Order within each list is kept.
+function interleave<T>(a: T[], b: T[]): T[] {
+  const out: T[] = [];
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if (i < a.length) out.push(a[i]);
+    if (i < b.length) out.push(b[i]);
+  }
+  return out;
+}
+
 // The persistence tail shared by both entry points: decompose → canonicalize →
 // file under home topic → upsert. `topic` is the request topic (the filing anchor);
 // survivors are filed under topic ∪ related per the classifier.
 async function persistDiscovered(
   topic: string,
-  finalRows: DiscoveredResource[],
+  finalRows: SourcedResource[],
   meta: { label: string; iterations: number; totalDiscovered: number; targetCount: number },
 ): Promise<WebFallbackResult> {
   const { label, iterations, totalDiscovered, targetCount } = meta;
@@ -253,6 +318,9 @@ async function persistDiscovered(
         summary: row.summary,
         prerequisiteConcepts: tags.prerequisiteConcepts,
         conceptsTaught: tags.conceptsTaught,
+        // Present only for YouTube-prong rows — drives channel source resolution +
+        // engagement trust in upsertResource.
+        youtube: row.youtube,
       },
       result,
     );
@@ -274,7 +342,88 @@ async function persistDiscovered(
   return { insertedCount, skippedCount, discoveredCount: totalDiscovered, iterations, insertedIds };
 }
 
-// ── discovery ───────────────────────────────────────────────────────────────
+// ── discovery: rung 1 (allowlisted fan-out) ───────────────────────────────────
+
+// Phase 2.5h rung 1: source from the CURATED set only — the YouTube Data API prong
+// (videos, channel-trusted + view-gated) plus a grounded prong hard-restricted to
+// the allowlisted documentation/courseware/textbook/educator domains. Both queries
+// run in parallel and merge; the grounded results are domain-filtered so nothing
+// off-allowlist slips in at this rung. Failures in either prong degrade to empty —
+// the ladder's rung 2 (open web) is the relaxation.
+async function discoverAllowlisted(
+  topic: string,
+  conceptTitle: string,
+  oversample: number,
+  denyList: string[],
+  allowDomains: string[],
+  targetMastery?: Difficulty,
+): Promise<SourcedResource[]> {
+  const [ytRows, groundedRows] = await Promise.all([
+    searchYouTubeForConcept({ topic, conceptTitle, maxResults: oversample, difficulty: targetMastery, denyUrls: denyList })
+      .catch((err) => {
+        console.warn('[web-fallback] youtube prong failed', { conceptTitle, error: err instanceof Error ? err.message : String(err) });
+        return [] as YoutubeSourcedResource[];
+      }),
+    discoverForConceptScoped(topic, conceptTitle, oversample, denyList, allowDomains, targetMastery),
+  ]);
+  return [...ytRows.map(youtubeToSourced), ...groundedRows];
+}
+
+// The grounded prong restricted to allowlisted domains. Same engine as the open-web
+// prong but the prompt names the allowed domains and instructs site-scoped search,
+// and a hard post-filter drops any URL whose host isn't on the allowlist (the model
+// strays; the filter is the guarantee, not the prompt).
+async function discoverForConceptScoped(
+  topic: string,
+  conceptTitle: string,
+  oversample: number,
+  denyList: string[],
+  allowDomains: string[],
+  targetMastery?: Difficulty,
+): Promise<SourcedResource[]> {
+  if (allowDomains.length === 0) return [];
+  const rows = await runDiscovery({
+    label: `${topic}::${conceptTitle} (allowlisted)`,
+    oversample,
+    denyListSize: denyList.length,
+    system: CONCEPT_DISCOVERY_SYSTEM_PROMPT,
+    prompt: buildScopedConceptDiscoveryPrompt(topic, conceptTitle, oversample, denyList, allowDomains, targetMastery),
+  });
+  const allow = new Set(allowDomains);
+  const onAllowlist = rows.filter((r) => {
+    const host = hostnameOf(r.url);
+    return host != null && (allow.has(host) || [...allow].some((d) => host.endsWith('.' + d)));
+  });
+  const dropped = rows.length - onAllowlist.length;
+  if (dropped > 0) console.log('[web-fallback] scoped prong dropped off-allowlist URLs', { conceptTitle, dropped });
+  return onAllowlist;
+}
+
+// The allowlist = curated Source domains (docs/courseware/textbook/educator), minus
+// YouTube (the Data API prong owns video) and the blanket community buckets. Read
+// from the DB so an operator adding a Source widens the allowlist with no code change.
+async function loadAllowlistDomains(): Promise<string[]> {
+  const sources = await prisma.source.findMany({
+    where: { kind: { in: ['official_docs', 'course_platform', 'textbook', 'educator'] } },
+    select: { url: true },
+  });
+  const domains = new Set<string>();
+  for (const s of sources) {
+    const host = hostnameOf(s.url);
+    if (host && host !== 'youtube.com' && !host.endsWith('.youtube.com')) domains.add(host);
+  }
+  return [...domains];
+}
+
+function hostnameOf(url: string): string | null {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return null;
+  }
+}
+
+// ── discovery: rung 2 (open-web relaxation) ───────────────────────────────────
 
 // Phase 2.5f: concept-focused discovery — find resources that TEACH one concept,
 // within its topic for context. Biased toward `teaches` (remediation needs a
@@ -383,6 +532,35 @@ function buildConceptDiscoveryPrompt(
     // The in-track thickener sources because the existing material is too shallow
     // for the learner's target mastery — bias discovery toward that depth (but
     // don't hard-exclude adjacent levels; the composer makes the final pick).
+    lines.push(
+      `Target learner level: ${targetMastery}. Prefer resources pitched at or approaching ${targetMastery} depth (adjacent levels are acceptable if strong).`,
+    );
+  }
+  appendDenyList(lines, denyList);
+  return lines.join('\n');
+}
+
+// Rung-1 grounded prompt: the same concept-discovery prompt, but constrained to the
+// allowlisted domains. The model is told to search those sites specifically (site:
+// queries); discoverForConceptScoped still hard-filters the result by host, so this
+// is a strong steer rather than the guarantee.
+function buildScopedConceptDiscoveryPrompt(
+  topic: string,
+  conceptTitle: string,
+  oversample: number,
+  denyList: string[],
+  allowDomains: string[],
+  targetMastery?: Difficulty,
+): string {
+  const lines = [
+    `Target concept: ${conceptTitle}`,
+    `Topic (context): ${topic}`,
+    `Target count: ${oversample} resources that TEACH "${conceptTitle}". Use Google Search.`,
+    '',
+    'RESTRICT your search to these trusted domains ONLY — use site: filters (e.g. `site:docs.python.org eigenvalues`). Do NOT return URLs from any other domain; a result off this list will be discarded:',
+    JSON.stringify(allowDomains),
+  ];
+  if (targetMastery) {
     lines.push(
       `Target learner level: ${targetMastery}. Prefer resources pitched at or approaching ${targetMastery} depth (adjacent levels are acceptable if strong).`,
     );

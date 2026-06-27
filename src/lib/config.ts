@@ -8,6 +8,43 @@
 // with the curriculum-retrieval subsystem and runWebFallback. Library growth is
 // now driven by targeted per-concept sourcing — see the REMEDIATION_* budgets below.
 
+// Phase 2.5h (source-quality overhaul): trustScore composition seam
+// (src/lib/curation/trust-score.ts). trustScore = a source-reputation prior moved
+// by evidence signals (precision-weighted average). These two knobs govern the
+// blend itself; signal-specific knobs (YouTube engagement thresholds, the
+// selection-ranking weight) live with their callers in later blocks.
+//
+// TRUST_PRIOR_STRENGTH: the precision the source prior carries in the blend. At 1,
+// a single full-confidence·full-weight signal counts equally with the prior (pulls
+// the score halfway to the signal's value). Raise to make the prior stickier.
+export const TRUST_PRIOR_STRENGTH = 1;
+// TRUST_FLOOR: trustScore never drops below this. NOT a quality gate — the minimal
+// liveness/garbage drop lives at admission in the sourcing prong; this just keeps a
+// heavily-disliked resource's score off zero so it stays orderable.
+export const TRUST_FLOOR = 0.1;
+
+// Phase 2.5h: YouTube engagement → EvidenceSignal knobs (curation/youtube-signal.ts).
+// Calibrated against live Data API data: strong educational videos cluster around a
+// ~2% like ratio but it swings wildly by channel/audience (3Blue1Brown ~2%, Khan
+// ~0.3% on equally-good content), so like ratio is a WEAK quality axis. We therefore
+// drive the signal mostly off view count (popularity = crowd-vetting) with like ratio
+// as a soft modifier, and cap the whole term's weight so it nudges the source/channel
+// prior rather than overriding it.
+//   value      = YT_VIEW_WEIGHT·viewScore + (1−YT_VIEW_WEIGHT)·likeScore
+//   confidence = viewScore   (more views → more evidence; protects hidden gems —
+//                low-view videos stay near base, lifted later by our own votes)
+//   weight     = YT_SIGNAL_WEIGHT
+// where viewScore = clamp(log10(views+1)/log10(YT_VIEW_SAT), 0, 1)
+//       likeScore = clamp((likes/views)/YT_TARGET_LIKE_RATIO, 0, 1)
+export const YT_VIEW_SAT = 1_000_000; // views at which viewScore saturates to 1
+export const YT_TARGET_LIKE_RATIO = 0.025; // like/view ratio scoring full marks
+export const YT_VIEW_WEIGHT = 0.7; // view vs like split inside the signal's value
+export const YT_SIGNAL_WEIGHT = 0.6; // EvidenceSignal.weight — engagement nudges, prior anchors
+// Minimal liveness/garbage floor: a video below this view count is dropped at
+// admission (not trusted-low — dropped). Deliberately permissive per the "set low,
+// just filter out bad content" decision; real quality is the soft trust signal.
+export const YT_MIN_VIEWS = 1_000;
+
 // Phase 2.5f: targeted per-concept sourcing (sourceForConcept) budgets — the
 // thickener's spine-hole remediation. Deliberately smaller than the topic-level
 // FALLBACK_* above: a single narrow concept has far fewer good resources on the
@@ -185,6 +222,15 @@ export const MAP_SPINE_MIN_PRIMARY_COVERAGE = 0.5;
 // candidates). The floor above is admission-time only, on FRESH judge output.
 export const MAP_ATTACH_MIN_COVERAGE = 0.3;
 export const MAP_MAX_CANDIDATES_PER_CONCEPT = 6;
+
+// Phase 2.5h: how much trustScore weighs in candidate RANKING (selectAttachable /
+// capCandidates). selectionScore = (1−w)·coverageScore + w·trustScore. Coverage
+// stays the GATE (a candidate must clear MAP_ATTACH_MIN_COVERAGE / a primary must
+// clear MAP_SPINE_MIN_PRIMARY_COVERAGE — trust never gates, so it can't admit an
+// irrelevant resource or drop a concept below readiness); trust only orders the
+// qualifiers, so a higher-trust resource wins the primary slot and survives the cap
+// among similarly-relevant candidates. Modest so relevance still dominates.
+export const TRUST_SELECTION_WEIGHT = 0.3;
 
 // Phase 2.5d-7c (inspector attach-resource picker): max pickable candidates the
 // resource-search endpoint returns to the attach picker. Small — the operator is

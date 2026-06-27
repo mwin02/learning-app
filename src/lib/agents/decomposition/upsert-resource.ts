@@ -15,6 +15,8 @@
 
 import { prisma } from '@/lib/db';
 import { safeEmbedResource } from '@/lib/ai/embeddings';
+import { computeTrustScore } from '@/lib/curation/trust-score';
+import { youtubeEngagementSignal } from '@/lib/curation/youtube-signal';
 import type { PrismaClient, ResourceType, Difficulty, DecompositionStatus, ResourceStatus } from '@prisma/client';
 import type { DecompositionResult, ChildInput } from './decompose';
 
@@ -27,6 +29,11 @@ export type UpsertResourceInput = {
   summary: string;
   prerequisiteConcepts: string[];
   conceptsTaught: string[];
+  // Phase 2.5h: present when this resource was sourced via the YouTube Data API
+  // prong. Drives channel-level Source resolution (by channelId, not hostname),
+  // persists the raw engagement signals, and feeds the engagement EvidenceSignal
+  // into the trustScore seam. Absent for grounded-search / seed resources.
+  youtube?: { channelId: string; viewCount: number; likeCount: number | null };
 };
 
 // `atomicIds` are the newly-created pickable (atomic) resource ids — an atomic
@@ -65,7 +72,18 @@ export async function upsertResource(
     return { outcome: 'skipped', atomicIds: [] };
   }
 
-  const source = await resolveSource(resource.url);
+  // YouTube videos resolve their Source by channelId (hostname can't tell channels
+  // apart); everything else by URL host. Then compose trustScore through the single
+  // seam: a YouTube video carries an engagement EvidenceSignal so its trust reflects
+  // its own reception; other resources have no signal and rest on the source prior.
+  const source = resource.youtube
+    ? await resolveYouTubeSource(resource.youtube.channelId)
+    : await resolveSource(resource.url);
+  const engagement = resource.youtube ? youtubeEngagementSignal(resource.youtube) : null;
+  const sourceTrust = computeTrustScore({
+    base: source.trustScore,
+    signals: engagement ? [engagement] : [],
+  });
   const taken = new Set<string>();
   const embedTasks: EmbedTask[] = [];
 
@@ -84,9 +102,14 @@ export async function upsertResource(
           difficulty: resource.difficulty as Difficulty,
           prerequisiteConcepts: resource.prerequisiteConcepts,
           conceptsTaught: resource.conceptsTaught,
+          // Phase 2.5h: raw engagement signals (null for non-YouTube), so trustScore
+          // is recomputable when stats grow stale or our own votes land.
+          viewCount: resource.youtube?.viewCount ?? null,
+          likeCount: resource.youtube?.likeCount ?? null,
+          youtubeChannelId: resource.youtube?.channelId ?? null,
           origin: 'agent',
           status: 'pending_review',
-          trustScore: source.trustScore,
+          trustScore: sourceTrust,
           sourceId: source.id,
           decompositionStatus: decomposition.status,
         },
@@ -109,7 +132,7 @@ export async function upsertResource(
           topic,
           parentId: parent.id,
           sourceId: source.id,
-          trustScore: source.trustScore,
+          trustScore: sourceTrust,
           // Discovery's parent is an unvetted agent find (pending_review above),
           // so its children inherit that gate.
           childStatus: 'pending_review',
@@ -382,6 +405,26 @@ async function loadWebSource(): Promise<{ id: string; trustScore: number }> {
     select: { id: true, trustScore: true },
   });
   return web;
+}
+
+// Phase 2.5h: resolve a YouTube video's Source by CHANNEL, not hostname. A seeded
+// channel (3Blue1Brown, StatQuest, …) carries its trust prior; an unseeded channel
+// falls back to the neutral `youtube` row (known platform, unvetted channel) so the
+// engagement signal does the discriminating. This is the fix for the old collision
+// where every youtube.com URL matched whichever channel row resolveSource hit first.
+async function resolveYouTubeSource(channelId: string): Promise<{ id: string; trustScore: number }> {
+  const byChannel = await prisma.source.findUnique({
+    where: { youtubeChannelId: channelId },
+    select: { id: true, trustScore: true },
+  });
+  if (byChannel) return byChannel;
+  const youtube = await prisma.source.upsert({
+    where: { slug: 'youtube' },
+    update: {},
+    create: { slug: 'youtube', name: 'YouTube (unseeded channel)', url: 'https://www.youtube.com', kind: 'community', trustScore: 0.5 },
+    select: { id: true, trustScore: true },
+  });
+  return youtube;
 }
 
 // `taken` tracks slugs minted earlier in the same transaction (parent +

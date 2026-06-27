@@ -25,6 +25,12 @@ export type JudgedCandidate = {
   // 0–1: how completely the resource serves the concept in its assigned role.
   // The caller drops <= 0 (the judge's "not actually relevant" signal).
   coverageScore: number;
+  // Phase 2.5h: the resource's trustScore, carried through so selectAttachable can
+  // rank by a coverage+trust blend (coverage gates, trust orders). From the
+  // SearchResult; the judge does not score it. Optional: the fresh-judge attach path
+  // sets it (so ranking is trust-aware), while paths that hydrate candidates from
+  // persisted ConceptResource rows omit it and fall back to pure coverage ordering.
+  trustScore?: number;
 };
 
 const VerdictSchema = z.object({
@@ -98,7 +104,7 @@ export async function judgeCandidates(args: {
       });
       if (v.coverageScore <= existing.coverageScore) continue;
     }
-    byResource.set(row.id, { resourceId: row.id, role: v.role, coverageScore: v.coverageScore });
+    byResource.set(row.id, { resourceId: row.id, role: v.role, coverageScore: v.coverageScore, trustScore: row.trustScore });
   }
   return [...byResource.values()];
 }
