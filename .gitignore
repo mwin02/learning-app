@@ -20,6 +20,13 @@
 # production
 /build
 
+# backup files
+/backups
+*.bak
+*.backup
+*.orig
+*~
+
 # misc
 .DS_Store
 *.pem
