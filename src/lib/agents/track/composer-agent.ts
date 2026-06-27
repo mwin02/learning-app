@@ -82,11 +82,18 @@ export async function composeTrackAgent(args: {
   // an unknown handle resolves to nothing — one bad id can't fail a build.
   const byHandle = new Map<string, { conceptSlug: string; resourceId: string }>();
   const handlesByConcept = new Map<string, { handle: string; title: string; type: string; difficulty: string; durationMin: number; role: string }[]>();
+  // Flat view of every candidate (with its owning concept + coverage) for search_candidates.
+  type FlatCandidate = { handle: string; conceptSlug: string; conceptTitle: string; title: string; type: string; difficulty: string; durationMin: number; role: string; coverageScore: number };
+  const allCandidates: FlatCandidate[] = [];
   let n = 0;
   for (const c of concepts) {
     const views = c.candidates.map((cand) => {
       const handle = `r${++n}`;
       byHandle.set(handle, { conceptSlug: c.slug, resourceId: cand.resourceId });
+      allCandidates.push({
+        handle, conceptSlug: c.slug, conceptTitle: c.title,
+        title: cand.title, type: cand.type, difficulty: cand.difficulty, durationMin: cand.durationMin, role: cand.role, coverageScore: cand.coverageScore,
+      });
       return { handle, title: cand.title, type: cand.type, difficulty: cand.difficulty, durationMin: cand.durationMin, role: cand.role };
     });
     handlesByConcept.set(c.slug, views);
@@ -141,6 +148,29 @@ export async function composeTrackAgent(args: {
         return { conceptSlug, candidates: views };
       },
     }),
+    search_candidates: tool({
+      description:
+        "Search the WHOLE map's candidate pool (across every concept), ranked by coverage, to find resources that fit the learner's intent — e.g. role='assesses' for exam practice, or a beginner-difficulty explainer. Returns handles you can pass to add_lesson, including resources attached to a DIFFERENT concept that you judge fit this lesson (re-purposing across concepts is allowed; downstream dedup stops the same resource landing in two lessons). Filters are ANDed; omit any to leave it unconstrained.",
+      inputSchema: z.object({
+        query: z.string().optional().describe('Keywords matched against resource and concept titles, e.g. "practice problems", "cheat sheet".'),
+        role: z.enum(['teaches', 'uses', 'assesses']).optional().describe('teaches = learn it; uses = applies it; assesses = practice/test it.'),
+        difficulty: z.enum(['beginner', 'intermediate', 'advanced']).optional(),
+        conceptSlug: z.string().optional().describe('Restrict to one concept\'s candidates.'),
+        limit: z.number().int().min(1).max(30).optional().describe('Max results (default 15).'),
+      }),
+      execute: async ({ query, role, difficulty, conceptSlug, limit }) => {
+        const q = query?.trim().toLowerCase();
+        const matches = allCandidates
+          .filter((c) => (role ? c.role === role : true))
+          .filter((c) => (difficulty ? c.difficulty === difficulty : true))
+          .filter((c) => (conceptSlug ? c.conceptSlug === conceptSlug : true))
+          .filter((c) => (q ? `${c.title} ${c.conceptTitle}`.toLowerCase().includes(q) : true))
+          .sort((a, b) => b.coverageScore - a.coverageScore)
+          .slice(0, limit ?? 15);
+        trace('search_candidates', { query: q, role, difficulty, conceptSlug, results: matches.length });
+        return { results: matches };
+      },
+    }),
     exclude_concept: tool({
       description: "Leave a concept OUT of the track. basis 'known' = the learner's prior-knowledge clearly covers it; basis 'intent' = the inferred intent/target mastery makes it unnecessary (e.g. intro/foundational concepts for an exam cram). A dependent's prerequisite onto an excluded concept is considered satisfied.",
       inputSchema: z.object({
@@ -175,14 +205,10 @@ export async function composeTrackAgent(args: {
           else if (excluded.has(s)) errors.push(`'${s}' is excluded — un-exclude it or drop it from this lesson`);
           else if (placed.has(s)) errors.push(`'${s}' is already in another lesson`);
         }
-        // Handles must belong to one of this lesson's own concepts (block 2b: no
-        // cross-concept borrowing). Unknown / out-of-pool handles are reported, not added.
-        const pool = new Set(conceptSlugs.flatMap((s) => (handlesByConcept.get(s) ?? []).map((v) => v.handle)));
+        // Handles may come from ANY concept (2c: cross-concept re-purposing). Only a
+        // wholly-unknown handle is an error; a borrowed one is honored downstream.
         const checkHandles = (hs: string[], kind: string) =>
-          hs.filter((h) => !pool.has(h)).forEach((h) => {
-            const owner = byHandle.get(h);
-            errors.push(owner ? `${kind} handle ${h} belongs to '${owner.conceptSlug}', not this lesson` : `${kind} handle ${h} is unknown`);
-          });
+          hs.filter((h) => !byHandle.has(h)).forEach((h) => errors.push(`${kind} handle ${h} is unknown`));
         checkHandles(mandatoryHandles, 'mandatory');
         checkHandles(optionalHandles, 'optional');
         if (errors.length > 0) return { ok: false, errors };
@@ -304,6 +330,7 @@ const SYSTEM_PROMPT = `You compose a single learner's course ("Track") from a to
 Tools:
 - \`get_map_overview\` — every concept (slug, membership spine|frontier, direct prerequisites, candidate count). Call first to plan.
 - \`get_concept_candidates\` — a concept's candidate resources with opaque handles (r#). Read a concept before adding its lesson so you reference real handles.
+- \`search_candidates\` — search the WHOLE pool by role/difficulty/keywords to find intent-fitting resources (e.g. 'assesses' for exam practice), including ones attached to another concept you may re-purpose.
 - \`exclude_concept\` — leave a concept out. basis 'known' (prior-knowledge clearly covers it) or 'intent' (the inferred intent/target mastery makes it unnecessary).
 - \`add_lesson\` — add one lesson; returns the concepts still left to place.
 - \`finalize\` — supply intent + framing + resource-sufficiency once everything required is placed or excluded.
@@ -314,9 +341,9 @@ How to work:
    - basis 'known': the learner's prior-knowledge description clearly covers it (be conservative; a wrongly-excluded concept leaves a gap).
    - basis 'intent': infer the floor from why they're here. A learner cramming for an exam or refreshing a subject they've studied does NOT need the introductory framing and earliest foundational concepts that audience already has — exclude those and spend the budget on harder, applied, testable material. A fresh \`learn\`/\`master\` pass excludes little or nothing. When unsure, KEEP (include) the concept.
    Include the FRONTIER (enrichment) concepts the target mastery warrants and omit the rest by simply not adding a lesson for them (a deeper target reaches further into frontier). If you add a frontier concept, also add (or rely on) its prerequisites — a downstream pass pulls in any prerequisite you leave implicit, but never include a concept whose prerequisite is neither included nor excluded.
-3. For each included concept, \`get_concept_candidates\`, then \`add_lesson\`:
+3. For each included concept, \`get_concept_candidates\` (and/or \`search_candidates\` to find intent-fitting resources across the pool), then \`add_lesson\`:
    - \`conceptSlugs\`: usually one. You MAY merge 2–3 tightly-coupled ADJACENT concepts taught together; never merge across an unrelated concept between them.
-   - \`mandatoryHandles\`: the ranked must-have core, best first (the first is always used — make it the single best). Prefer 'teaches' candidates difficulty-matched to the target. Keep it tight (usually 1, up to ~3); don't pad with redundant overlapping resources. The core MAY span functions (a 'teaches' + an 'assesses'). For \`review\`/\`practice\` prefer leaner cores and 'uses'/'assesses'; for \`learn\`/\`master\` prefer a fuller 'teaches' core.
+   - \`mandatoryHandles\`: the ranked must-have core, best first (the first is always used — make it the single best). Prefer 'teaches' candidates difficulty-matched to the target. Keep it tight (usually 1, up to ~3); don't pad with redundant overlapping resources. The core MAY span functions (a 'teaches' + an 'assesses'). Let intent drive the core: for \`exam_prep\`/\`review\`/\`practice\` lean on 'assesses'/'uses' (practice, problem sets, summaries) over long 'teaches' — use \`search_candidates\` with role='assesses' to find them, including ones attached to a neighboring concept; for \`learn\`/\`master\` prefer a fuller 'teaches' core. A handle may come from any concept if it genuinely fits this lesson.
    - \`optionalHandles\`: remaining useful candidates as a substitute pool, best first (may be empty).
    - \`timeWeight\`: coarse RELATIVE priority — low | normal | high | deep. Most lessons are normal; give high/deep to load-bearing or hard lessons.
    - \`masteryRelevant\`: for a frontier lesson, whether it matters for reaching the target mastery (a budget trimmer keeps mastery-relevant frontier first). Ignored for spine lessons.
