@@ -48,6 +48,7 @@ const edges: OrderEdge[] = [
 function comp(over: Partial<ComposerResult>): ComposerResult {
   return {
     prune: [],
+    omitForIntent: [],
     intent: TrackIntent.learn,
     lessons: [],
     trackTitle: 'T', trackSummary: 'S',
@@ -166,6 +167,24 @@ console.log('validateComposition — frontier concept can be pruned');
   });
   check('f pruned (absent)', !out.lessons.some((l) => l.conceptSlugs.includes('f')), out.lessons.map((l) => l.conceptSlugs));
   check('two lessons remain', out.lessons.length === 2);
+}
+
+console.log('validateComposition — omitForIntent drops a spine concept like prune (2.5e-8)');
+{
+  // a (spine) → b (spine) → f. Intent (cram/review) omits foundational a without an
+  // explicit prior-knowledge statement. Structurally identical to prune: a is
+  // excluded, dependent b stays, and closure must NOT pull a back in.
+  const out = validateComposition({
+    composition: comp({
+      omitForIntent: [{ conceptSlug: 'a', reason: 'exam_prep: intro the cohort has' }],
+      lessons: [L(['b'], 'r-b1'), L(['f'], 'r-f1', { isFrontier: true })],
+    }),
+    concepts, edges,
+  });
+  check('a omitted (absent)', !out.lessons.some((l) => l.conceptSlugs.includes('a')), out.lessons.map((l) => l.conceptSlugs));
+  check('dependent b stays', out.lessons.some((l) => l.conceptSlugs.includes('b')), out.lessons.map((l) => l.conceptSlugs));
+  check('two lessons remain (b, f)', out.lessons.length === 2, out.lessons.map((l) => l.conceptSlugs));
+  check('omission surfaced in warnings', out.warnings.some((w) => w.includes("omitted") && w.includes("'a'") && w.includes('intent')), out.warnings);
 }
 
 console.log('validateComposition — composer order is overridden by the DAG');
