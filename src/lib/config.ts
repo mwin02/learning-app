@@ -210,9 +210,11 @@ export const TRACK_COMPOSER_MODE: 'single' | 'agent' = 'single';
 
 // Hard ceiling on model turns in the composer agent's loop. One step = one model turn
 // (which may issue several tool calls). Bounds cost/latency on the per-request path; the
-// model normally stops earlier by calling `finalize` once the track is complete. Sized
-// above a typical map's concept count so a one-lesson-per-turn worst case still finishes.
-export const TRACK_COMPOSER_MAX_STEPS = 40;
+// model normally stops earlier by calling `finalize` once the track is complete. The
+// agent tends to spend ~1 tool call per step, so a 14-concept map needs ~36 steps on the
+// happy path — 60 gives real headroom (a 40 cap left search-heavy builds finalize-starved;
+// generateFallbackFraming is the safety net for when the cap is still hit).
+export const TRACK_COMPOSER_MAX_STEPS = 60;
 
 // Phase 2.5g-3: the course worker's poll interval — how long it sleeps after
 // draining the queue before checking again. Short enough that a freshly-enqueued
