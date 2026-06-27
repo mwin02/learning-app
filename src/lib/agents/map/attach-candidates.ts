@@ -17,28 +17,41 @@ import {
   MAP_ATTACH_MIN_COVERAGE,
   MAP_MAX_CANDIDATES_PER_CONCEPT,
   MAP_SPINE_MIN_PRIMARY_COVERAGE,
+  TRUST_SELECTION_WEIGHT,
 } from '@/lib/config';
 import { relatedTopics } from '@/types/resource';
 import type { AuthoredConcept } from '@/lib/agents/map/cycle';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 
+// Phase 2.5h: ranking score = coverage gated, trust ordering. coverageScore decides
+// relevance; trustScore (when carried — fresh judge output) breaks ties so a higher-
+// trust resource ranks above an equally-relevant lower-trust one. Rows without a
+// trustScore (e.g. the re-cap over DB links in source-concept) fall back to pure
+// coverage, preserving prior behavior there.
+function selectionScore(c: { coverageScore: number; trustScore?: number }): number {
+  if (c.trustScore == null) return c.coverageScore;
+  return (1 - TRUST_SELECTION_WEIGHT) * c.coverageScore + TRUST_SELECTION_WEIGHT * c.trustScore;
+}
+
 // Lever A — count bound only. Given a candidate set, keep the top
-// MAP_MAX_CANDIDATES_PER_CONCEPT by coverage, always retaining the single best
-// qualifying `teaches` (>= MAP_SPINE_MIN_PRIMARY_COVERAGE) — swapped in over the
-// lowest-coverage kept item if the cap pushed it out — so capping can never evict
-// a concept's qualifying primary. Deliberately applies NO coverage floor: it bounds
-// regrowth over an ALREADY-ADMITTED set (e.g. the merged DB rows in source-concept)
-// without re-litigating admission, so it can only ever drop the lowest-coverage
-// EXCESS beyond the cap and never empties a non-empty input. Pure; input order is
-// not assumed; output is coverage-desc.
-export function capCandidates<T extends { role: ConceptResourceRole; coverageScore: number }>(
+// MAP_MAX_CANDIDATES_PER_CONCEPT by the coverage+trust selection score, always
+// retaining the single best qualifying `teaches` (>= MAP_SPINE_MIN_PRIMARY_COVERAGE,
+// a COVERAGE gate — trust never qualifies a primary) — swapped in over the lowest-
+// ranked kept item if the cap pushed it out — so capping can never evict a concept's
+// qualifying primary. Deliberately applies NO coverage floor: it bounds regrowth over
+// an ALREADY-ADMITTED set (e.g. the merged DB rows in source-concept) without
+// re-litigating admission, so it can only ever drop the lowest-ranked EXCESS beyond
+// the cap and never empties a non-empty input. Pure; input order is not assumed;
+// output is selection-score-desc (== coverage-desc when no trust is carried).
+export function capCandidates<T extends { role: ConceptResourceRole; coverageScore: number; trustScore?: number }>(
   candidates: T[],
 ): T[] {
-  const sorted = [...candidates].sort((a, b) => b.coverageScore - a.coverageScore);
+  const sorted = [...candidates].sort((a, b) => selectionScore(b) - selectionScore(a));
   const kept = sorted.slice(0, MAP_MAX_CANDIDATES_PER_CONCEPT);
 
   // Guarantee the single best qualifying primary survives the cap (only the cap
-  // could evict it when many higher-coverage uses/assesses crowd it out).
+  // could evict it when many higher-ranked uses/assesses crowd it out). "Best" here
+  // is by the same selection score, among `teaches` clearing the COVERAGE floor.
   const bestPrimary = sorted.find(
     (c) => c.role === ConceptResourceRole.teaches && c.coverageScore >= MAP_SPINE_MIN_PRIMARY_COVERAGE,
   );
@@ -53,8 +66,9 @@ export function capCandidates<T extends { role: ConceptResourceRole; coverageSco
 // already in the DB (those were admitted under whatever policy applied then, incl.
 // 2.5f relaxed readiness; re-flooring them can wrongly delete a relaxed concept's
 // only candidates and regress the Path). For the persisted re-cap use capCandidates.
-// Pure + generic; tests without a DB. Output is coverage-desc.
-export function selectAttachable<T extends { role: ConceptResourceRole; coverageScore: number }>(
+// Pure + generic; tests without a DB. Output is selection-score-desc (the floor is
+// still a pure COVERAGE gate — trust never admits a sub-floor candidate).
+export function selectAttachable<T extends { role: ConceptResourceRole; coverageScore: number; trustScore?: number }>(
   candidates: T[],
 ): T[] {
   return capCandidates(candidates.filter((c) => c.coverageScore >= MAP_ATTACH_MIN_COVERAGE));
