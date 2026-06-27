@@ -10,18 +10,22 @@
 // TrackIntent enum from it (asking a learner to self-classify is the wrong job).
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { Difficulty } from '@prisma/client';
+import type { TraceEvent } from '@/lib/agents/agent-trace';
+import { AgentTracePanel } from '@/app/playground/AgentTracePanel';
 
 const MASTERY = Object.values(Difficulty);
 const BTN = 'rounded border px-2 py-1 text-sm disabled:opacity-40 disabled:cursor-not-allowed';
 const FIELD = 'rounded border px-2 py-1 text-sm';
 
+type BuildResult = { trackId: string; trace: TraceEvent[]; warnings: string[] };
+
 export function BuildTrackForm({ pathId, spineReady }: { pathId: string; spineReady: boolean }) {
-  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<BuildResult | null>(null);
 
   const [goal, setGoal] = useState('');
   const [priorKnowledge, setPriorKnowledge] = useState('');
@@ -34,6 +38,36 @@ export function BuildTrackForm({ pathId, spineReady }: { pathId: string; spineRe
       <p className="text-sm text-gray-500">
         Build a Track — available once this map is <code>spine_ready</code>.
       </p>
+    );
+  }
+
+  if (result) {
+    return (
+      <div className="flex flex-col gap-2 rounded border p-3 max-w-2xl">
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-medium">Track built</span>
+          <Link className={BTN} href={`/playground/tracks/${result.trackId}`}>
+            View Track →
+          </Link>
+          <button
+            className="text-xs text-gray-500 underline"
+            onClick={() => {
+              setResult(null);
+              setOpen(false);
+            }}
+          >
+            build another
+          </button>
+        </div>
+        {result.warnings.length > 0 && (
+          <ul className="text-xs text-amber-800 list-disc pl-4">
+            {result.warnings.map((w, i) => (
+              <li key={i}>{w}</li>
+            ))}
+          </ul>
+        )}
+        <AgentTracePanel trace={result.trace} />
+      </div>
     );
   }
 
@@ -62,12 +96,15 @@ export function BuildTrackForm({ pathId, spineReady }: { pathId: string; spineRe
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const data: { trackId?: string; error?: string } = await res.json().catch(() => ({}));
+      const data: { trackId?: string; error?: string; trace?: TraceEvent[]; warnings?: string[] } =
+        await res.json().catch(() => ({}));
       if (!res.ok || !data.trackId) {
         setError(data.error ?? `HTTP ${res.status}`);
         return;
       }
-      router.push(`/playground/tracks/${data.trackId}`);
+      // Don't auto-redirect: surface the build trace (the agent's tool calls) + warnings
+      // for inspection first, with a link through to the Track.
+      setResult({ trackId: data.trackId, trace: data.trace ?? [], warnings: data.warnings ?? [] });
     } catch (err) {
       setError((err as Error).message);
     } finally {

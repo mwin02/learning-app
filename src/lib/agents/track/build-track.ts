@@ -121,7 +121,7 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
     let concepts: ComposerInputConcept[];
     let warnings: string[];
     for (let attempt = 0; ; attempt++) {
-      const loaded = await loadMap(pathId);
+      const loaded = await loadComposerMap(pathId);
       edges = loaded.edges;
       concepts = loaded.concepts;
       // TRACK_COMPOSER_MODE selects the one-shot composer (today's default) or the
@@ -327,8 +327,10 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
 }
 
 // Load a Path's concepts as composer inputs, in topo order, each with its
-// candidate ConceptResources (coverage-desc), plus the prereq edge list.
-async function loadMap(
+// candidate ConceptResources (coverage-desc), plus the prereq edge list. Exported so
+// the composer parity harness (scripts/compare-composers.ts) loads a map exactly the
+// way a real build does.
+export async function loadComposerMap(
   pathId: string,
 ): Promise<{ concepts: ComposerInputConcept[]; edges: OrderEdge[] }> {
   const rows = await prisma.concept.findMany({
