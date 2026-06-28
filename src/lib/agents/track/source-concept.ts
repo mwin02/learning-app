@@ -51,7 +51,9 @@ export async function sourceAndAttachConcept(args: {
 
   const judged = await judgeCandidates({ conceptTitle: title, conceptSlug: slug, candidates: rows, isOnRamp });
   // Floor + cap the newly-judged set (Lever A) rather than attaching everything > 0.
-  const kept = selectAttachable(judged);
+  // Phase 2g-1: pass the concept's regime so re-sourced candidates get the same scope-
+  // aware duration penalty as the cold-build path (strict for the on-ramp).
+  const kept = selectAttachable(judged, { isOnRamp });
   if (kept.length === 0) {
     console.log('[source-concept] sourced rows all judged irrelevant', { pathId, concept: slug, sourced: rows.length });
     return 0;

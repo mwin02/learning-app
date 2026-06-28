@@ -18,35 +18,64 @@ import {
   MAP_MAX_CANDIDATES_PER_CONCEPT,
   MAP_SPINE_MIN_PRIMARY_COVERAGE,
   TRUST_SELECTION_WEIGHT,
+  MAP_DURATION_RANKING,
 } from '@/lib/config';
 import { relatedTopics } from '@/types/resource';
 import type { AuthoredConcept } from '@/lib/agents/map/cycle';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 
-// Phase 2.5h: ranking score = coverage gated, trust ordering. coverageScore decides
-// relevance; trustScore (when carried — fresh judge output) breaks ties so a higher-
-// trust resource ranks above an equally-relevant lower-trust one. Rows without a
-// trustScore (e.g. the re-cap over DB links in source-concept) fall back to pure
-// coverage, preserving prior behavior there.
-function selectionScore(c: { coverageScore: number; trustScore?: number }): number {
-  if (c.trustScore == null) return c.coverageScore;
-  return (1 - TRUST_SELECTION_WEIGHT) * c.coverageScore + TRUST_SELECTION_WEIGHT * c.trustScore;
+// Phase 2g-1: order-only duration penalty. A resource much longer than a single
+// concept warrants is over-broad for it; we demote (never drop) it so a better-scoped
+// alternative outranks it when one exists. Factor is 1 up to the regime's targetMin,
+// then decays linearly to `floor` over the next spanMin minutes, flat at `floor`
+// beyond. Rows with no durationMin (the persisted DB re-cap) get 1 — no penalty, like
+// trust-less rows. on-ramp concepts use the strict regime, every other concept the
+// soft default.
+function durationFactor(durationMin: number | undefined, isOnRamp: boolean): number {
+  if (durationMin == null) return 1;
+  const r = isOnRamp ? MAP_DURATION_RANKING.onRamp : MAP_DURATION_RANKING.default;
+  if (durationMin <= r.targetMin) return 1;
+  const t = Math.min((durationMin - r.targetMin) / r.spanMin, 1);
+  return 1 - t * (1 - r.floor);
 }
 
+// Phase 2.5h + 2g-1: ranking score = coverage gated; trust + duration ordering.
+// coverageScore decides relevance; trustScore (when carried — fresh judge output)
+// breaks ties so a higher-trust resource ranks above an equally-relevant lower-trust
+// one; the durationFactor then demotes over-broad (over-long) resources. Rows without
+// a trustScore/durationMin (e.g. the re-cap over DB links in source-concept) fall back
+// to pure coverage, preserving prior behavior there.
+function selectionScore(c: { coverageScore: number; trustScore?: number; durationMin?: number }, isOnRamp: boolean): number {
+  const blend =
+    c.trustScore == null
+      ? c.coverageScore
+      : (1 - TRUST_SELECTION_WEIGHT) * c.coverageScore + TRUST_SELECTION_WEIGHT * c.trustScore;
+  return blend * durationFactor(c.durationMin, isOnRamp);
+}
+
+export type RankOpts = {
+  // Phase 2g-1: select the duration-penalty regime. true → the strict on-ramp curve
+  // (orientation should be short); false/omitted → the soft default that only bites
+  // genuine whole-course over-length. Only affects ordering, never admission.
+  isOnRamp?: boolean;
+};
+
 // Lever A — count bound only. Given a candidate set, keep the top
-// MAP_MAX_CANDIDATES_PER_CONCEPT by the coverage+trust selection score, always
+// MAP_MAX_CANDIDATES_PER_CONCEPT by the coverage+trust+duration selection score, always
 // retaining the single best qualifying `teaches` (>= MAP_SPINE_MIN_PRIMARY_COVERAGE,
-// a COVERAGE gate — trust never qualifies a primary) — swapped in over the lowest-
-// ranked kept item if the cap pushed it out — so capping can never evict a concept's
-// qualifying primary. Deliberately applies NO coverage floor: it bounds regrowth over
-// an ALREADY-ADMITTED set (e.g. the merged DB rows in source-concept) without
-// re-litigating admission, so it can only ever drop the lowest-ranked EXCESS beyond
-// the cap and never empties a non-empty input. Pure; input order is not assumed;
-// output is selection-score-desc (== coverage-desc when no trust is carried).
-export function capCandidates<T extends { role: ConceptResourceRole; coverageScore: number; trustScore?: number }>(
+// a COVERAGE gate — trust/duration never qualify a primary) — swapped in over the
+// lowest-ranked kept item if the cap pushed it out — so capping can never evict a
+// concept's qualifying primary. Deliberately applies NO coverage floor: it bounds
+// regrowth over an ALREADY-ADMITTED set (e.g. the merged DB rows in source-concept)
+// without re-litigating admission, so it can only ever drop the lowest-ranked EXCESS
+// beyond the cap and never empties a non-empty input. Pure; input order is not assumed;
+// output is selection-score-desc (== coverage-desc when no trust/duration is carried).
+export function capCandidates<T extends { role: ConceptResourceRole; coverageScore: number; trustScore?: number; durationMin?: number }>(
   candidates: T[],
+  opts: RankOpts = {},
 ): T[] {
-  const sorted = [...candidates].sort((a, b) => selectionScore(b) - selectionScore(a));
+  const isOnRamp = opts.isOnRamp ?? false;
+  const sorted = [...candidates].sort((a, b) => selectionScore(b, isOnRamp) - selectionScore(a, isOnRamp));
   const kept = sorted.slice(0, MAP_MAX_CANDIDATES_PER_CONCEPT);
 
   // Guarantee the single best qualifying primary survives the cap (only the cap
@@ -67,11 +96,12 @@ export function capCandidates<T extends { role: ConceptResourceRole; coverageSco
 // 2.5f relaxed readiness; re-flooring them can wrongly delete a relaxed concept's
 // only candidates and regress the Path). For the persisted re-cap use capCandidates.
 // Pure + generic; tests without a DB. Output is selection-score-desc (the floor is
-// still a pure COVERAGE gate — trust never admits a sub-floor candidate).
-export function selectAttachable<T extends { role: ConceptResourceRole; coverageScore: number; trustScore?: number }>(
+// still a pure COVERAGE gate — trust/duration never admit a sub-floor candidate).
+export function selectAttachable<T extends { role: ConceptResourceRole; coverageScore: number; trustScore?: number; durationMin?: number }>(
   candidates: T[],
+  opts: RankOpts = {},
 ): T[] {
-  return capCandidates(candidates.filter((c) => c.coverageScore >= MAP_ATTACH_MIN_COVERAGE));
+  return capCandidates(candidates.filter((c) => c.coverageScore >= MAP_ATTACH_MIN_COVERAGE), opts);
 }
 
 export type ConceptAttachment = {
@@ -210,8 +240,10 @@ async function attachOne(
   });
 
   // Floor + cap (Lever A) instead of keeping everything > 0, so a generic concept
-  // can't hoard the long tail of low-coverage / off-target search hits.
-  const kept = selectAttachable(judged);
+  // can't hoard the long tail of low-coverage / off-target search hits. Phase 2g-1:
+  // the on-ramp gets the strict duration regime so an over-long course can't win its
+  // primary slot over short orientation; every other concept gets the soft default.
+  const kept = selectAttachable(judged, { isOnRamp: concept.isOnRamp ?? false });
 
   return { conceptSlug: concept.slug, candidates: kept };
 }
