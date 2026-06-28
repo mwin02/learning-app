@@ -23,6 +23,7 @@ import { judgeCandidates } from '@/lib/agents/map/candidate-judge';
 import { selectAttachable, capCandidates } from '@/lib/agents/map/attach-candidates';
 import { MAP_MAX_CANDIDATES_PER_CONCEPT } from '@/lib/config';
 import { sourceForConcept } from '@/lib/agents/tools/web-fallback';
+import { generateOnRampResource } from '@/lib/agents/map/generate-onramp';
 import type { SearchResult } from '@/lib/agents/tools/search-resources';
 
 export async function sourceAndAttachConcept(args: {
@@ -41,13 +42,22 @@ export async function sourceAndAttachConcept(args: {
   const { pathId, topic, conceptId, slug, title, targetMastery, isOnRamp = false } = args;
 
   const sourced = await sourceForConcept({ topic, concept: { slug, title }, targetMastery });
-  if (sourced.insertedIds.length === 0) {
+  let rows = await loadAsSearchResults(sourced.insertedIds);
+
+  // Phase 2g-4: on-ramp backstop. The cold build (ensure-path-map) normally authors the
+  // on-ramp's generated primary; this covers the case where that generation failed and
+  // left the on-ramp a hole, so remediation reaches it. Idempotent (reuses a row the
+  // cold build did manage to write). Prepended, deduped — the generated row is already
+  // `active`, so the promote-on-attach updateMany below simply no-ops for it.
+  if (isOnRamp) {
+    const generated = await generateOnRampResource({ topic, concept: { slug, title } });
+    if (generated) rows = [generated, ...rows.filter((r) => r.id !== generated.id)];
+  }
+
+  if (rows.length === 0) {
     console.log('[source-concept] sourced nothing', { pathId, concept: slug });
     return 0;
   }
-
-  const rows = await loadAsSearchResults(sourced.insertedIds);
-  if (rows.length === 0) return 0;
 
   const judged = await judgeCandidates({ conceptTitle: title, conceptSlug: slug, candidates: rows, isOnRamp });
   // Floor + cap the newly-judged set (Lever A) rather than attaching everything > 0.
