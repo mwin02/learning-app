@@ -1,10 +1,13 @@
-import { seedResources } from '../data/seed-resources';
 import { seedSources } from '../data/seed-sources';
 import { prisma } from '../src/lib/db';
-import { embedMissing } from '../src/lib/ai/embeddings';
 
+// Seeds the curated `Source` rows only. Resources are no longer hand-seeded —
+// the curriculum agent sources them naturally during path generation. The Source
+// table stays seeded because the curated publishers are load-bearing at runtime:
+// they carry the trust-score priors (resolveSource in decomposition/upsert-resource.ts)
+// and define the open-web discovery allowlist (loadAllowlistDomains in
+// agents/tools/web-fallback.ts).
 async function main() {
-  // Sources must exist before Resources can reference them.
   for (const s of seedSources) {
     await prisma.source.upsert({
       where: { slug: s.slug },
@@ -13,40 +16,6 @@ async function main() {
     });
   }
   console.log(`seed: upserted ${seedSources.length} sources`);
-
-  // Load all sources into a lookup for sourceSlug -> { id, trustScore }.
-  const sources = await prisma.source.findMany({
-    select: { id: true, slug: true, trustScore: true },
-  });
-  const sourceBySlug = new Map(sources.map((s) => [s.slug, s]));
-
-  const counts: Record<string, number> = {};
-
-  for (const r of seedResources) {
-    const { sourceSlug, ...rest } = r;
-    const source = sourceBySlug.get(sourceSlug);
-    if (!source) {
-      throw new Error(`unknown sourceSlug "${sourceSlug}" for resource "${r.slug}"`);
-    }
-    await prisma.resource.upsert({
-      where: { slug: r.slug },
-      // On create, inherit trustScore from the source. On update, leave
-      // trustScore alone so review-based updates aren't wiped by reseeding.
-      create: { ...rest, source: { connect: { id: source.id } }, trustScore: source.trustScore },
-      update: { ...rest, source: { connect: { id: source.id } } },
-    });
-    counts[r.topic] = (counts[r.topic] ?? 0) + 1;
-  }
-
-  const total = Object.values(counts).reduce((a, b) => a + b, 0);
-  console.log(`seed: upserted ${total} resources`);
-  for (const [topic, n] of Object.entries(counts).sort()) {
-    console.log(`  ${topic}: ${n}`);
-  }
-
-  // Embed any rows that are new or whose content changed since last reseed.
-  const embedded = await embedMissing();
-  console.log(`seed: embedded ${embedded} resources`);
 }
 
 main()

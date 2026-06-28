@@ -1,5 +1,3 @@
-import type { Prisma } from '@prisma/client';
-
 export type TopicSlug =
   | 'python'
   | 'python-data-ml'
@@ -50,11 +48,3 @@ export function relatedTopics(topic: string): string[] {
   }
   return [...set];
 }
-
-// Shape used by the seed script. Curators set `sourceSlug` (resolved by the
-// seed script to a real sourceId); `trustScore` is omitted because it's
-// inherited from the source's trustScore at create time.
-export type ResourceSeedInput = Omit<
-  Prisma.ResourceCreateInput,
-  'id' | 'createdAt' | 'updatedAt' | 'source' | 'trustScore'
-> & { topic: TopicSlug; sourceSlug: string };
