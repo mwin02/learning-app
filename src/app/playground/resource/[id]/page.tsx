@@ -124,6 +124,20 @@ export default async function ResourceDetailPage({
         <p className="text-sm">{resource.summary}</p>
       </section>
 
+      {/* Generated content (origin='generated', e.g. the on-ramp lesson). Plain-text
+          rendering — the styled markdown view is the learn UI's job; here we just
+          surface the stored body verbatim so an operator can read/verify it. */}
+      {resource.content != null && (
+        <section>
+          <h2 className="text-lg font-semibold mb-1">
+            Content ({resource.content.length.toLocaleString()} chars)
+          </h2>
+          <pre className="text-sm whitespace-pre-wrap font-sans bg-gray-50 border border-gray-200 rounded p-3">
+            {resource.content}
+          </pre>
+        </section>
+      )}
+
       <section>
         <h2 className="text-lg font-semibold mb-1">Concepts taught ({resource.conceptsTaught.length})</h2>
         {resource.conceptsTaught.length === 0 ? (
