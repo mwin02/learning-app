@@ -14,7 +14,10 @@ export type TrackResourceView = {
   role: string;
   deliveryMode: string;
   segmentRef: unknown;
-  resource: { id: string; title: string; url: string; type: string };
+  // `content` is the inline lesson body (markdown), non-null only for generated
+  // resources (origin='generated', the on-ramp lesson) — the learn player renders it
+  // inline instead of an external link/embed. Null for the link-out majority.
+  resource: { id: string; title: string; url: string; type: string; content: string | null };
 };
 
 export type TrackLessonView = {
@@ -84,7 +87,7 @@ export const getTrackView = cache(async (trackId: string): Promise<TrackView | n
               role: true,
               deliveryMode: true,
               segmentRef: true,
-              resource: { select: { id: true, title: true, url: true, type: true } },
+              resource: { select: { id: true, title: true, url: true, type: true, content: true } },
             },
           },
         },

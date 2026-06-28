@@ -169,4 +169,67 @@ body {
   .stat-value {
     @apply text-2xl font-bold tracking-[-0.5px];
   }
+  /* Rendered markdown for generated lessons (the on-ramp, Phase 2g). Token-only so
+     it inherits dark mode for free. Descendant selectors style the raw elements
+     react-markdown emits — no per-element className wiring in the component. */
+  .lesson-prose {
+    @apply text-[15px] leading-relaxed text-body;
+  }
+  .lesson-prose > :first-child {
+    @apply mt-0;
+  }
+  .lesson-prose h1 {
+    @apply mt-7 mb-3 text-2xl font-bold tracking-[-0.5px] text-ink;
+  }
+  .lesson-prose h2 {
+    @apply mt-7 mb-2.5 text-xl font-semibold tracking-[-0.3px] text-ink;
+  }
+  .lesson-prose h3 {
+    @apply mt-5 mb-2 text-md font-semibold text-ink;
+  }
+  .lesson-prose p {
+    @apply my-3;
+  }
+  .lesson-prose ul {
+    @apply my-3 list-disc pl-6;
+  }
+  .lesson-prose ol {
+    @apply my-3 list-decimal pl-6;
+  }
+  .lesson-prose li {
+    @apply my-1;
+  }
+  .lesson-prose a {
+    @apply font-medium text-brand hover:underline;
+  }
+  .lesson-prose strong {
+    @apply font-semibold text-ink;
+  }
+  .lesson-prose code {
+    @apply rounded-control bg-fill px-1.5 py-0.5 font-mono text-[0.85em] text-ink;
+  }
+  .lesson-prose pre {
+    @apply my-4 overflow-x-auto rounded-card border border-line bg-fill-soft p-4 text-sm;
+  }
+  /* Inside a fenced block the <pre> already carries the surface — strip the inline
+     code chrome so it doesn't double up. */
+  .lesson-prose pre code {
+    @apply bg-transparent p-0 text-[0.95em] text-body;
+  }
+  .lesson-prose blockquote {
+    @apply my-4 border-l-2 border-line pl-4 text-muted italic;
+  }
+  .lesson-prose hr {
+    @apply my-6 border-line;
+  }
+  .lesson-prose table {
+    @apply my-4 w-full border-collapse text-sm;
+  }
+  .lesson-prose th,
+  .lesson-prose td {
+    @apply border border-line px-3 py-1.5 text-left;
+  }
+  .lesson-prose th {
+    @apply bg-fill-soft font-semibold text-ink;
+  }
 }
