@@ -20,6 +20,11 @@ model Resource {
   tier                 ResourceTier   @default(core)
   durationMin          Int
   summary              String
+  // Phase 2g: the resource body, in markdown. Null for the overwhelming majority of
+  // rows (link-out resources — videos, docs, courseware: the content lives at `url`).
+  // Populated only for `origin = generated` rows (the AI-authored on-ramp lesson),
+  // where there is no external page and the body is stored inline.
+  content              String?
   difficulty           Difficulty
   prerequisiteConcepts String[]
   conceptsTaught       String[]
@@ -141,6 +146,10 @@ enum Origin {
   seed
   agent
   user
+  // Phase 2g: AI-generated content authored by us (the on-ramp orientation lesson),
+  // not sourced from an external URL. Stored with synthetic `generated://…` urls and
+  // the resource body in `Resource.content`.
+  generated
 }
 
 enum SourceKind {
@@ -149,6 +158,11 @@ enum SourceKind {
   course_platform
   textbook
   community
+  // Phase 2g: the synthetic source for our own AI-generated content (the on-ramp
+  // lesson). Deliberately NOT in the sourcing allowlist (loadAllowlistDomains), so a
+  // generated:// row can never be discovered as a web candidate — it is only ever
+  // attached directly by the generator.
+  generated
 }
 
 enum ResourceStatus {
