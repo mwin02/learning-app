@@ -15,6 +15,8 @@ type AgentName =
   | 'mapSpineAuthor'
   | 'mapSpineReviewer'
   | 'mapCandidateJudge'
+  | 'onRampAuthor'
+  | 'onRampCritic'
   | 'trackComposer'
   | 'trackSectioner'
   | 'tagCanonicalizer'
@@ -111,6 +113,31 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     modelId: 'gemini-2.5-flash',
     temperature: 0,
     maxOutputTokens: 8192,
+  },
+  onRampAuthor: {
+    // Phase 2g-3: writes the orientation on-ramp lesson (markdown) for a topic's
+    // single on-ramp concept — what the subject is, the core mental model, setup /
+    // notation, prerequisite review, the very first steps. Pro, not Flash: this is a
+    // learner-facing artifact authored ONCE per topic and cached forever (same
+    // reasoning as mapSpineAuthor / trackComposer), and orientation prose that is
+    // subtly wrong about a subject's fundamentals is worse than none. Temperature
+    // mid so the prose is warm and readable, not robotic. 16k output: a focused
+    // ~600–900 word lesson plus Pro's internal thinking.
+    modelId: 'gemini-2.5-pro',
+    temperature: 0.4,
+    maxOutputTokens: 16384,
+  },
+  onRampCritic: {
+    // Phase 2g-3: the accuracy self-critique pass over the authored draft — corrects
+    // factual errors (a wrong definition, an off-by-one in a first-steps snippet, an
+    // outdated setup instruction) while preserving the lesson's scope and structure,
+    // returning the corrected lesson (unchanged when already accurate). Pro, same
+    // tier as the author: catching a subtle factual slip in math/programming
+    // fundamentals is judgment. Temperature low for careful, conservative
+    // correction. 16k output: it re-emits the full corrected lesson + thinking.
+    modelId: 'gemini-2.5-pro',
+    temperature: 0.1,
+    maxOutputTokens: 16384,
   },
   trackComposer: {
     // Phase 2.5e-2: composes a learner's Track from a spine_ready map in one
