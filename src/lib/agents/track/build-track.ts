@@ -172,6 +172,18 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
       if (!thicken.thickened) break; // best-effort weaker Track
     }
 
+    // --- 2g-5: order generated on-ramp content first -----------------------
+    // The composer ranks candidates on pedagogy and routinely buries the short
+    // authored on-ramp lesson behind a longer sourced resource (or in the optional
+    // pool). But a generated lesson is content WE authored as the lesson's lead —
+    // it should be the primary so the learn UI renders it inline as the main view,
+    // not a demoted alternate. Deterministically promote it to mandatory[0] of the
+    // lesson that teaches its concept (other mandatory resources stay, after it).
+    const generatedIds = new Set<string>();
+    for (const cpt of concepts)
+      for (const cand of cpt.candidates) if (cand.isGenerated) generatedIds.add(cand.resourceId);
+    validatedLessons = enforceGeneratedPrimary(validatedLessons, generatedIds);
+
     // --- allocate: breadth (closure-aware budget trim) + depth -------------
     // Join real durations from the loaded candidates so the allocator can size
     // slices; map each validated lesson to the allocator's input contract.
@@ -330,6 +342,37 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
 // candidate ConceptResources (coverage-desc), plus the prereq edge list. Exported so
 // the composer parity harness (scripts/compare-composers.ts) loads a map exactly the
 // way a real build does.
+// Phase 2g-5: make a generated lesson (the AI-authored on-ramp) the PRIMARY of its
+// lesson, ordered first. The composer grades candidates on pedagogy and routinely
+// ranks the short authored orientation behind a longer sourced resource — or drops it
+// into the optional pool — so without this it renders as a demoted alternate instead
+// of the lesson's lead. For each lesson holding a generated candidate (in either
+// pool), move it to the front of the mandatory core and out of the optional pool;
+// other mandatory resources are preserved AFTER it (a merged on-ramp+X lesson keeps
+// X's resource as a secondary primary). Pure; no-op when a lesson has no generated
+// candidate or it already leads. One on-ramp per spine, so at most one per lesson, but
+// generic over several.
+export function enforceGeneratedPrimary(
+  lessons: ValidatedLesson[],
+  generatedIds: Set<string>,
+): ValidatedLesson[] {
+  if (generatedIds.size === 0) return lessons;
+  return lessons.map((l) => {
+    const gen = [...new Set([...l.mandatoryResourceIds, ...l.optionalResourceIds])].filter((id) =>
+      generatedIds.has(id),
+    );
+    if (gen.length === 0) return l;
+    // Already leading the mandatory core in order → nothing to do.
+    if (gen.every((id, i) => l.mandatoryResourceIds[i] === id)) return l;
+    const genSet = new Set(gen);
+    return {
+      ...l,
+      mandatoryResourceIds: [...gen, ...l.mandatoryResourceIds.filter((id) => !genSet.has(id))],
+      optionalResourceIds: l.optionalResourceIds.filter((id) => !genSet.has(id)),
+    };
+  });
+}
+
 export async function loadComposerMap(
   pathId: string,
 ): Promise<{ concepts: ComposerInputConcept[]; edges: OrderEdge[] }> {
@@ -345,7 +388,7 @@ export async function loadComposerMap(
           role: true,
           coverageScore: true,
           resource: {
-            select: { id: true, title: true, type: true, difficulty: true, durationMin: true },
+            select: { id: true, title: true, type: true, difficulty: true, durationMin: true, origin: true },
           },
         },
         orderBy: { coverageScore: 'desc' },
@@ -375,6 +418,7 @@ export async function loadComposerMap(
         type: r.resource.type,
         difficulty: r.resource.difficulty,
         durationMin: r.resource.durationMin,
+        isGenerated: r.resource.origin === 'generated',
       })),
     }))
     .sort((a, b) => (pos.get(a.slug) ?? 0) - (pos.get(b.slug) ?? 0));

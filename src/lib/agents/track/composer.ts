@@ -44,6 +44,12 @@ export type ComposerCandidate = {
   type: string;
   difficulty: string;
   durationMin: number;
+  // Phase 2g-5: true for the AI-authored on-ramp lesson (origin='generated'). A
+  // deterministic post-composition pass promotes it to its lesson's primary so the
+  // orientation content leads (build-track enforceGeneratedPrimary), rather than the
+  // composer burying it as an alternate behind a sourced resource. Optional/absent =
+  // not generated (the common case), so fixtures and the LLM payload need not set it.
+  isGenerated?: boolean;
 };
 
 // One concept of the map, with its candidates sorted coverage-desc. Concepts are
