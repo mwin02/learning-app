@@ -12,6 +12,7 @@ import { AddConceptForm } from './add-concept-form';
 import { BuildTrackForm } from './build-track-form';
 import { PrereqActions } from './prereq-actions';
 import { AttachResource } from './attach-resource';
+import { QuestionBankBox } from './question-bank-box';
 
 export const dynamic = 'force-dynamic';
 
@@ -52,6 +53,12 @@ export default async function ConceptMapDetailPage({
           slug: true,
           title: true,
           membership: true,
+          bankReviewed: true,
+          // Phase 2.5h-7: the concept's question bank, for the collapsible viewer.
+          questions: {
+            orderBy: { createdAt: 'asc' },
+            select: { id: true, kind: true, prompt: true, answer: true, rubric: true, origin: true },
+          },
           resources: {
             select: {
               role: true,
@@ -287,6 +294,8 @@ export default async function ConceptMapDetailPage({
                   <div className="mt-2">
                     <AttachResource conceptId={c.id} conceptTitle={c.title} topic={path.topic} />
                   </div>
+
+                  <QuestionBankBox questions={c.questions} bankReviewed={c.bankReviewed} />
                 </li>
               );
             })}
