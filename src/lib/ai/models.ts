@@ -175,16 +175,19 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
   conceptBankAuthor: {
     // Phase 2.5h: authors a small question bank (text + MCQ) for ONE concept,
     // generated once near spine-readiness and later sampled into per-Lesson
-    // exercises at Track build. Flash, not Pro — like the sectioner this is a
-    // light, best-effort, off-the-hot-path pass that sees only the concept (title,
-    // its lessons' framing, resource titles), not the whole map; questions are
-    // reveal-only (no auto-grading). Temperature mid so the bank has variety across
-    // ~5–10 questions without drifting off-concept. 8k output: a handful of
-    // question objects is small, but Flash 2.5 spends budget on internal thinking
-    // first and caps mid-JSON on a tighter ceiling.
-    modelId: 'gemini-2.5-flash',
-    temperature: 0.5,
-    maxOutputTokens: 8192,
+    // exercises at Track build. Pro, not Flash — the hard part is JUDGMENT, not
+    // volume: the author sees only the concept title + its resource titles (not the
+    // resource content), so it must reason carefully about what those resources
+    // plausibly cover and NOT over-reach into deep specifics they don't establish.
+    // Flash over-reached at 8 questions; Pro authors a tighter, better-calibrated
+    // set of 5. Off-the-hot-path (best-effort, once per concept), so the Pro cost is
+    // fine. Temperature mid for variety across the small set without drifting
+    // off-concept. 32k output (matches the other Pro authors): the question array is
+    // small, but Pro spends budget on internal thinking first and the larger ceiling
+    // avoids the spend-then-emit-nothing failure (NoOutputGeneratedError).
+    modelId: 'gemini-2.5-pro',
+    temperature: 0.4,
+    maxOutputTokens: 32768,
   },
   tagCanonicalizer: {
     // Plain JSON shape, no grounding. Deterministic mapping job, but the input

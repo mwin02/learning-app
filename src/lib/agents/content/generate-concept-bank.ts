@@ -22,8 +22,9 @@ import type { OnTrace } from '@/lib/agents/agent-trace';
 export type GenerateConceptBankResult = {
   conceptId: string;
   // 'skipped' when the concept already had questions (idempotent no-op); 'generated'
-  // when we authored + persisted; 'empty' when the author returned nothing usable.
-  outcome: 'generated' | 'skipped' | 'empty';
+  // when we authored + persisted; 'empty' when the author returned nothing usable;
+  // 'onramp' when we deliberately skip the broad orientation concept (2.5h).
+  outcome: 'generated' | 'skipped' | 'empty' | 'onramp';
   generated: number;
 };
 
@@ -52,6 +53,13 @@ export async function generateConceptBank(args: {
     },
   });
   if (!concept) throw new Error(`generateConceptBank: no Concept '${conceptId}'.`);
+
+  // Skip the on-ramp: it's the deliberately BROAD orientation concept (what the
+  // subject is + getting started), so auto-authored questions over-reach into deep
+  // specifics that don't belong on an intro. No bank here by design (2.5h).
+  if (concept.isOnRamp) {
+    return { conceptId, outcome: 'onramp', generated: 0 };
+  }
 
   // Idempotent: a concept that already has a bank is left untouched.
   if (concept._count.questions > 0) {
@@ -94,7 +102,7 @@ export type BackfillConceptBanksResult = {
 };
 
 // Generate banks for every concept in a Path that doesn't yet have one, fanned out
-// with bounded concurrency (CONCEPT_BANK_GEN_CONCURRENCY) — one independent Flash
+// with bounded concurrency (CONCEPT_BANK_GEN_CONCURRENCY) — one independent Pro
 // call per concept, like the candidate judge. Best-effort: a single concept's
 // failure is logged and skipped, never failing the batch. Returns a summary.
 export async function backfillConceptBanks(args: {
@@ -103,9 +111,11 @@ export async function backfillConceptBanks(args: {
 }): Promise<BackfillConceptBanksResult> {
   const { pathId, onTrace = () => {} } = args;
 
-  // Only concepts with no questions — the idempotent + backfill filter.
+  // Only concepts with no questions — the idempotent + backfill filter. On-ramp
+  // concepts are excluded by design (no bank for the broad orientation concept;
+  // generateConceptBank guards this too, so a direct call is also safe).
   const concepts = await prisma.concept.findMany({
-    where: { pathId, questions: { none: {} } },
+    where: { pathId, isOnRamp: false, questions: { none: {} } },
     select: { id: true, slug: true },
   });
 

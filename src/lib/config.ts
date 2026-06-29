@@ -325,14 +325,16 @@ export const TRACK_MIN_LESSONS_FOR_SECTIONS = 4;
 // write per concept in the one generation pass. Deliberately SMALL — a tight set
 // the concept's resources can actually support beats a padded one full of
 // questions the resources never cover (the whole reason generation is concept-
-// framed + small). The build-time sampler draws EXERCISE_SAMPLE_PER_LESSON from
-// this, so keep it comfortably above that. 8 = a few text + a few MCQ.
-export const CONCEPT_BANK_TARGET_QUESTIONS = 8;
+// framed + small). Lowered 8→5: at 8 the author over-reached into deep specifics a
+// concept's resources don't establish; 5 keeps the set honestly within reach. Just
+// above EXERCISE_SAMPLE_PER_LESSON (the build-time sampler draws that many), which
+// is fine — a thin pool is the point; the operator deepens it via the discovery API.
+export const CONCEPT_BANK_TARGET_QUESTIONS = 5;
 
 // Phase 2.5h: how many concepts' banks to author concurrently in the per-Path
-// fan-out (2.5h-3). Each concept is one independent Flash call, so we fan out —
-// but bounded, like MAP_JUDGE_CONCURRENCY, so a wide map doesn't open dozens of
-// Vertex calls at once.
+// fan-out (2.5h-3). Each concept is one independent Pro call, so we fan out — but
+// bounded, like MAP_JUDGE_CONCURRENCY, so a wide map doesn't open dozens of Vertex
+// calls at once.
 export const CONCEPT_BANK_GEN_CONCURRENCY = 4;
 
 // Phase 2.5h-4: how many exercises to snapshot per Lesson at Track build, sampled
