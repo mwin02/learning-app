@@ -20,6 +20,7 @@ import type { CourseRequest } from '@prisma/client';
 import { ensurePathMap } from '@/lib/agents/map/ensure-path-map';
 import { remediatePath } from '@/lib/agents/track/remediate-path';
 import { buildTrack } from '@/lib/agents/track/build-track';
+import { backfillConceptBanks } from '@/lib/agents/content/generate-concept-bank';
 import { reclaimStaleRemediationJobs } from '@/lib/agents/track/remediation-job';
 import {
   claimNextQueued,
@@ -76,6 +77,22 @@ export async function processCourseRequest(cr: CourseRequest): Promise<ProcessOu
         error: `Path '${map.pathId}' did not reach spine_ready (status=${status}); spine holes left uncoverable`,
       });
       return 'failed';
+    }
+
+    // Best-effort: author a question bank for any concept that lacks one, now that
+    // the Path is spine_ready (spine concepts have their resources attached). Banks
+    // are sampled into per-Lesson exercises at build (2.5h-4). Idempotent across
+    // Tracks of this Path; non-fatal — a generation failure must never block the
+    // Track the learner is waiting on.
+    try {
+      const banks = await backfillConceptBanks({ pathId: map.pathId });
+      console.log('[course-worker] concept banks', { id: cr.id, pathId: map.pathId, ...banks });
+    } catch (err) {
+      console.warn('[course-worker] concept bank backfill failed (non-fatal)', {
+        id: cr.id,
+        pathId: map.pathId,
+        err,
+      });
     }
 
     const track = await buildTrack({
