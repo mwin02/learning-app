@@ -21,6 +21,7 @@ import {
   MAP_DURATION_RANKING,
 } from '@/lib/config';
 import { relatedTopics } from '@/types/resource';
+import type { SearchResult } from '@/lib/agents/tools/search-resources';
 import type { AuthoredConcept } from '@/lib/agents/map/cycle';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 
@@ -119,9 +120,14 @@ export type ConceptAttachment = {
 export async function attachCandidates(args: {
   topic: string;
   concepts: AuthoredConcept[];
+  // Phase 2g-4: extra candidates injected per concept slug, prepended to that
+  // concept's searched candidates before judging. Used for the generated on-ramp
+  // lesson, which the orchestration layer authors and passes in — it can't be
+  // discovered via searchResources in the same run (its embedding lands post-commit).
+  injected?: Map<string, SearchResult[]>;
   onTrace?: OnTrace;
 }): Promise<ConceptAttachment[]> {
-  const { topic, concepts, onTrace = () => {} } = args;
+  const { topic, concepts, injected, onTrace = () => {} } = args;
   // Search the topic ∪ its related topics (e.g. a javascript-react map draws on
   // javascript foundations), mirroring AR retrieval. A topic with no relations
   // is just itself.
@@ -136,7 +142,9 @@ export async function attachCandidates(args: {
   const attachments: ConceptAttachment[] = [];
   for (let i = 0; i < concepts.length; i += MAP_JUDGE_CONCURRENCY) {
     const chunk = concepts.slice(i, i + MAP_JUDGE_CONCURRENCY);
-    const settled = await Promise.allSettled(chunk.map((c) => attachOneWithRetry(topics, c, onTrace)));
+    const settled = await Promise.allSettled(
+      chunk.map((c) => attachOneWithRetry(topics, c, injected?.get(c.slug) ?? [], onTrace)),
+    );
     settled.forEach((s, j) => {
       if (s.status === 'fulfilled') {
         attachments.push(s.value);
@@ -179,17 +187,18 @@ export async function attachCandidates(args: {
 async function attachOneWithRetry(
   topics: string[],
   concept: AuthoredConcept,
+  injected: SearchResult[],
   onTrace: OnTrace,
 ): Promise<ConceptAttachment> {
   try {
-    return await attachOne(topics, concept, onTrace);
+    return await attachOne(topics, concept, injected, onTrace);
   } catch (err) {
     console.warn('[map-attach] concept attachment failed, retrying once', {
       concept: concept.slug,
       error: err instanceof Error ? err.message : String(err),
     });
     try {
-      return await attachOne(topics, concept, onTrace);
+      return await attachOne(topics, concept, injected, onTrace);
     } catch (err2) {
       console.error('[map-attach] concept attachment failed after retry; treating as spine hole', {
         concept: concept.slug,
@@ -203,6 +212,7 @@ async function attachOneWithRetry(
 async function attachOne(
   topics: string[],
   concept: AuthoredConcept,
+  injected: SearchResult[],
   onTrace: OnTrace,
 ): Promise<ConceptAttachment> {
   // Pickable == active + atomic (per ROADMAP: candidates are existing pickable
@@ -214,7 +224,7 @@ async function attachOne(
   // with orientation/setup wording instead, so the vector search leans toward
   // overview/getting-started resources rather than deep subject content.
   const query = concept.isOnRamp ? onRampQuery(concept.title) : concept.title;
-  const candidates = await searchResources({
+  const searched = await searchResources({
     query,
     topics,
     statuses: ['active'],
@@ -222,10 +232,18 @@ async function attachOne(
     limit: MAP_CANDIDATES_PER_CONCEPT,
   });
 
+  // Phase 2g-4: prepend injected candidates (the generated on-ramp lesson), deduped
+  // against search hits by id — a generated row from a PRIOR build is `active` and so
+  // can also come back from searchResources; we keep one copy. Injected rows are
+  // judged like any other (the on-ramp rubric scores the scoped orientation high),
+  // so they earn their place rather than bypassing the judge.
+  const injectedIds = new Set(injected.map((c) => c.id));
+  const candidates = [...injected, ...searched.filter((c) => !injectedIds.has(c.id))];
+
   onTrace({
     kind: 'tool',
     label: 'searchResources',
-    detail: { concept: concept.slug, found: candidates.length },
+    detail: { concept: concept.slug, found: searched.length, injected: injected.length },
   });
 
   if (candidates.length === 0) {

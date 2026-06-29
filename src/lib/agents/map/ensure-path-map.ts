@@ -25,7 +25,9 @@ import { PATH_BUILD_STALE_MS } from '@/lib/config';
 import { buildSpine } from '@/lib/agents/map/build-spine';
 import { normalizeOnRamp } from '@/lib/agents/map/cycle';
 import { attachCandidates } from '@/lib/agents/map/attach-candidates';
+import { generateOnRampResource } from '@/lib/agents/map/generate-onramp';
 import { computeReadiness } from '@/lib/agents/map/readiness';
+import type { SearchResult } from '@/lib/agents/tools/search-resources';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 
 export type EnsurePathMapResult = {
@@ -133,7 +135,25 @@ export async function ensurePathMap(args: {
     // candidate sourcing (discriminating query + strict judge rubric) keys off a
     // single, well-defined concept.
     const concepts = normalizeOnRamp(spine);
-    const attachments = await attachCandidates({ topic, concepts, onTrace });
+
+    // Phase 2g-4: author the on-ramp's primary lesson rather than sourcing it — atomic
+    // sourcing can't reliably find true orientation (it pulls whole-subject courses, or
+    // nothing). Generated here in the orchestration layer (NOT inside attachOne, which
+    // stays a read-only planning pass), then injected as a candidate so it competes
+    // through the normal judge + selection path; good sourced orientation still attaches
+    // as alternates. Idempotent + best-effort: on failure we inject nothing and the
+    // concept falls back to ordinary sourcing (remediation also retries generation).
+    const injected = new Map<string, SearchResult[]>();
+    const onRamp = concepts.find((c) => c.isOnRamp);
+    if (onRamp) {
+      const generated = await generateOnRampResource({ topic, concept: { slug: onRamp.slug, title: onRamp.title } });
+      if (generated) {
+        injected.set(onRamp.slug, [generated]);
+        onTrace({ kind: 'tool', label: 'generateOnRampResource', detail: { concept: onRamp.slug, durationMin: generated.durationMin } });
+      }
+    }
+
+    const attachments = await attachCandidates({ topic, concepts, injected, onTrace });
     const readiness = computeReadiness(attachments);
     holes = readiness.holes;
     ready = readiness.ready;
