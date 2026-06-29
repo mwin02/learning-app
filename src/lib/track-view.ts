@@ -20,6 +20,18 @@ export type TrackResourceView = {
   resource: { id: string; title: string; url: string; type: string; content: string | null };
 };
 
+// Phase 2.5h: one practice exercise on a lesson. Reveal-only — the learner reads
+// the prompt, attempts it, then reveals `answer` + `rubric` (no auto-grading until
+// the Phase-4 tutor). MCQ options are embedded in `prompt` (A/B/C/… lines); `origin`
+// isn't surfaced to learners.
+export type TrackExerciseView = {
+  id: string;
+  kind: string;
+  prompt: string;
+  answer: string;
+  rubric: string;
+};
+
 export type TrackLessonView = {
   id: string;
   orderInTrack: number;
@@ -29,6 +41,7 @@ export type TrackLessonView = {
   conceptsTaught: string[];
   estMinutes: number;
   resources: TrackResourceView[];
+  exercises: TrackExerciseView[];
 };
 
 export type TrackSectionView = {
@@ -89,6 +102,10 @@ export const getTrackView = cache(async (trackId: string): Promise<TrackView | n
               segmentRef: true,
               resource: { select: { id: true, title: true, url: true, type: true, content: true } },
             },
+          },
+          exercises: {
+            orderBy: { createdAt: 'asc' },
+            select: { id: true, kind: true, prompt: true, answer: true, rubric: true },
           },
         },
       },

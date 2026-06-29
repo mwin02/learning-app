@@ -10,8 +10,10 @@
 import Link from 'next/link';
 import type { TrackResourceView } from '@/lib/track-view';
 import type { LessonTypeKind } from '@/lib/course-home-model';
+import type { TrackExerciseView } from '@/lib/track-view';
 import { useCourse } from './course-context';
 import { ResourcePane } from './ResourcePane';
+import { LessonExercises } from './LessonExercises';
 import { LessonTypeIcon } from './primitives';
 import {
   CheckIcon,
@@ -35,6 +37,7 @@ export type LessonViewModel = {
   concepts: string[];
   estMinutes: number;
   resources: TrackResourceView[];
+  exercises: TrackExerciseView[];
   prev: LessonNavLesson | null;
   next: LessonNextLesson | null;
 };
@@ -107,8 +110,9 @@ export function LessonView({ model }: { model: LessonViewModel }) {
           </>
         )}
 
-        {/* Exercise slot (roadmap 2.5h) — lesson.exercises is empty today; the
-            in-lesson practice block renders here when exercises exist. */}
+        {/* In-lesson practice (roadmap 2.5h) — renders only when the lesson's
+            concepts had a question bank to sample at build. */}
+        <LessonExercises exercises={model.exercises} />
 
         {model.next && <UpNext trackId={model.trackId} next={model.next} />}
 
