@@ -31,6 +31,11 @@ export type JudgedCandidate = {
   // sets it (so ranking is trust-aware), while paths that hydrate candidates from
   // persisted ConceptResource rows omit it and fall back to pure coverage ordering.
   trustScore?: number;
+  // Phase 2g-1: the resource's durationMin, carried through (same as trustScore) so
+  // selectAttachable can apply the scope-aware duration penalty (an over-long resource
+  // is over-broad for a single concept). Optional and order-only: paths that hydrate
+  // from persisted ConceptResource rows omit it and get no duration penalty.
+  durationMin?: number;
 };
 
 const VerdictSchema = z.object({
@@ -104,7 +109,7 @@ export async function judgeCandidates(args: {
       });
       if (v.coverageScore <= existing.coverageScore) continue;
     }
-    byResource.set(row.id, { resourceId: row.id, role: v.role, coverageScore: v.coverageScore, trustScore: row.trustScore });
+    byResource.set(row.id, { resourceId: row.id, role: v.role, coverageScore: v.coverageScore, trustScore: row.trustScore, durationMin: row.durationMin });
   }
   return [...byResource.values()];
 }
