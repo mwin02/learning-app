@@ -68,6 +68,7 @@ export default async function LessonPage({
     concepts: lesson.conceptsTaught.map(humanizeConcept),
     estMinutes: lesson.estMinutes,
     resources: lesson.resources,
+    exercises: lesson.exercises,
     prev: prev ? { id: prev.id, title: prev.title } : null,
     next: next
       ? { id: next.id, title: next.title, type: lessonTypeOf(next), estMinutes: next.estMinutes }
