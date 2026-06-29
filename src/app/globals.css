@@ -173,7 +173,7 @@ body {
      it inherits dark mode for free. Descendant selectors style the raw elements
      react-markdown emits — no per-element className wiring in the component. */
   .lesson-prose {
-    @apply text-[15px] leading-relaxed text-body;
+    @apply text-sm leading-relaxed text-body;
   }
   .lesson-prose > :first-child {
     @apply mt-0;
