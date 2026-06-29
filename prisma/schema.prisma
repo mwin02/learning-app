@@ -511,11 +511,18 @@ model Concept {
   // a relaxed concept with any candidate as covered, not a spine hole. Column only
   // this block; the readiness honoring + the writer land in 2.5f-3.
   primaryRelaxed Boolean        @default(false)
+  // Phase 2.5h: cleared (false) while a concept's question bank is still only the
+  // initial agent-generated set; flipped true once an operator has reviewed/curated
+  // it (via the discovery API). Drives the "weak banks, oldest first" worklist —
+  // it's an explicit review flag, deliberately decoupled from `origin`/question count
+  // so "I checked this" is distinct from "a human-authored question exists".
+  bankReviewed Boolean          @default(false)
   // Prereq edges in both directions: `prereqsOut` are edges where this concept
   // is the prerequisite; `prereqsIn` are edges where it is the dependent.
   prereqsOut ConceptPrereq[]   @relation("PrereqFrom")
   prereqsIn  ConceptPrereq[]   @relation("PrereqTo")
   resources  ConceptResource[]
+  questions  ConceptQuestion[]
   createdAt  DateTime          @default(now())
   updatedAt  DateTime          @updatedAt
 
@@ -574,6 +581,30 @@ enum ConceptResourceRole {
   teaches
   uses
   assesses
+}
+
+// Phase 2.5h — a question in a Concept's reusable question bank. Generated ONCE
+// per concept (a small agent-authored set, near spine-readiness), then sampled at
+// Track build into per-Lesson `Exercise` snapshots — so the expensive authoring is
+// amortized across every Track built off the Path, and build-time is cheap
+// selection. Path-scoped via the Concept (never global). `origin` is provenance:
+// `agent` for the generated seed set, `user` for operator-authored questions added
+// through the discovery API. MCQ options are embedded in `prompt` (no options
+// column — the renderer is reveal-only until the Phase-4 tutor). Cascade: questions
+// die with the concept.
+model ConceptQuestion {
+  id        String       @id @default(cuid())
+  conceptId String
+  concept   Concept      @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  prompt    String
+  answer    String
+  rubric    String
+  kind      ExerciseKind
+  origin    Origin       @default(agent)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@index([conceptId])
 }
 
 // Phase 2.5f — the durable record + single-flight claim for one spine-hole
