@@ -1,29 +1,29 @@
 # `data/` — Resource library
 
 The runtime resource library lives in Postgres (`Resource` and `Source` tables,
-see `prisma/schema.prisma`). This directory holds the **seed source of truth**
-for the four launch topics, plus the curation rules that govern what may enter
-the library — whether added by hand, by the curriculum agent at runtime, or
-(post-launch) by users.
+see `prisma/schema.prisma`). This directory holds the **seed source of truth for
+publishers** (the `Source` table) plus the curation rules that govern what may
+enter the library — whether sourced by the curriculum agent at runtime or
+(post-launch) contributed by users. Resources themselves are no longer
+hand-seeded; the agent sources them naturally during path generation.
 
 ## Files
 
-- `seed-resources.ts` — typed array of resources loaded by `prisma/seed.ts` via
-  `upsert(slug)`. Idempotent: re-running the seed updates existing rows rather
-  than inserting duplicates.
 - `seed-sources.ts` — typed array of publishers (MDN, 3Blue1Brown, MIT OCW, …)
-  with hand-set trust scores. Seeded before resources; each resource resolves
-  its `sourceSlug` to a `sourceId` at seed time.
+  with hand-set trust scores, loaded by `prisma/seed.ts` via `upsert(slug)`.
+  Idempotent. These rows are load-bearing at runtime: they carry the trust-score
+  priors (`resolveSource`) and define the open-web discovery allowlist
+  (`loadAllowlistDomains` in `src/lib/agents/tools/web-fallback.ts`).
 - `README.md` — this file.
 
 ## How the library grows
 
-1. **Seed (this directory).** Hand-curated sources and resources for the four
-   launch topics are committed here. `origin: 'seed'`.
-2. **Agent (Phase 2).** When a user requests a topic the library doesn't cover
-   well, the curriculum agent searches the web, curates and reviews candidates,
-   and writes new rows with `origin: 'agent'`. Some may land as
-   `status: 'pending_review'` for a human to confirm.
+1. **Sources (this directory).** Hand-curated publishers are committed in
+   `seed-sources.ts` and seeded via `npm run db:seed`. They seed the trust
+   priors and discovery allowlist the agent sourcing leans on.
+2. **Agent.** The curriculum agent searches the web, curates and reviews
+   candidates, and writes `Resource` rows with `origin: 'agent'`. Some may land
+   as `status: 'pending_review'` for a human to confirm.
 3. **User (post-launch).** Eventually, user-contributed resources land with
    `origin: 'user'`. Same schema, same rules.
 
@@ -140,24 +140,18 @@ viable in the meantime:
   also fine — pick one per topic and stick to it. Check existing tags before
   adding a new one.
 
-## How to add a resource
+## How resources get added
 
-### From an existing source
+Resources are no longer hand-curated here. The curriculum agent sources them at
+runtime during path generation, applying the curation rules above; a sourced
+resource resolves its publisher via `resolveSource` (hostname match against the
+seeded `Source` rows) and inherits that source's trust prior. To improve how
+resources are sourced or scored, the seam is the source library below and the
+agent sourcing code (`src/lib/agents/`), not a static resource list.
 
-1. Pick an `id`-free, unique `slug` in `{topic}-{short}` format.
-2. Verify the URL loads without login in an incognito window.
-3. Set `sourceSlug` to the source's slug from `seed-sources.ts`.
-4. Fill every required field. `prerequisiteConcepts` may be `[]`;
-   `conceptsTaught` must have at least one tag.
-5. Check existing concept tags in the same topic — reuse if the concept is the
-   same; don't introduce `derivative` if `derivatives` already exists.
-6. `npm run db:seed` — re-run is safe and idempotent.
-7. PR review: include URL, why it's in (or out of) core tier, and any new
-   concept tags introduced.
+## How to add a publisher (source)
 
-### From a new publisher
-
-Add the source to `seed-sources.ts` first:
+Add the publisher to `seed-sources.ts`, then `npm run db:seed` (idempotent):
 
 1. Pick a short kebab-case `slug`. Avoid topic prefixes — sources are
    topic-agnostic.
@@ -165,7 +159,9 @@ Add the source to `seed-sources.ts` first:
 3. Set `trustScore` from the rubric. Lean conservative: 0.85 is the right
    default for a publisher you'd recommend without hesitation but who isn't
    universally known. Reserve 0.95 for the canonical few.
-4. Then add the resource as above, with `sourceSlug` pointing at the new entry.
+
+A new source widens both the trust priors and the open-web discovery allowlist,
+so the agent can start sourcing from that publisher with no code change.
 
 ## Tutor agent caveat for books
 
