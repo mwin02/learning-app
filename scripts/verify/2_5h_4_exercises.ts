@@ -5,6 +5,7 @@
 //      Track has per-Lesson Exercises sampled from the banks; re-run is idempotent.
 import { prisma } from '@/lib/db';
 import { pickStratified, exerciseTrack } from '@/lib/agents/content/exercise-track';
+import { mcqHasOptions } from '@/lib/agents/content/mcq-options';
 import { buildTrack } from '@/lib/agents/track/build-track';
 import { EXERCISE_SAMPLE_PER_LESSON } from '@/lib/config';
 
@@ -68,7 +69,7 @@ async function partB() {
     assert(l.exercises.length <= EXERCISE_SAMPLE_PER_LESSON, `lesson "${l.title}" exceeded sample cap`);
     for (const e of l.exercises) {
       assert(!!e.prompt && !!e.answer && !!e.rubric, 'exercise has an empty field');
-      if (e.kind === 'mcq') assert((e.prompt.match(/(^|\n)\s*[A-Z][)\.]/g)?.length ?? 0) >= 2, 'mcq missing options');
+      if (e.kind === 'mcq') assert(mcqHasOptions(e.prompt), 'mcq missing options');
     }
   }
   const sample = withEx[0];

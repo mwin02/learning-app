@@ -23,6 +23,7 @@ import { z } from 'zod';
 import { ExerciseKind } from '@prisma/client';
 import { getModel } from '@/lib/ai/models';
 import { CONCEPT_BANK_TARGET_QUESTIONS } from '@/lib/config';
+import { mcqHasOptions } from '@/lib/agents/content/mcq-options';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 
 // One resource as the author sees it — just enough to frame what the concept's
@@ -51,14 +52,6 @@ const QuestionsSchema = z.object({
     )
     .min(1),
 });
-
-// An MCQ must carry at least two lettered options in its prompt (we embed options
-// there, no options column). A prompt missing them isn't answerable on reveal, so
-// drop it rather than persist a broken question.
-function mcqHasOptions(prompt: string): boolean {
-  const markers = prompt.match(/(^|\n)\s*[A-Z][)\.]/g);
-  return (markers?.length ?? 0) >= 2;
-}
 
 export async function authorConceptBank(args: {
   topic: string;
