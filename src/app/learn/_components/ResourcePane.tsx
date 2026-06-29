@@ -13,6 +13,7 @@
 import type { TrackResourceView } from '@/lib/track-view';
 import type { LessonTypeKind } from '@/lib/course-home-model';
 import { LessonTypeIcon } from './primitives';
+import { Markdown } from './Markdown';
 
 // A single resource's icon kind: an embed delivery (or interactive type) shows the
 // embed icon, video → video, everything else → the reading link icon.
@@ -80,11 +81,37 @@ export function ResourcePane({ resources }: { resources: TrackResourceView[] }) 
     );
   }
 
+  // A generated lesson (the on-ramp) has no external page — its body lives in
+  // `resource.content`. Render it inline instead of an embed/open-in-new-tab card
+  // (whose `generated://` url can be neither framed nor opened).
+  const mainView =
+    main.resource.content != null ? (
+      <GeneratedLesson resource={main} />
+    ) : main.deliveryMode === 'embed' ? (
+      <EmbedPlayer resource={main} />
+    ) : (
+      <MainCard resource={main} />
+    );
+
   return (
     <div>
-      {main.deliveryMode === 'embed' ? <EmbedPlayer resource={main} /> : <MainCard resource={main} />}
+      {mainView}
       {rest.length > 0 && <OtherResources resources={rest} />}
     </div>
+  );
+}
+
+function GeneratedLesson({ resource }: { resource: TrackResourceView }) {
+  const { title, content } = resource.resource;
+  return (
+    <article className="card p-6 sm:p-8">
+      <div className="meta-xs mb-3 flex items-center gap-2 text-faint">
+        <LessonTypeIcon type="link" />
+        <span>LESSON</span>
+      </div>
+      <h2 className="mb-4 text-2xl font-bold tracking-[-0.5px] text-ink">{title}</h2>
+      <Markdown content={content ?? ''} />
+    </article>
   );
 }
 
@@ -165,24 +192,53 @@ function OtherResources({ resources }: { resources: TrackResourceView[] }) {
       <ul className="overflow-hidden rounded-card border border-line">
         {resources.map((r) => (
           <li key={r.id}>
-            <a
-              href={r.resource.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-3 border-b border-line-soft bg-card px-4 py-3 last:border-b-0 hover:bg-fill-soft"
-            >
-              <LessonTypeIcon type={resourceTypeKind(r)} />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium">{r.resource.title}</div>
-                <div className="meta-xs mt-0.5 text-faint">
-                  {r.role === 'primary' ? 'Core' : 'Alternate'} · {hostOf(r.resource.url)}
-                </div>
-              </div>
-              <span className="flex-none text-xs font-semibold text-brand">Open ↗</span>
-            </a>
+            {r.resource.content != null ? <GeneratedAlternate resource={r} /> : <ExternalAlternate resource={r} />}
           </li>
         ))}
       </ul>
     </div>
+  );
+}
+
+function ExternalAlternate({ resource: r }: { resource: TrackResourceView }) {
+  return (
+    <a
+      href={r.resource.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="flex items-center gap-3 border-b border-line-soft bg-card px-4 py-3 last:border-b-0 hover:bg-fill-soft"
+    >
+      <LessonTypeIcon type={resourceTypeKind(r)} />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm font-medium">{r.resource.title}</div>
+        <div className="meta-xs mt-0.5 text-faint">
+          {r.role === 'primary' ? 'Core' : 'Alternate'} · {hostOf(r.resource.url)}
+        </div>
+      </div>
+      <span className="flex-none text-xs font-semibold text-brand">Open ↗</span>
+    </a>
+  );
+}
+
+// A generated alternate has no external page (its `generated://` url can't be opened),
+// so it expands inline as a markdown reader rather than linking out.
+function GeneratedAlternate({ resource: r }: { resource: TrackResourceView }) {
+  return (
+    <details className="group border-b border-line-soft bg-card last:border-b-0 [&_summary::-webkit-details-marker]:hidden">
+      <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3 hover:bg-fill-soft">
+        <LessonTypeIcon type="link" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium">{r.resource.title}</div>
+          <div className="meta-xs mt-0.5 text-faint">
+            {r.role === 'primary' ? 'Core' : 'Alternate'} · lesson
+          </div>
+        </div>
+        <span className="flex-none text-xs font-semibold text-brand group-open:hidden">Read ↓</span>
+        <span className="hidden flex-none text-xs font-semibold text-brand group-open:inline">Hide ↑</span>
+      </summary>
+      <div className="border-t border-line-soft px-4 py-4">
+        <Markdown content={r.resource.content ?? ''} />
+      </div>
+    </details>
   );
 }
