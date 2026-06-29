@@ -15,6 +15,7 @@ import { z, ZodError } from 'zod';
 import { withAdminAuth } from '@/lib/api/with-admin-auth';
 import { prisma } from '@/lib/db';
 import { ExerciseKind, Origin } from '@prisma/client';
+import { mcqHasOptions } from '@/lib/agents/content/mcq-options';
 
 export const runtime = 'nodejs';
 
@@ -24,10 +25,6 @@ function errorResponse(status: number, code: ErrorCode, error: string, details?:
   const body: { error: string; code: ErrorCode; details?: unknown } = { error, code };
   if (details !== undefined) body.details = details;
   return Response.json(body, { status });
-}
-
-function mcqHasOptions(prompt: string): boolean {
-  return (prompt.match(/(^|\n)\s*[A-Z][)\.]/g)?.length ?? 0) >= 2;
 }
 
 const postSchema = z.object({

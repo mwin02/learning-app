@@ -63,9 +63,11 @@ async function partB() {
   console.log('backfill summary:', bf);
   assert(bf.failed === 0, `${bf.failed} concept(s) failed generation`);
 
-  const bankless = await prisma.concept.count({ where: { pathId: path.id, questions: { none: {} } } });
-  console.log('concepts still bankless:', bankless, '(expect only the "empty" ones:', bf.empty, ')');
-  assert(bankless === bf.empty, 'bankless count should equal the empty-author count');
+  // On-ramp concepts are excluded from backfill by design (2.5i), so they stay
+  // bankless legitimately — count only the non-on-ramp ones the backfill covers.
+  const bankless = await prisma.concept.count({ where: { pathId: path.id, isOnRamp: false, questions: { none: {} } } });
+  console.log('non-on-ramp concepts still bankless:', bankless, '(expect only the "empty" ones:', bf.empty, ')');
+  assert(bankless === bf.empty, 'non-on-ramp bankless count should equal the empty-author count');
 
   // spot-check one persisted bank
   const sample = await prisma.concept.findFirst({

@@ -4,6 +4,7 @@
 // exercised. Asserts shape; prints the bank for eyeballing quality.
 import { prisma } from '@/lib/db';
 import { authorConceptBank } from '@/lib/agents/content/author-concept-bank';
+import { mcqHasOptions } from '@/lib/agents/content/mcq-options';
 import { ExerciseKind } from '@prisma/client';
 
 function assert(cond: boolean, msg: string) { if (!cond) throw new Error(msg); }
@@ -48,8 +49,7 @@ async function main() {
     assert(q.prompt.length > 0 && q.answer.length > 0 && q.rubric.length > 0, `q${i} has an empty field`);
     assert(q.kind === ExerciseKind.text || q.kind === ExerciseKind.mcq, `q${i} bad kind`);
     if (q.kind === ExerciseKind.mcq) {
-      const markers = q.prompt.match(/(^|\n)\s*[A-Z][)\.]/g) ?? [];
-      assert(markers.length >= 2, `q${i} mcq has <2 options in prompt`);
+      assert(mcqHasOptions(q.prompt), `q${i} mcq has <2 options in prompt`);
     }
     kinds[q.kind]++;
     console.log(`\n[${i + 1}] (${q.kind})`);
