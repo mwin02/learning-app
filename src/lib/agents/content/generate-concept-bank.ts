@@ -79,18 +79,34 @@ export async function generateConceptBank(args: {
     return { conceptId, outcome: 'empty', generated: 0 };
   }
 
-  await prisma.conceptQuestion.createMany({
-    data: questions.map((q) => ({
-      conceptId,
-      prompt: q.prompt,
-      answer: q.answer,
-      rubric: q.rubric,
-      kind: q.kind,
-      // origin defaults to `agent` — this is the generated baseline set.
-    })),
+  // Single-flight the persist. The `_count.questions` check above is a cheap fast
+  // path, but it's a read-then-write: two concurrent generates for the SAME concept
+  // (a future multi-worker pool; the worker is concurrency-1 today) could both see 0
+  // and both insert, doubling the bank — the one pipeline step lacking the
+  // single-flight backstop the others have (RemediationJob's partial-unique index,
+  // ensurePathMap's advisory lock). Lock the concept row, then RE-CHECK the count
+  // inside the lock before writing. The slow LLM call stays OUTSIDE the lock; the
+  // loser of a race just discards its freshly-authored set and reports `skipped`.
+  const added = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT 1 FROM "Concept" WHERE "id" = ${conceptId} FOR UPDATE`;
+    if ((await tx.conceptQuestion.count({ where: { conceptId } })) > 0) return 0;
+    const res = await tx.conceptQuestion.createMany({
+      data: questions.map((q) => ({
+        conceptId,
+        prompt: q.prompt,
+        answer: q.answer,
+        rubric: q.rubric,
+        kind: q.kind,
+        // origin defaults to `agent` — this is the generated baseline set.
+      })),
+    });
+    return res.count;
   });
 
-  return { conceptId, outcome: 'generated', generated: questions.length };
+  // Lost the race (a concurrent writer persisted first) — idempotent no-op.
+  if (added === 0) return { conceptId, outcome: 'skipped', generated: 0 };
+
+  return { conceptId, outcome: 'generated', generated: added };
 }
 
 export type BackfillConceptBanksResult = {
