@@ -19,6 +19,7 @@ type AgentName =
   | 'onRampCritic'
   | 'trackComposer'
   | 'trackSectioner'
+  | 'conceptBankAuthor'
   | 'tagCanonicalizer'
   | 'topicClassifier'
   | 'conceptDeriver'
@@ -169,6 +170,20 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // internal thinking first and caps mid-JSON on a tighter ceiling.
     modelId: 'gemini-2.5-flash',
     temperature: 0.2,
+    maxOutputTokens: 8192,
+  },
+  conceptBankAuthor: {
+    // Phase 2.5h: authors a small question bank (text + MCQ) for ONE concept,
+    // generated once near spine-readiness and later sampled into per-Lesson
+    // exercises at Track build. Flash, not Pro — like the sectioner this is a
+    // light, best-effort, off-the-hot-path pass that sees only the concept (title,
+    // its lessons' framing, resource titles), not the whole map; questions are
+    // reveal-only (no auto-grading). Temperature mid so the bank has variety across
+    // ~5–10 questions without drifting off-concept. 8k output: a handful of
+    // question objects is small, but Flash 2.5 spends budget on internal thinking
+    // first and caps mid-JSON on a tighter ceiling.
+    modelId: 'gemini-2.5-flash',
+    temperature: 0.5,
     maxOutputTokens: 8192,
   },
   tagCanonicalizer: {
