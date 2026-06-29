@@ -39,6 +39,7 @@ import { allocate, type AllocatorLesson } from '@/lib/agents/track/allocate';
 import { cleanupLessons } from '@/lib/agents/track/cleanup-lessons';
 import { thickenSpine } from '@/lib/agents/track/thicken-seam';
 import { sectionTrack } from '@/lib/agents/track/section-track';
+import { exerciseTrack } from '@/lib/agents/content/exercise-track';
 import { TRACK_MAX_THICKEN_ATTEMPTS, TRACK_COMPOSER_MODE } from '@/lib/config';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 
@@ -289,6 +290,19 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
     } catch (err) {
       console.warn('[track-build-track] sectioning failed (non-fatal)', { trackId: track.id, err });
       warnings.push('sectioning failed; track left flat');
+    }
+
+    // --- best-effort exercises: sample the concept banks into per-Lesson rows ------
+    // A no-LLM selection pass over the frozen lessons (exercise-track.ts): pulls a
+    // stratified sample from each lesson's concept question bank (2.5h-3). Non-fatal
+    // like sectioning — a Path with no banks yet (or a failure here) leaves the Track
+    // exercise-less but `ready`, never costing the learner a build.
+    try {
+      const exercises = await exerciseTrack({ trackId: track.id, onTrace });
+      warnings.push(...exercises.warnings);
+    } catch (err) {
+      console.warn('[track-build-track] exercise selection failed (non-fatal)', { trackId: track.id, err });
+      warnings.push('exercise selection failed; track has no exercises');
     }
 
     const underResourced = composition.resourceSufficiency.enough

@@ -334,3 +334,11 @@ export const CONCEPT_BANK_TARGET_QUESTIONS = 8;
 // but bounded, like MAP_JUDGE_CONCURRENCY, so a wide map doesn't open dozens of
 // Vertex calls at once.
 export const CONCEPT_BANK_GEN_CONCURRENCY = 4;
+
+// Phase 2.5h-4: how many exercises to snapshot per Lesson at Track build, sampled
+// from the lesson's concept bank(s). The selection is stratified (≥1 per concept
+// for a multi-concept lesson) then filled at random, frozen into Exercise rows. A
+// lesson whose concepts have no bank yet simply gets none (non-fatal). Kept small —
+// a few well-chosen checks per lesson, not a quiz; comfortably below
+// CONCEPT_BANK_TARGET_QUESTIONS so there's a pool to sample from.
+export const EXERCISE_SAMPLE_PER_LESSON = 4;
