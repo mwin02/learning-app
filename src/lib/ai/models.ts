@@ -121,11 +121,14 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // learner-facing artifact authored ONCE per topic and cached forever (same
     // reasoning as mapSpineAuthor / trackComposer), and orientation prose that is
     // subtly wrong about a subject's fundamentals is worse than none. Temperature
-    // mid so the prose is warm and readable, not robotic. 16k output: a focused
-    // ~600–900 word lesson plus Pro's internal thinking.
+    // mid so the prose is warm and readable, not robotic. 32k output (matches the
+    // other Pro authors): the lesson itself is only ~600–900 words, but at 16k Pro
+    // intermittently spent the whole budget on internal thinking and emitted nothing
+    // (NoOutputGeneratedError → "No output generated"), failing the generation; the
+    // larger ceiling leaves ample headroom for thinking + the lesson so that's rare.
     modelId: 'gemini-2.5-pro',
     temperature: 0.4,
-    maxOutputTokens: 16384,
+    maxOutputTokens: 32768,
   },
   onRampCritic: {
     // Phase 2g-3: the accuracy self-critique pass over the authored draft — corrects
@@ -134,10 +137,12 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // returning the corrected lesson (unchanged when already accurate). Pro, same
     // tier as the author: catching a subtle factual slip in math/programming
     // fundamentals is judgment. Temperature low for careful, conservative
-    // correction. 16k output: it re-emits the full corrected lesson + thinking.
+    // correction. 32k output (matches the author): it re-emits the full corrected
+    // lesson after thinking, so it needs the same headroom against the
+    // spend-budget-on-thinking-then-emit-nothing failure (NoOutputGeneratedError).
     modelId: 'gemini-2.5-pro',
     temperature: 0.1,
-    maxOutputTokens: 16384,
+    maxOutputTokens: 32768,
   },
   trackComposer: {
     // Phase 2.5e-2: composes a learner's Track from a spine_ready map in one

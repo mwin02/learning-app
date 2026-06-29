@@ -63,17 +63,29 @@ export async function generateOnRampResource(args: {
     return toSearchResult(existing);
   }
 
+  // Retry once on a thrown failure: Gemini 2.5 Pro intermittently spends its whole
+  // output budget on internal thinking and emits nothing ("No output generated"), a
+  // transient fault a second attempt usually clears (mirrors attachOneWithRetry). Only
+  // after a second failure do we degrade to null and let the caller source instead.
   let lesson: Lesson;
   try {
-    const draft = await authorLesson(topic, concept.title);
-    lesson = await critiqueLesson(topic, concept.title, draft);
+    lesson = await authorAndCritique(topic, concept.title);
   } catch (err) {
-    console.error('[onramp-gen] authoring failed; caller will fall back to sourcing', {
+    console.warn('[onramp-gen] authoring failed, retrying once', {
       topic,
       concept: concept.slug,
       error: err instanceof Error ? err.message : String(err),
     });
-    return null;
+    try {
+      lesson = await authorAndCritique(topic, concept.title);
+    } catch (err2) {
+      console.error('[onramp-gen] authoring failed after retry; caller will fall back to sourcing', {
+        topic,
+        concept: concept.slug,
+        error: err2 instanceof Error ? err2.message : String(err2),
+      });
+      return null;
+    }
   }
 
   const durationMin = readingTimeMin(lesson.content);
@@ -124,6 +136,13 @@ export async function generateOnRampResource(args: {
 }
 
 // ── model passes ──────────────────────────────────────────────────────────────
+
+// One full generation: author a draft, then accuracy-critique it. Wrapped so the
+// caller can retry the whole sequence on a transient model fault.
+async function authorAndCritique(topic: string, conceptTitle: string): Promise<Lesson> {
+  const draft = await authorLesson(topic, conceptTitle);
+  return critiqueLesson(topic, conceptTitle, draft);
+}
 
 async function authorLesson(topic: string, conceptTitle: string): Promise<Lesson> {
   const { model, temperature, maxOutputTokens } = getModel('onRampAuthor');
