@@ -395,7 +395,7 @@ How to work:
 5. When \`add_lesson\` reports no concepts left to place, call \`finalize\` with:
    - \`intent\`: the one category that best fits WHY the learner is here, inferred from their goal — learn (fresh first pass; default when no goal) | review (refresh known material) | practice (drill/apply) | master (go deep beyond a first pass) | exam_prep (time-boxed cram, breadth/recall over depth).
    - \`trackTitle\`, \`trackSummary\`: motivating, tailored to their level and goal.
-   - \`resourceSufficiency\`: enough=false (+ underResourced concepts with reasons) when an included concept's only candidates are thin, off-level, or merely 'uses'/'assesses' rather than a solid 'teaches'. This is about resource QUALITY, not time.
+   - \`resourceSufficiency\`: enough=false (+ underResourced concepts with reasons) when an included concept's only candidates are thin, off-level, or merely 'uses'/'assesses' rather than a solid 'teaches'. This is about TEACHABILITY, not time — and NOT about practice/assessment availability: practice questions are generated for every concept elsewhere, so a missing 'assesses'/practice resource is NEVER a reason to set enough=false. Only a missing/weak way to LEARN the concept (no solid 'teaches') counts.
 6. After a successful \`finalize\`, STOP.
 
 Rules:

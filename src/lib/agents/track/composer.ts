@@ -297,7 +297,7 @@ You produce, in one pass:
 
 4. \`trackTitle\`, \`trackSummary\` — a motivating course title and a short summary tailored to the learner's level and goal.
 
-5. \`resourceSufficiency\` — judge whether the included concepts have GOOD ENOUGH resources to actually teach them TO THE TARGET MASTERY. Set \`enough\` false and list \`underResourced\` concepts (with a one-line reason) when a concept's only candidates are thin, off-level, or merely "uses"/"assesses" rather than a solid "teaches". This is about resource QUALITY/COVERAGE, not about time — ignore the budget here.
+5. \`resourceSufficiency\` — judge whether the included concepts have GOOD ENOUGH resources to actually TEACH them TO THE TARGET MASTERY. Set \`enough\` false and list \`underResourced\` concepts (with a one-line reason) when a concept's only candidates are thin, off-level, or merely "uses"/"assesses" rather than a solid "teaches". This is about TEACHABILITY/COVERAGE, not about time — ignore the budget here. It is ALSO NOT about practice or assessment availability: every concept gets agent-generated practice questions elsewhere, so the LACK of an "assesses"/practice resource is NEVER a reason to set \`enough\` false. Only a missing/weak way to LEARN the concept (no solid "teaches") counts.
 
 6. \`intent\` — the ONE category that best fits WHY the learner is taking this Track, inferred from their free-text goal (and prior knowledge). This label both guides your own pruning + resource choices above and is recorded for later stages, so pick deliberately:
    - \`learn\` — a fresh first pass through new material (the default when no goal is given, or the goal is just "learn X").
