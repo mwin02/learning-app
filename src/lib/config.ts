@@ -320,3 +320,17 @@ export const COURSE_REQUEST_STALE_MS = 15 * 60 * 1000;
 // nothing (the headers would outnumber the content), so the post-build sectioner
 // (section-track.ts) skips the LLM call entirely below this floor.
 export const TRACK_MIN_LESSONS_FOR_SECTIONS = 4;
+
+// Phase 2.5h (concept question bank): how many questions the bank author aims to
+// write per concept in the one generation pass. Deliberately SMALL — a tight set
+// the concept's resources can actually support beats a padded one full of
+// questions the resources never cover (the whole reason generation is concept-
+// framed + small). The build-time sampler draws EXERCISE_SAMPLE_PER_LESSON from
+// this, so keep it comfortably above that. 8 = a few text + a few MCQ.
+export const CONCEPT_BANK_TARGET_QUESTIONS = 8;
+
+// Phase 2.5h: how many concepts' banks to author concurrently in the per-Path
+// fan-out (2.5h-3). Each concept is one independent Flash call, so we fan out —
+// but bounded, like MAP_JUDGE_CONCURRENCY, so a wide map doesn't open dozens of
+// Vertex calls at once.
+export const CONCEPT_BANK_GEN_CONCURRENCY = 4;
