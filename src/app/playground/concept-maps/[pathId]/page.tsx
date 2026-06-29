@@ -56,7 +56,7 @@ export default async function ConceptMapDetailPage({
             select: {
               role: true,
               coverageScore: true,
-              resource: { select: { id: true, title: true, url: true, type: true } },
+              resource: { select: { id: true, title: true, url: true, type: true, origin: true } },
             },
             orderBy: { coverageScore: 'desc' },
           },
@@ -250,14 +250,27 @@ export default async function ConceptMapDetailPage({
                                 primary
                               </span>
                             )}
-                            <a
-                              href={r.resource.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="underline truncate"
-                            >
-                              {r.resource.title}
-                            </a>
+                            {/* A generated resource (the on-ramp lesson) has no
+                                external page — its `generated://` url opens blank.
+                                Link instead to the internal resource detail page,
+                                which renders the stored content. */}
+                            {r.resource.origin === 'generated' ? (
+                              <Link
+                                href={`/playground/resource/${r.resource.id}`}
+                                className="underline truncate"
+                              >
+                                {r.resource.title}
+                              </Link>
+                            ) : (
+                              <a
+                                href={r.resource.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="underline truncate"
+                              >
+                                {r.resource.title}
+                              </a>
+                            )}
                             <span className="text-gray-400">{r.resource.type}</span>
                             <ResourceActions
                               conceptId={c.id}
