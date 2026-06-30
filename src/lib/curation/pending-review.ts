@@ -17,10 +17,11 @@
 // resource — the row still exists; broken Tracks are triaged manually). See the
 // Track immutability note in schema.prisma.
 
-import { PathStatus } from '@prisma/client';
+import { PathStatus, BankStaleReason } from '@prisma/client';
 import type { ResourceStatus, DecompositionStatus, DeprecationSeverity } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { recomputeReadiness } from '@/lib/agents/map/recompute-readiness';
+import { markBankStale } from '@/lib/agents/content/mark-bank-stale';
 
 // A container whose shape is still unsettled isn't meaningfully approvable —
 // flipping its status can't make an unpickable container pickable. These are
@@ -187,9 +188,20 @@ export async function applyPendingReview(input: ApplyInput): Promise<ApplyResult
     // BEFORE deleting (the join is gone afterwards).
     const links = await tx.conceptResource.findMany({
       where: { resourceId: { in: ids } },
-      select: { concept: { select: { pathId: true } } },
+      select: { conceptId: true, role: true, concept: { select: { pathId: true } } },
     });
     const affectedPathIds = [...new Set(links.map((l) => l.concept.pathId))];
+
+    // Phase 2.5i: deprecation removes these candidate links, so any reviewed bank
+    // grounded in them goes stale. A dropped `teaches` link is primary_changed; the
+    // rest are resource_removed. markBankStale's no-downgrade rule means a concept
+    // losing both a teaches and a non-teaches link lands on primary_changed
+    // regardless of order, so we can flag the two groups independently.
+    const primaryConcepts = [...new Set(links.filter((l) => l.role === 'teaches').map((l) => l.conceptId))];
+    const removedConcepts = [...new Set(links.filter((l) => l.role !== 'teaches').map((l) => l.conceptId))];
+    await markBankStale(tx, removedConcepts, BankStaleReason.resource_removed);
+    await markBankStale(tx, primaryConcepts, BankStaleReason.primary_changed);
+
     const { count: conceptLinksRemoved } = await tx.conceptResource.deleteMany({
       where: { resourceId: { in: ids } },
     });

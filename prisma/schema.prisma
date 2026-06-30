@@ -581,6 +581,9 @@ model ConceptPrereq {
 // `coverageScore` ranks candidates so the Track builder picks a `primary` greedily
 // and freezes the rest as `alternate` LessonResources. The resourceId index backs
 // the 2.5f reject-pipeline reach-in (find concepts depending on a deprecated row).
+// ⚠️ Phase 2.5i: adding/removing rows here can stale a reviewed Concept's question
+// bank — consider calling markBankStale (src/lib/agents/content/mark-bank-stale.ts);
+// see the call-site note there for which mutations flag and why.
 model ConceptResource {
   id            String              @id @default(cuid())
   conceptId     String

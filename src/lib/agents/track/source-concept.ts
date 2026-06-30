@@ -16,7 +16,7 @@
 // embedding is written best-effort post-commit, so it would be invisible to a
 // semantic re-search in the same run. The insertedIds ARE the candidate set.
 
-import { Difficulty } from '@prisma/client';
+import { Difficulty, BankStaleReason } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { recomputeReadiness } from '@/lib/agents/map/recompute-readiness';
 import { judgeCandidates } from '@/lib/agents/map/candidate-judge';
@@ -24,6 +24,7 @@ import { selectAttachable, capCandidates } from '@/lib/agents/map/attach-candida
 import { MAP_MAX_CANDIDATES_PER_CONCEPT } from '@/lib/config';
 import { sourceForConcept } from '@/lib/agents/tools/web-fallback';
 import { generateOnRampResource } from '@/lib/agents/map/generate-onramp';
+import { markBankStale } from '@/lib/agents/content/mark-bank-stale';
 import type { SearchResult } from '@/lib/agents/tools/search-resources';
 
 export async function sourceAndAttachConcept(args: {
@@ -79,6 +80,13 @@ export async function sourceAndAttachConcept(args: {
       data: kept.map((k) => ({ conceptId, resourceId: k.resourceId, role: k.role, coverageScore: k.coverageScore })),
       skipDuplicates: true,
     });
+    // Phase 2.5i: if re-sourcing attached a new `teaches` candidate, the concept's
+    // primary material moved — flag a reviewed bank stale (no-op while building, since
+    // markBankStale only flags reviewed concepts; this fires when a live Path regressed
+    // and re-sources an already-reviewed concept).
+    if (kept.some((k) => k.role === 'teaches')) {
+      await markBankStale(tx, [conceptId], BankStaleReason.primary_changed);
+    }
     // Enforce the per-concept cap on the MERGED set so repeated remediation/thicken
     // passes can't accumulate unboundedly. capCandidates (NOT selectAttachable) so
     // we only count-bound — it drops just the lowest-coverage excess beyond the cap
@@ -95,8 +103,17 @@ export async function sourceAndAttachConcept(args: {
     });
     if (links.length > MAP_MAX_CANDIDATES_PER_CONCEPT) {
       const keepIds = new Set(capCandidates(links).map((l) => l.id));
-      const dropIds = links.filter((l) => !keepIds.has(l.id)).map((l) => l.id);
-      if (dropIds.length > 0) await tx.conceptResource.deleteMany({ where: { id: { in: dropIds } } });
+      const dropped = links.filter((l) => !keepIds.has(l.id));
+      if (dropped.length > 0) {
+        await tx.conceptResource.deleteMany({ where: { id: { in: dropped.map((l) => l.id) } } });
+        // Phase 2.5i: removed candidates may have grounded a question. capCandidates
+        // retains the best primary, so drops are normally non-`teaches`; flag primary
+        // only if a `teaches` link was actually pruned.
+        const reason = dropped.some((l) => l.role === 'teaches')
+          ? BankStaleReason.primary_changed
+          : BankStaleReason.resource_removed;
+        await markBankStale(tx, [conceptId], reason);
+      }
     }
     await recomputeReadiness(pathId, tx);
   });
