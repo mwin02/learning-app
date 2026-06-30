@@ -244,16 +244,29 @@ export const TRUST_SELECTION_WEIGHT = 0.3;
 // strict regime (orientation should be short), every other concept a softer one that
 // only bites genuine whole-course over-length.
 //
-// Curve per regime: factor = 1 up to `targetMin`, then linear decay to `floor` over
-// the next `spanMin` minutes, flat at `floor` beyond. Rows with no durationMin (the
-// persisted DB re-cap path) get factor 1 — unchanged, like trust-less rows.
+// Curve per regime (two-sided): factor = `shortFloor` at ~0 min, ramping up to 1 by
+// `shortTargetMin` (too-THIN penalty); flat at 1 across the healthy band
+// [shortTargetMin, targetMin]; then linear decay to `floor` over the next `spanMin`
+// minutes, flat at `floor` beyond (too-LONG penalty). `shortTargetMin: 0` disables the
+// short end. Rows with no durationMin (the persisted DB re-cap path) get factor 1 —
+// unchanged, like trust-less rows.
+//
+// The too-thin end (added as the symmetric complement to the long end) mirrors the
+// over-breadth logic: a resource far SHORTER than a concept warrants (a ~1-min YouTube
+// Short) can't deliver it, so it's demoted in ordering — never filtered — so a
+// better-scoped alternative outranks it when one exists, and it still survives as the
+// lone candidate when it doesn't. This is the candidate-ORDERING complement to the
+// hard primary floor in build-track (TRACK_MIN_PRIMARY_DURATION_MIN): ordering reduces
+// how often a thin clip reaches the composer as a top candidate; the build-track floor
+// is the deterministic guarantee on the chosen primary.
 export const MAP_DURATION_RANKING = {
-  // Orientation/on-ramp: a beginner primer should be short; a 2h course is the wrong
-  // shape even if excellent. Strict — full discount (0.25) by ~80 min.
-  onRamp: { targetMin: 20, spanMin: 60, floor: 0.25 },
-  // Every other concept: only penalize genuine over-breadth. A normal 30–60 min
-  // lesson is unpenalized; a 3h chapter/course page reaches the 0.6 floor by ~180 min.
-  default: { targetMin: 60, spanMin: 120, floor: 0.6 },
+  // Orientation/on-ramp: a beginner primer SHOULD be short, so no too-thin penalty
+  // (shortTargetMin 0). Strict on the long end — full discount (0.25) by ~80 min.
+  onRamp: { shortTargetMin: 0, shortFloor: 1, targetMin: 20, spanMin: 60, floor: 0.25 },
+  // Every other concept: a sub-5-min resource is too thin to be a concept's teacher
+  // (ramps from 0.5 at ~0 up to 1 by 5 min); a normal 30–60 min lesson is unpenalized;
+  // a 3h chapter/course page reaches the 0.6 floor by ~180 min.
+  default: { shortTargetMin: 5, shortFloor: 0.5, targetMin: 60, spanMin: 120, floor: 0.6 },
 } as const;
 
 // Track-build primary duration floor: a resource shorter than this (in minutes)
