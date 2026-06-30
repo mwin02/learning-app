@@ -15,6 +15,7 @@
 
 import { prisma } from '@/lib/db';
 import { safeEmbedResource } from '@/lib/ai/embeddings';
+import { safeClassifyAndPersist } from '@/lib/curation/embeddability';
 import { computeTrustScore } from '@/lib/curation/trust-score';
 import { youtubeEngagementSignal } from '@/lib/curation/youtube-signal';
 import type { PrismaClient, ResourceType, Difficulty, DecompositionStatus, ResourceStatus } from '@prisma/client';
@@ -49,8 +50,9 @@ type TxClient = Omit<
   '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'
 >;
 
-// Rows queued for embed-on-insert once the transaction commits.
-type EmbedTask = { id: string; title: string; summary: string; conceptsTaught: string[] };
+// Rows queued for post-commit per-resource work (embed + 2.5j embeddability probe)
+// once the transaction commits. `url` feeds the embeddability classifier.
+type EmbedTask = { id: string; url: string; title: string; summary: string; conceptsTaught: string[] };
 
 export async function upsertResource(
   topic: string,
@@ -121,6 +123,7 @@ export async function upsertResource(
       if (decomposition.status === 'atomic') {
         embedTasks.push({
           id: parent.id,
+          url: resource.url,
           title: resource.title,
           summary: resource.summary,
           conceptsTaught: resource.conceptsTaught,
@@ -152,13 +155,16 @@ export async function upsertResource(
 
   // Best-effort embeds, post-commit: a failure logs but leaves the row in place
   // for the next backfill (embeddedAt < updatedAt). embedTasks are exactly the
-  // atomic (pickable) ids created above.
+  // atomic (pickable) ids created above. Phase 2.5j: classify embeddability over
+  // the same pickable set (only resources that reach a Lesson need a deliveryMode);
+  // also best-effort, retried by the backfill on `embedCheckedAt IS NULL`.
   for (const t of embedTasks) {
     await safeEmbedResource(t.id, {
       title: t.title,
       summary: t.summary,
       conceptsTaught: t.conceptsTaught,
     });
+    await safeClassifyAndPersist(t.id, t.url);
   }
 
   return { outcome: 'inserted', atomicIds: embedTasks.map((t) => t.id) };
@@ -178,6 +184,7 @@ export async function decomposeExisting(
   const existing = await prisma.resource.findUnique({
     where: { id: resourceId },
     select: {
+      url: true,
       topic: true,
       sourceId: true,
       trustScore: true,
@@ -204,6 +211,7 @@ export async function decomposeExisting(
     if (decomposition.status === 'atomic') {
       embedTasks.push({
         id: resourceId,
+        url: existing.url,
         title: existing.title,
         summary: existing.summary,
         conceptsTaught: existing.conceptsTaught,
@@ -237,6 +245,7 @@ export async function decomposeExisting(
 
   for (const t of embedTasks) {
     await safeEmbedResource(t.id, { title: t.title, summary: t.summary, conceptsTaught: t.conceptsTaught });
+    await safeClassifyAndPersist(t.id, t.url);
   }
 
   return { status: decomposition.status, childrenCreated };
@@ -265,7 +274,7 @@ export async function markAtomic(resourceId: string): Promise<{ applied: boolean
 
   const row = await prisma.resource.findUnique({
     where: { id: resourceId },
-    select: { title: true, summary: true, conceptsTaught: true },
+    select: { url: true, title: true, summary: true, conceptsTaught: true },
   });
   if (row) {
     await safeEmbedResource(resourceId, {
@@ -273,6 +282,7 @@ export async function markAtomic(resourceId: string): Promise<{ applied: boolean
       summary: row.summary,
       conceptsTaught: row.conceptsTaught,
     });
+    await safeClassifyAndPersist(resourceId, row.url);
   }
   return { applied: true };
 }
@@ -352,6 +362,7 @@ async function createChild(
   if (decompStatus === 'atomic') {
     embedTasks.push({
       id: created.id,
+      url: child.url,
       title: child.title,
       summary: child.summary,
       conceptsTaught: child.conceptsTaught,

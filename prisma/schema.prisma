@@ -72,6 +72,16 @@ model Resource {
   // migration SQL (Prisma can't express it). See ROADMAP Phase 2.5-AR.
   embedding            Unsupported("vector(768)")?
   embeddedAt           DateTime?
+  // Phase 2.5j: cached frame-embeddability of `url`, classified once and amortized
+  // across every Track built off this resource (it's a property of the URL/host,
+  // not the per-Track context). `null` = never probed; the Track builder treats
+  // null as not-embeddable (newtab) and the backfill targets `embedCheckedAt IS
+  // NULL`. Set true via the YouTube allowlist (no network call) or a clean HEAD
+  // header probe (no blocking X-Frame-Options / CSP frame-ancestors); false when a
+  // blocking header is present. An inconclusive probe (network error/timeout)
+  // leaves BOTH columns null so a later run retries. See lib/curation/embeddability.ts.
+  embeddable           Boolean?
+  embedCheckedAt       DateTime?
   lessonResources      LessonResource[]
   conceptResources     ConceptResource[]
   createdAt            DateTime       @default(now())

@@ -16,8 +16,9 @@
 // diagnostics) without touching anything else — a later build replaces it. The
 // lesson writes run in a single transaction so a failure never leaves a half-Track.
 //
-// deliveryMode is hardcoded `newtab` (the safe default: open in a new tab + mark
-// complete) until the 2.5i classifier backfills per-resource embed/native modes.
+// deliveryMode (2.5j) is derived per-resource from the cached `Resource.embeddable`
+// flag: embeddable → `embed`, otherwise the safe `newtab` default (open in a new
+// tab + mark complete). Un-probed (null) resources fall through to newtab.
 //
 // Synchronous today; structured to move async later (see thicken-seam.ts).
 
@@ -224,6 +225,25 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
     const cleaned = cleanupLessons({ lessons: allocation.kept, roleById });
     warnings.push(...cleaned.warnings);
 
+    // --- delivery mode: freeze each resource's cached embeddability ---------
+    // Phase 2.5j: `deliveryMode` is per-LessonResource but DERIVED from the
+    // resource's URL-level `embeddable` flag (the 2.5j classifier caches it on
+    // Resource; null = un-probed). Snapshot it into the immutable Track here:
+    // embeddable → `embed` (ResourcePane frames it), everything else → the safe
+    // `newtab` default. One bulk read keyed by the resource ids about to persist.
+    const usedResourceIds = new Set(
+      cleaned.lessons.flatMap((l) => [...l.primaries, ...l.alternates].map((c) => c.resourceId)),
+    );
+    const embeddableById = new Map<string, boolean>();
+    for (const r of await prisma.resource.findMany({
+      where: { id: { in: [...usedResourceIds] } },
+      select: { id: true, embeddable: true },
+    })) {
+      embeddableById.set(r.id, r.embeddable === true);
+    }
+    const deliveryModeFor = (resourceId: string) =>
+      embeddableById.get(resourceId) ? DeliveryMode.embed : DeliveryMode.newtab;
+
     // --- persist + freeze (one transaction) --------------------------------
     await prisma.$transaction(async (tx) => {
       for (let i = 0; i < cleaned.lessons.length; i++) {
@@ -253,14 +273,14 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
               lessonId: lesson.id,
               resourceId: p.resourceId,
               role: LessonResourceRole.primary,
-              deliveryMode: DeliveryMode.newtab,
+              deliveryMode: deliveryModeFor(p.resourceId),
               orderInLesson: ++order,
             })),
             ...a.alternates.map((alt) => ({
               lessonId: lesson.id,
               resourceId: alt.resourceId,
               role: LessonResourceRole.alternate,
-              deliveryMode: DeliveryMode.newtab,
+              deliveryMode: deliveryModeFor(alt.resourceId),
               orderInLesson: ++order,
             })),
           ],
