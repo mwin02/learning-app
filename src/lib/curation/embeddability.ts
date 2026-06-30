@@ -67,6 +67,13 @@ async function probeFrameHeaders(url: string): Promise<boolean | null> {
       signal: ctl.signal,
       headers: { 'User-Agent': UA, Accept: '*/*' },
     });
+    // HEAD is advisory: many servers mishandle it (403/405/500) on URLs that GET
+    // happily (see validators/liveness.ts). An error response's headers aren't the
+    // real document's headers — a site that blocks framing on GET may omit
+    // X-Frame-Options on a 405 HEAD, which would wrongly cache `embeddable` and
+    // leave a permanent blank frame. Treat any non-2xx as inconclusive (null) so a
+    // later run retries and the builder falls back to the safe newtab default.
+    if (!res.ok) return null;
     return !frameHeadersBlock(res.headers);
   } catch {
     return null;
