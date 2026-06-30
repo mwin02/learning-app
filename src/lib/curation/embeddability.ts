@@ -99,16 +99,51 @@ function frameHeadersBlock(headers: Headers): boolean {
 // Classify one resource and persist the result. Best-effort: never throws, so a
 // caller in a post-commit loop can fire-and-await it without guarding. An
 // inconclusive probe (null) leaves both columns null so a later backfill retries;
-// a conclusive result stamps `embedCheckedAt`.
-export async function safeClassifyAndPersist(resourceId: string, url: string): Promise<void> {
+// a conclusive result stamps `embedCheckedAt`. Returns the result so batch callers
+// can tally it without re-reading.
+export async function safeClassifyAndPersist(resourceId: string, url: string): Promise<boolean | null> {
   try {
     const embeddable = await classifyEmbeddability(url);
-    if (embeddable === null) return;
+    if (embeddable === null) return null;
     await prisma.resource.update({
       where: { id: resourceId },
       data: { embeddable, embedCheckedAt: new Date() },
     });
+    return embeddable;
   } catch (err) {
     console.log('[embeddability] classify failed', { resourceId, url, error: (err as Error).message });
+    return null;
   }
+}
+
+export type BackfillEmbeddabilityResult = { embed: number; newtab: number; inconclusive: number };
+
+// One-shot backfill of `embeddable` for the existing library (Phase 2.5j-2). Probes
+// every un-probed PICKABLE resource — atomic leaves are the only rows that reach a
+// Lesson (containers never do), and generated resources render inline so their
+// deliveryMode is moot (and their `generated://` URL would probe inconclusive every
+// run). Idempotent: targets `embedCheckedAt IS NULL`, so a re-run only retouches
+// rows that stayed inconclusive. Bounded concurrency keeps the outbound HEAD fan-out
+// polite. Mirrors embed-resources.ts → embedMissing() so the script stays thin.
+export async function backfillEmbeddability(concurrency = 8): Promise<BackfillEmbeddabilityResult> {
+  const rows = await prisma.resource.findMany({
+    where: {
+      embedCheckedAt: null,
+      decompositionStatus: 'atomic',
+      origin: { not: 'generated' },
+    },
+    select: { id: true, url: true },
+  });
+
+  const result: BackfillEmbeddabilityResult = { embed: 0, newtab: 0, inconclusive: 0 };
+  for (let i = 0; i < rows.length; i += concurrency) {
+    const batch = rows.slice(i, i + concurrency);
+    const outcomes = await Promise.all(batch.map((r) => safeClassifyAndPersist(r.id, r.url)));
+    for (const o of outcomes) {
+      if (o === true) result.embed++;
+      else if (o === false) result.newtab++;
+      else result.inconclusive++;
+    }
+  }
+  return result;
 }
