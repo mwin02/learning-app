@@ -38,7 +38,10 @@ export const GET = withAdminAuth(async (req) => {
 
   const concepts = await prisma.concept.findMany({
     where: {
-      ...(includeReviewed ? {} : { bankReviewed: false }),
+      // The worklist: never-reviewed banks (bankReviewed=false) PLUS reviewed banks
+      // whose grounding resources have since changed (bankStaleReason set, Phase 2.5i).
+      // ?includeReviewed=1 drops the filter to show settled banks too.
+      ...(includeReviewed ? {} : { OR: [{ bankReviewed: false }, { bankStaleReason: { not: null } }] }),
       ...(pathId ? { pathId } : {}),
     },
     // Oldest first — the operator works the backlog front-to-back.
@@ -51,6 +54,7 @@ export const GET = withAdminAuth(async (req) => {
       membership: true,
       isOnRamp: true,
       bankReviewed: true,
+      bankStaleReason: true,
       createdAt: true,
       pathId: true,
       path: { select: { topic: true } },
@@ -79,6 +83,12 @@ export const GET = withAdminAuth(async (req) => {
     membership: c.membership,
     isOnRamp: c.isOnRamp,
     bankReviewed: c.bankReviewed,
+    bankStaleReason: c.bankStaleReason,
+    // Why this concept is on the worklist, for operator triage. A reviewed-but-stale
+    // bank surfaces its change kind ('primary_changed' ranks above 'resource_removed');
+    // an unreviewed bank is just 'unreviewed'. (A stale flag only ever exists on a
+    // reviewed concept, so stale wins when both could apply.)
+    reason: c.bankStaleReason ?? (c.bankReviewed ? 'reviewed' : 'unreviewed'),
     createdAt: c.createdAt,
     questionCount: c.questions.length,
     questions: c.questions,
@@ -121,10 +131,17 @@ export const PATCH = withAdminAuth(async (req) => {
   const existing = await prisma.concept.findUnique({ where: { id: input.conceptId }, select: { id: true } });
   if (!existing) return errorResponse(404, 'NOT_FOUND', `No Concept '${input.conceptId}'.`);
 
+  // Re-marking the bank (reviewed OR re-opened) is the operator's fresh decision, so
+  // always clear any stale flag (Phase 2.5i) — the concept leaves the worklist on
+  // review, or rejoins it as a plain unreviewed entry on re-open.
   const updated = await prisma.concept.update({
     where: { id: input.conceptId },
-    data: { bankReviewed: input.bankReviewed },
-    select: { id: true, bankReviewed: true },
+    data: { bankReviewed: input.bankReviewed, bankStaleReason: null },
+    select: { id: true, bankReviewed: true, bankStaleReason: true },
   });
-  return Response.json({ conceptId: updated.id, bankReviewed: updated.bankReviewed });
+  return Response.json({
+    conceptId: updated.id,
+    bankReviewed: updated.bankReviewed,
+    bankStaleReason: updated.bankStaleReason,
+  });
 });

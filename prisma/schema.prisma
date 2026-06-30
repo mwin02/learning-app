@@ -517,6 +517,15 @@ model Concept {
   // it's an explicit review flag, deliberately decoupled from `origin`/question count
   // so "I checked this" is distinct from "a human-authored question exists".
   bankReviewed Boolean          @default(false)
+  // Phase 2.5i: non-null marks a *reviewed* bank whose grounding resources have since
+  // changed, so it rejoins the discovery worklist (route.ts) for manual re-curation —
+  // the existing questions are left untouched; an operator edits them by hand and
+  // clears this by re-marking the bank reviewed. Set ONLY for already-reviewed concepts
+  // (bankReviewed=true) by markBankStale (mark-bank-stale.ts); unreviewed concepts are
+  // already on the worklist. The value is the change kind, for triage. ⚠️ Any code that
+  // adds/removes this concept's ConceptResource rows should consider calling
+  // markBankStale — see the note in mark-bank-stale.ts.
+  bankStaleReason BankStaleReason?
   // Prereq edges in both directions: `prereqsOut` are edges where this concept
   // is the prerequisite; `prereqsIn` are edges where it is the dependent.
   prereqsOut ConceptPrereq[]   @relation("PrereqFrom")
@@ -533,6 +542,17 @@ model Concept {
 enum ConceptMembership {
   spine
   frontier
+}
+
+// Phase 2.5i — why a reviewed Concept's question bank went stale (its grounding
+// resources changed). Drives triage on the discovery worklist: `primary_changed`
+// (a `teaches`-role candidate attached/removed — the main material shifted) ranks
+// above `resource_removed` (a non-`teaches` candidate removed). Narrowed on purpose:
+// attaching a non-`teaches` (supplementary) candidate does NOT flag, since it can't
+// invalidate an existing question. See markBankStale in mark-bank-stale.ts.
+enum BankStaleReason {
+  primary_changed
+  resource_removed
 }
 
 // Phase 2.5c — a directed prerequisite edge within one Path's concept DAG.
