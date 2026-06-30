@@ -17,6 +17,7 @@ import { prisma } from '@/lib/db';
 import { withAdminAuth } from '@/lib/api/with-admin-auth';
 import { mapEditSchema, type MapEditInput } from '@/lib/api/map-edit-schema';
 import { wouldCreateCycle } from '@/lib/agents/map/cycle';
+import { markBankStale, staleReasonFor } from '@/lib/agents/content/mark-bank-stale';
 import {
   recomputeReadiness,
   frontierGatedSpine,
@@ -232,28 +233,44 @@ async function applyEdit(input: MapEditInput): Promise<EditSuccess | { error: Re
         };
       }
       // Duplicate link → P2002 → 409 (mapped in the outer catch).
-      const { status, holes } = await mutateAndRecompute(concept.pathId, (tx) =>
-        tx.conceptResource.create({
+      const { status, holes } = await mutateAndRecompute(concept.pathId, async (tx) => {
+        const created = await tx.conceptResource.create({
           data: {
             conceptId: input.conceptId,
             resourceId: input.resourceId,
             role: input.role,
             coverageScore: input.coverageScore,
           },
-        }),
-      );
+        });
+        // Phase 2.5i: a new `teaches` candidate shifts the concept's primary material,
+        // so a reviewed bank goes stale; a non-`teaches` add does not flag.
+        const reason = staleReasonFor({ change: 'added', role: input.role });
+        if (reason) await markBankStale(tx, [input.conceptId], reason);
+        return created;
+      });
       return { pathId: concept.pathId, status, holes };
     }
 
     case 'detach_resource': {
       const concept = await loadConcept(input.conceptId);
       if (!concept) return { error: notFoundConcept(input.conceptId) };
-      const { status, holes } = await mutateAndRecompute(concept.pathId, (tx) =>
+      const { status, holes } = await mutateAndRecompute(concept.pathId, async (tx) => {
+        // Read the link's role before deleting — it decides the staleness reason.
+        const link = await tx.conceptResource.findUnique({
+          where: { conceptId_resourceId: { conceptId: input.conceptId, resourceId: input.resourceId } },
+          select: { role: true },
+        });
         // Idempotent, like remove_prereq: a missing link is a no-op.
-        tx.conceptResource.deleteMany({
+        const deleted = await tx.conceptResource.deleteMany({
           where: { conceptId: input.conceptId, resourceId: input.resourceId },
-        }),
-      );
+        });
+        // Phase 2.5i: any removal can strand a question that was grounded in the
+        // resource, so a reviewed bank goes stale (primary if it was the `teaches`).
+        if (link) {
+          await markBankStale(tx, [input.conceptId], staleReasonFor({ change: 'removed', role: link.role })!);
+        }
+        return deleted;
+      });
       return { pathId: concept.pathId, status, holes };
     }
 
