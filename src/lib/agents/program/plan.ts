@@ -24,6 +24,8 @@ import { z } from 'zod';
 import { PriorityTier } from '@prisma/client';
 import { getModel } from '@/lib/ai/models';
 import { validateTopic, type TopicGateResult } from '@/lib/agents/topic-gate';
+import { listCanonicals } from '@/lib/agents/topic-registry';
+import { TOPIC_SLUGS } from '@/types/resource';
 import { MAX_PROGRAM_TOPICS } from '@/lib/config';
 import {
   allocateProgramBudget,
@@ -73,6 +75,16 @@ function systemPrompt(maxTopics: number): string {
     '"python", "probability", "pytorch"). Do NOT emit multi-subject bundles or vague',
     'meta-goals ("get good at ML") — those are the whole program, not a topic.',
     '',
+    'GRANULARITY & REUSE — this is important:',
+    '  - You will be given a list of topics ALREADY IN THE LIBRARY. Strongly PREFER',
+    '    reusing an existing topic over inventing a new one; only propose a new topic for',
+    '    a genuine gap the library does not already cover.',
+    '  - Keep every topic at WHOLE-SUBJECT granularity. NEVER split an existing topic into',
+    '    its sub-parts. If "calculus" exists, do NOT propose "differentiation" or',
+    '    "integration" as separate topics — propose "calculus" and state the intended',
+    '    sub-focus in its rationale. A narrower need within a topic is a SCOPE of that',
+    '    topic, not a new topic.',
+    '',
     'For each topic provide:',
     '  - topic: a short canonical name (lowercase subject, no course fluff).',
     '  - weight: a positive number for how much of the weekly study budget it deserves,',
@@ -91,8 +103,35 @@ function systemPrompt(maxTopics: number): string {
   ].join('\n');
 }
 
-// Stage 1 — the LLM decomposition. Impure (one generateObject call); the model is
-// injectable so planProgram can be exercised without Vertex.
+// The library topics the decomposer is grounded on: curated launch slugs + every
+// canonical minted so far, deduped + sorted. Prefers reuse over minting near-dupes,
+// exactly as the topic gate grounds its tier-3 classification. (Same unbounded-growth
+// caveat as the gate's listCanonicals dump — see ROADMAP 2.75 open items.)
+async function listLibraryTopics(): Promise<string[]> {
+  const canonicals = await listCanonicals();
+  return [...new Set([...TOPIC_SLUGS, ...canonicals])].sort();
+}
+
+// Pure prompt builder — kept separate so the grounding (existing topics + anti-list)
+// is fixture-testable without an LLM.
+export function buildDecomposePrompt(input: ProgramPlanInput, existingTopics: string[]): string {
+  const anti = (input.antiList ?? []).filter((s) => s.trim().length > 0);
+  return [
+    `GOAL: ${JSON.stringify(input.goal)}`,
+    `BACKGROUND: ${JSON.stringify(input.background ?? '(none given)')}`,
+    `WEEKLY BUDGET: ${input.totalHoursPerWeek} hours/week for ${input.totalWeeks} weeks`,
+    existingTopics.length > 0
+      ? `TOPICS ALREADY IN THE LIBRARY (prefer these; never split them into sub-parts): ${existingTopics.join(', ')}`
+      : 'TOPICS ALREADY IN THE LIBRARY: (none yet)',
+    anti.length > 0
+      ? `EXCLUDE these topics entirely (do not include them or close variants): ${anti.join(', ')}`
+      : 'EXCLUDE: (nothing)',
+  ].join('\n');
+}
+
+// Stage 1 — the LLM decomposition. Impure (a DB read for library topics + one
+// generateObject call); the model + the library-topics fetch are injectable so
+// planProgram can be exercised without Vertex or a DB.
 //
 // Retried once: Gemini structured output occasionally returns unparseable/truncated
 // JSON (`No object generated`), a transient hiccup that must not sink the whole plan
@@ -101,18 +140,11 @@ function systemPrompt(maxTopics: number): string {
 // (enqueueProgram records it as Program.failed).
 export async function decomposeProgram(
   input: ProgramPlanInput,
-  opts: { model?: ReturnType<typeof getModel> } = {},
+  opts: { model?: ReturnType<typeof getModel>; listTopics?: () => Promise<string[]> } = {},
 ): Promise<ProposedTopic[]> {
   const { model, temperature, maxOutputTokens } = opts.model ?? getModel('programPlanner');
-  const anti = (input.antiList ?? []).filter((s) => s.trim().length > 0);
-  const prompt = [
-    `GOAL: ${JSON.stringify(input.goal)}`,
-    `BACKGROUND: ${JSON.stringify(input.background ?? '(none given)')}`,
-    `WEEKLY BUDGET: ${input.totalHoursPerWeek} hours/week for ${input.totalWeeks} weeks`,
-    anti.length > 0
-      ? `EXCLUDE these topics entirely (do not include them or close variants): ${anti.join(', ')}`
-      : 'EXCLUDE: (nothing)',
-  ].join('\n');
+  const existingTopics = await (opts.listTopics ?? listLibraryTopics)();
+  const prompt = buildDecomposePrompt(input, existingTopics);
 
   let lastErr: unknown;
   for (let attempt = 1; attempt <= 2; attempt++) {
@@ -128,7 +160,9 @@ export async function decomposeProgram(
       console.log('[program-plan] decompose', {
         attempt,
         goalLen: input.goal.length,
+        groundedOn: existingTopics.length,
         proposed: result.object.topics.length,
+        proposedTopics: result.object.topics.map((t) => t.topic),
         usage: result.usage,
       });
       return result.object.topics;
