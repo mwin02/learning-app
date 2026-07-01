@@ -244,9 +244,14 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
   topicGate: {
     // One-shot subject-domain classifier ({math, science, cs} or reject).
     // Cheap, deterministic; runs at the HTTP boundary for off-library topics.
+    // The verdict object itself is tiny, but Flash 2.5 spends output tokens on
+    // internal thinking FIRST — a 512 ceiling could cap mid-object before the
+    // JSON is emitted (NoObjectGeneratedError → an unhandled throw that 500s a
+    // standalone /api/generate-path). 2048 leaves ample thinking headroom for a
+    // one-shot classification while staying far cheaper than the decomposer tier.
     modelId: 'gemini-2.5-flash',
     temperature: 0,
-    maxOutputTokens: 512,
+    maxOutputTokens: 2048,
   },
   programPlanner: {
     // Phase 2.75b: the program plan pass — decomposes a goal into ≤N single-topic

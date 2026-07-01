@@ -101,17 +101,39 @@ export async function validateTopic(
   const canonicals = await listCanonicals();
   onTrace({ kind: 'tool', label: 'registry: listCanonicals', detail: { count: canonicals.length } });
   const { model, temperature, maxOutputTokens } = getModel('topicGate');
-  const result = await generateObject({
-    model,
-    temperature,
-    maxOutputTokens,
-    schema: VerdictSchema,
-    system: SYSTEM_PROMPT,
-    prompt: [
-      `Canonical slugs already in use: ${canonicals.length > 0 ? canonicals.join(', ') : '(none yet)'}`,
-      `Topic: ${JSON.stringify(normalized)}`,
-    ].join('\n'),
-  });
+
+  // Retried once: Gemini structured output occasionally returns unparseable/truncated
+  // JSON (`No object generated`), a transient hiccup that must not hard-fail the caller —
+  // a single flaky response would otherwise 500 a standalone /api/generate-path request.
+  // One cheap retry buys a materially lower spurious-failure rate; a second failure
+  // propagates to the caller as before. (Mirrors decomposeProgram's retry shape.)
+  const prompt = [
+    `Canonical slugs already in use: ${canonicals.length > 0 ? canonicals.join(', ') : '(none yet)'}`,
+    `Topic: ${JSON.stringify(normalized)}`,
+  ].join('\n');
+  let result: Awaited<ReturnType<typeof generateObject<typeof VerdictSchema>>> | undefined;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      result = await generateObject({
+        model,
+        temperature,
+        maxOutputTokens,
+        schema: VerdictSchema,
+        system: SYSTEM_PROMPT,
+        prompt,
+      });
+      break;
+    } catch (err) {
+      lastErr = err;
+      console.warn('[topic-gate] classifier attempt failed', {
+        attempt,
+        topic: normalized,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  if (!result) throw lastErr;
 
   console.log('[topic-gate] call', { topic: normalized, usage: result.usage, verdict: result.object });
 
