@@ -213,6 +213,7 @@ model User {
   enrollments   EnrolledPath[]
   progress      Progress[]
   courseRequests CourseRequest[]
+  programs      Program[]
 }
 
 // Scaffold only — Phase 3 (Stripe) will extend with stripeCustomerId,
@@ -353,6 +354,7 @@ model Track {
   sections    Section[]
   enrollments EnrolledPath[]
   courseRequests CourseRequest[]
+  programPaths ProgramPath[]
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
 
@@ -703,6 +705,14 @@ model CourseRequest {
   // Path.createdById); SetNull keeps the request if the User is later removed.
   userId         String?
   user           User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
+  // Phase 2.75a: set when this request is a child of a Program's plan pass (null
+  // for a standalone /generate-path request). The per-topic build path is
+  // unchanged; the worker's post-fulfill assembler hook keys on this to finalize
+  // the Program once all siblings are terminal. Cascade: deleting a Program kills
+  // its orphan child-builds (unlike userId, the Program is the reason the request
+  // exists), and the @@index serves the "all siblings for this programId" query.
+  programId      String?
+  program        Program?            @relation(fields: [programId], references: [id], onDelete: Cascade)
   priorKnowledge String?
   goal           String?
   timeframeWeeks Int?
@@ -723,6 +733,8 @@ model CourseRequest {
 
   // Serves the claim query: status='queued' ORDER BY createdAt asc.
   @@index([status, createdAt])
+  // Phase 2.75a: serves the assembler's "all siblings for this programId" scan.
+  @@index([programId])
 }
 
 enum CourseRequestStatus {
@@ -730,4 +742,90 @@ enum CourseRequestStatus {
   running
   fulfilled
   failed
+}
+
+// Phase 2.75a: a goal-driven, multi-topic plan — the headline differentiator ("a
+// plan that gets you to your goal", not "a course"). A Program owns N single-topic
+// Tracks via ProgramPath. It rides the EXISTING CourseRequest queue: a synchronous
+// plan pass (the program agent, 2.75b) decomposes the goal into gated topics +
+// budgets + order, enqueueProgram (2.75c) fans those out as child CourseRequests
+// (programId set), and the worker's post-fulfill assembler finalizes the Program
+// when all children are terminal. The per-topic build path is unchanged.
+model Program {
+  id                String          @id @default(cuid())
+  // The learner's free-text goal ("ready for NUS Sem 1 CS AI by Aug 2026").
+  goal              String
+  // Program-level analog of a Track's priorKnowledge; nullable like it.
+  background        String?
+  // Total weekly budget + horizon. NOT NULL (unlike Track's inert inputs): the
+  // deterministic budget split is meaningless without them and this is greenfield.
+  // v1 (parallel builds): every child Track spans totalWeeks; totalHoursPerWeek is
+  // split across topics by LLM weight (floor 1 h/wk).
+  totalHoursPerWeek Int
+  totalWeeks        Int
+  // Decomposition prompt constraint (topic-level exclusion), NOT a resource filter.
+  // Stored for audit + re-run reproducibility.
+  antiList          String[]        @default([])
+  // planning → building → ready | partial | failed. `planning` is the pre-plan
+  // anchor enqueueProgram writes before the fallible plan pass, so a failed plan
+  // leaves an auditable row; `partial` = some child Tracks built, some failed.
+  status            ProgramStatus   @default(planning)
+  // Failure diagnostic when status=failed (plan pass produced nothing or threw).
+  // Mirrors CourseRequest.error / RemediationJob.error.
+  error             String?
+  // Null until Phase 3 auth wires a real session (mirrors CourseRequest.userId).
+  // SetNull keeps the Program if the User is later removed.
+  userId            String?
+  user              User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  programPaths      ProgramPath[]
+  courseRequests    CourseRequest[]
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+}
+
+// Phase 2.75a: the Program ↔ Track join, carrying the plan pass's presentation
+// metadata (phase grouping, cross-program order, priority tier). Design B: rows are
+// created at PLAN time (so the plan is DB-inspectable the instant the synchronous
+// pass returns, before any build finishes) keyed by canonical `topic`; the worker's
+// assembler fills in `trackId` once the child build fulfills. A null `trackId`
+// therefore means "planned but not yet built" — or, in a `partial` Program, a topic
+// whose build failed (its plan slot stays visible).
+model ProgramPath {
+  id             String       @id @default(cuid())
+  programId      String
+  program        Program      @relation(fields: [programId], references: [id], onDelete: Cascade)
+  // Canonical topic slug (post topic-gate) — the correlation key the assembler uses
+  // to match a fulfilled child CourseRequest (same programId + topic) to its slot.
+  topic          String
+  // Nullable until assembly; SetNull (not Cascade) so deleting an immutable Track in
+  // cleanup leaves the plan slot intact, consistent with CourseRequest.trackId.
+  trackId        String?
+  track          Track?       @relation(fields: [trackId], references: [id], onDelete: SetNull)
+  // Presentation grouping ("Month 1: math + PyTorch") and cross-program order,
+  // LLM-inferred at plan time. v1 is presentation-only — child Tracks build in
+  // parallel; the order drives display, not the build.
+  phaseLabel     String
+  orderInProgram Int
+  priorityTier   PriorityTier
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  // One slot per canonical topic per Program (defensively enforces the plan pass's
+  // post-canonicalization topic dedup); stable, gap-free display order per Program.
+  @@unique([programId, topic])
+  @@unique([programId, orderInProgram])
+  @@index([trackId])
+}
+
+enum ProgramStatus {
+  planning
+  building
+  ready
+  partial
+  failed
+}
+
+enum PriorityTier {
+  core
+  nice_to_have
 }
