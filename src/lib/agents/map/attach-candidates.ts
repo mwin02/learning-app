@@ -25,19 +25,30 @@ import type { SearchResult } from '@/lib/agents/tools/search-resources';
 import type { AuthoredConcept } from '@/lib/agents/map/cycle';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 
-// Phase 2g-1: order-only duration penalty. A resource much longer than a single
-// concept warrants is over-broad for it; we demote (never drop) it so a better-scoped
-// alternative outranks it when one exists. Factor is 1 up to the regime's targetMin,
-// then decays linearly to `floor` over the next spanMin minutes, flat at `floor`
-// beyond. Rows with no durationMin (the persisted DB re-cap) get 1 — no penalty, like
-// trust-less rows. on-ramp concepts use the strict regime, every other concept the
-// soft default.
+// Phase 2g-1 + symmetric short end: order-only, two-sided duration penalty. A resource
+// much LONGER than a single concept warrants is over-broad; one much SHORTER (a ~1-min
+// Short) is too thin to teach it. Either way we demote (never drop) it so a better-
+// scoped alternative outranks it when one exists. The factor is 1 across the healthy
+// band [shortTargetMin, targetMin]; below shortTargetMin it ramps down toward
+// `shortFloor` at ~0 min; above targetMin it decays toward `floor` over the next
+// spanMin minutes (flat at `floor` beyond). Rows with no durationMin (the persisted DB
+// re-cap) get 1 — no penalty, like trust-less rows. On-ramp concepts use the strict
+// long regime with the short end disabled (orientation should be short); every other
+// concept the soft default with the sub-5-min thinness penalty.
 function durationFactor(durationMin: number | undefined, isOnRamp: boolean): number {
   if (durationMin == null) return 1;
   const r = isOnRamp ? MAP_DURATION_RANKING.onRamp : MAP_DURATION_RANKING.default;
-  if (durationMin <= r.targetMin) return 1;
-  const t = Math.min((durationMin - r.targetMin) / r.spanMin, 1);
-  return 1 - t * (1 - r.floor);
+  // Too long: decay past targetMin toward `floor` over spanMin.
+  if (durationMin > r.targetMin) {
+    const t = Math.min((durationMin - r.targetMin) / r.spanMin, 1);
+    return 1 - t * (1 - r.floor);
+  }
+  // Too thin: below shortTargetMin, ramp down toward `shortFloor` at ~0 min.
+  if (r.shortTargetMin > 0 && durationMin < r.shortTargetMin) {
+    const t = Math.min((r.shortTargetMin - durationMin) / r.shortTargetMin, 1);
+    return 1 - t * (1 - r.shortFloor);
+  }
+  return 1;
 }
 
 // Phase 2.5h + 2g-1: ranking score = coverage gated; trust + duration ordering.
