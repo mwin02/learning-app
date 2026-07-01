@@ -93,33 +93,54 @@ function systemPrompt(maxTopics: number): string {
 
 // Stage 1 — the LLM decomposition. Impure (one generateObject call); the model is
 // injectable so planProgram can be exercised without Vertex.
+//
+// Retried once: Gemini structured output occasionally returns unparseable/truncated
+// JSON (`No object generated`), a transient hiccup that must not sink the whole plan
+// pass — the plan is the synchronous, user-visible half, so one cheap retry buys a
+// materially lower spurious-failure rate. A second failure is surfaced to the caller
+// (enqueueProgram records it as Program.failed).
 export async function decomposeProgram(
   input: ProgramPlanInput,
   opts: { model?: ReturnType<typeof getModel> } = {},
 ): Promise<ProposedTopic[]> {
   const { model, temperature, maxOutputTokens } = opts.model ?? getModel('programPlanner');
   const anti = (input.antiList ?? []).filter((s) => s.trim().length > 0);
-  const result = await generateObject({
-    model,
-    temperature,
-    maxOutputTokens,
-    schema: DecompositionSchema,
-    system: systemPrompt(MAX_PROGRAM_TOPICS),
-    prompt: [
-      `GOAL: ${JSON.stringify(input.goal)}`,
-      `BACKGROUND: ${JSON.stringify(input.background ?? '(none given)')}`,
-      `WEEKLY BUDGET: ${input.totalHoursPerWeek} hours/week for ${input.totalWeeks} weeks`,
-      anti.length > 0
-        ? `EXCLUDE these topics entirely (do not include them or close variants): ${anti.join(', ')}`
-        : 'EXCLUDE: (nothing)',
-    ].join('\n'),
-  });
-  console.log('[program-plan] decompose', {
-    goalLen: input.goal.length,
-    proposed: result.object.topics.length,
-    usage: result.usage,
-  });
-  return result.object.topics;
+  const prompt = [
+    `GOAL: ${JSON.stringify(input.goal)}`,
+    `BACKGROUND: ${JSON.stringify(input.background ?? '(none given)')}`,
+    `WEEKLY BUDGET: ${input.totalHoursPerWeek} hours/week for ${input.totalWeeks} weeks`,
+    anti.length > 0
+      ? `EXCLUDE these topics entirely (do not include them or close variants): ${anti.join(', ')}`
+      : 'EXCLUDE: (nothing)',
+  ].join('\n');
+
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const result = await generateObject({
+        model,
+        temperature,
+        maxOutputTokens,
+        schema: DecompositionSchema,
+        system: systemPrompt(MAX_PROGRAM_TOPICS),
+        prompt,
+      });
+      console.log('[program-plan] decompose', {
+        attempt,
+        goalLen: input.goal.length,
+        proposed: result.object.topics.length,
+        usage: result.usage,
+      });
+      return result.object.topics;
+    } catch (err) {
+      lastErr = err;
+      console.warn('[program-plan] decompose attempt failed', {
+        attempt,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  throw lastErr;
 }
 
 type GateFn = (topic: string) => Promise<TopicGateResult>;
