@@ -128,6 +128,29 @@ async function main() {
     check('only python planned', plan.topics.length === 1 && plan.topics[0].key === 'python');
   }
 
+  console.log('planProgram — a gate THROW drops only that topic (after one retry), not the program');
+  {
+    let calls = 0;
+    // Throws on the first two calls (the topic + its retry), succeeds for others.
+    const flakyGate = async (topic: string): Promise<TopicGateResult> => {
+      if (topic === 'flaky') {
+        calls++;
+        throw new Error('No object generated');
+      }
+      return { valid: true, canonical: topic.toLowerCase(), subject: 'cs' };
+    };
+    const plan = await planProgram(
+      { goal: 'g', totalHoursPerWeek: 10, totalWeeks: 10 },
+      {
+        decompose: async () => [proposed({ topic: 'python', weight: 3 }), proposed({ topic: 'flaky', weight: 2 })],
+        gate: flakyGate,
+      },
+    );
+    check('gate retried the throwing topic once (2 calls)', calls === 2, calls);
+    check('flaky topic dropped by gate', plan.droppedByGate.some((d) => d.topic === 'flaky'));
+    check('program still formed from the survivor', plan.topics.length === 1 && plan.topics[0].key === 'python');
+  }
+
   console.log('planProgram — two labels → same canonical collapse (higher weight wins)');
   {
     const plan = await planProgram(
