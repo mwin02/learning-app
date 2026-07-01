@@ -19,6 +19,9 @@ export type EnqueueProgramResult = {
   programId: string;
   status: ProgramStatus;
   topicCount: number;
+  // Set only when status=failed — the persisted diagnostic, echoed to the caller so
+  // the route can 422 with a reason without a second DB read.
+  error?: string;
 };
 
 // Create Program(planning) → plan → fan out child requests + plan slots → building.
@@ -47,9 +50,10 @@ export async function enqueueProgram(
   try {
     const result = await plan(input);
     if (result.topics.length === 0) {
-      await failProgram(program.id, 'plan pass produced no in-domain topics');
+      const error = 'plan pass produced no in-domain topics';
+      await failProgram(program.id, error);
       console.warn('[program] plan produced nothing', { programId: program.id, droppedByGate: result.droppedByGate });
-      return { programId: program.id, status: ProgramStatus.failed, topicCount: 0 };
+      return { programId: program.id, status: ProgramStatus.failed, topicCount: 0, error };
     }
 
     // Fan out atomically: one ProgramPath slot + one child CourseRequest per topic,
@@ -96,7 +100,7 @@ export async function enqueueProgram(
     const message = err instanceof Error ? err.message : String(err);
     console.error('[program] plan/fan-out failed', { programId: program.id, error: message });
     await failProgram(program.id, message);
-    return { programId: program.id, status: ProgramStatus.failed, topicCount: 0 };
+    return { programId: program.id, status: ProgramStatus.failed, topicCount: 0, error: message };
   }
 }
 
