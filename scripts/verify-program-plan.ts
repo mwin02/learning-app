@@ -9,7 +9,7 @@
 
 import { PriorityTier } from '@prisma/client';
 import { allocateProgramBudget, type ProgramTopicInput } from '../src/lib/agents/program/budget';
-import { planProgram, type ProposedTopic } from '../src/lib/agents/program/plan';
+import { planProgram, buildDecomposePrompt, type ProposedTopic } from '../src/lib/agents/program/plan';
 import type { TopicGateResult } from '../src/lib/agents/topic-gate';
 
 let failures = 0;
@@ -110,6 +110,19 @@ const stubGate = async (topic: string): Promise<TopicGateResult> => {
   if (topic.toLowerCase().includes('cooking')) return { valid: false, reason: 'out of domain' };
   return { valid: true, canonical: topic.toLowerCase().replace(/\s+/g, '-'), subject: 'cs' };
 };
+
+console.log('buildDecomposePrompt — grounds on existing library topics + anti-list');
+{
+  const p = buildDecomposePrompt(
+    { goal: 'ml prep', totalHoursPerWeek: 8, totalWeeks: 10, antiList: ['leetcode'] },
+    ['calculus', 'linear-algebra', 'python'],
+  );
+  check('lists existing library topics', p.includes('calculus, linear-algebra, python'), p);
+  check('instructs no-split', p.toLowerCase().includes('never split them into sub-parts'));
+  check('includes anti-list exclusion', p.includes('EXCLUDE') && p.includes('leetcode'));
+  const empty = buildDecomposePrompt({ goal: 'g', totalHoursPerWeek: 4, totalWeeks: 6 }, []);
+  check('handles empty library', empty.includes('TOPICS ALREADY IN THE LIBRARY: (none yet)'));
+}
 
 async function main() {
   console.log('planProgram — gate drops out-of-domain topics');
