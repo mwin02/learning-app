@@ -41,7 +41,7 @@ import { cleanupLessons } from '@/lib/agents/track/cleanup-lessons';
 import { thickenSpine } from '@/lib/agents/track/thicken-seam';
 import { sectionTrack } from '@/lib/agents/track/section-track';
 import { exerciseTrack } from '@/lib/agents/content/exercise-track';
-import { TRACK_MAX_THICKEN_ATTEMPTS, TRACK_COMPOSER_MODE } from '@/lib/config';
+import { TRACK_MAX_THICKEN_ATTEMPTS, TRACK_COMPOSER_MODE, TRACK_MIN_PRIMARY_DURATION_MIN } from '@/lib/config';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 
 export type BuildTrackInput = {
@@ -186,9 +186,9 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
       for (const cand of cpt.candidates) if (cand.isGenerated) generatedIds.add(cand.resourceId);
     validatedLessons = enforceGeneratedPrimary(validatedLessons, generatedIds);
 
-    // --- allocate: breadth (closure-aware budget trim) + depth -------------
-    // Join real durations from the loaded candidates so the allocator can size
-    // slices; map each validated lesson to the allocator's input contract.
+    // Join real durations + roles from the loaded candidates: the duration floor pass
+    // below and the allocator both need them (durations to size slices, roles so a
+    // replacement primary is a real `teaches`).
     const durationById = new Map<string, number>();
     const roleById = new Map<string, ConceptResourceRole>();
     for (const cpt of concepts)
@@ -198,6 +198,22 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
       }
     const durOf = (id: string) => durationById.get(id) ?? 0;
 
+    // --- 2g/2.5: primary duration floor ------------------------------------
+    // The composer occasionally seats a too-thin resource (a ~1-min YouTube Short) as
+    // a concept's lead primary over a longer real teacher sitting in the pool. A 5s
+    // clip can't deliver a concept; deterministically swap in the best non-thin
+    // `teaches` candidate and demote the thin one to an alternate. No-op when the
+    // primary already clears the floor or no qualifying replacement exists (≥1
+    // guarantee); authored on-ramps are exempt (intentionally the primary).
+    validatedLessons = enforcePrimaryDurationFloor(validatedLessons, {
+      durOf,
+      roleOf: (id) => roleById.get(id),
+      generatedIds,
+      floorMin: TRACK_MIN_PRIMARY_DURATION_MIN,
+    });
+
+    // --- allocate: breadth (closure-aware budget trim) + depth -------------
+    // Map each validated lesson to the allocator's input contract.
     const keyOf = (i: number) => `L${i}`;
     const byKey = new Map(validatedLessons.map((lesson, i) => [keyOf(i), lesson]));
     const allocLessons: AllocatorLesson[] = validatedLessons.map((l, i) => ({
@@ -403,6 +419,59 @@ export function enforceGeneratedPrimary(
       ...l,
       mandatoryResourceIds: [...gen, ...l.mandatoryResourceIds.filter((id) => !genSet.has(id))],
       optionalResourceIds: l.optionalResourceIds.filter((id) => !genSet.has(id)),
+    };
+  });
+}
+
+// Deterministic primary duration-floor pass. The composer ranks the mandatory core
+// on pedagogy and, nondeterministically, sometimes leads a lesson with a too-thin
+// resource (a ~1-min YouTube Short) while a longer real teacher sits in the pool —
+// a clip too short to actually deliver the concept. For each lesson whose lead
+// primary (`mandatoryResourceIds[0]`) falls below `floorMin`, promote the best
+// non-thin `teaches` candidate from THIS lesson's own pools (the mandatory tail
+// first — the composer already ranked it core — then the optional pool) to the lead
+// and demote the thin one into the optional pool (kept as an alternate, never
+// dropped). Priority order within each pool is preserved, so the highest-ranked
+// qualifying teacher wins.
+//
+// Conservative by construction:
+//   - No-op when the lead already clears the floor, or no qualifying `teaches`
+//     replacement exists — the thin primary stays (the ≥1 guarantee: a concept with
+//     only thin candidates keeps its clip rather than lose its lesson).
+//   - Authored on-ramps (`generatedIds`) are exempt — a generated lesson is content
+//     WE authored as the lead (enforceGeneratedPrimary just seated it); never demote
+//     it for being short.
+// Pure; runs after enforceGeneratedPrimary and before allocate. One Short per concept
+// at most, but generic over several lessons.
+export function enforcePrimaryDurationFloor(
+  lessons: ValidatedLesson[],
+  opts: {
+    durOf: (id: string) => number;
+    roleOf: (id: string) => ConceptResourceRole | undefined;
+    generatedIds: Set<string>;
+    floorMin: number;
+  },
+): ValidatedLesson[] {
+  const { durOf, roleOf, generatedIds, floorMin } = opts;
+  return lessons.map((l) => {
+    const primaryId = l.mandatoryResourceIds[0];
+    if (!primaryId) return l;
+    // Exempt authored on-ramps and any lead that already clears the floor.
+    if (generatedIds.has(primaryId) || durOf(primaryId) >= floorMin) return l;
+    // Best non-thin teacher from this lesson's own pools, mandatory tail before pool.
+    const replacement = [...l.mandatoryResourceIds.slice(1), ...l.optionalResourceIds].find(
+      (id) => roleOf(id) === ConceptResourceRole.teaches && durOf(id) >= floorMin,
+    );
+    if (!replacement) return l; // nothing better — keep the thin primary (≥1 guarantee)
+    return {
+      ...l,
+      mandatoryResourceIds: [
+        replacement,
+        ...l.mandatoryResourceIds.slice(1).filter((id) => id !== replacement),
+      ],
+      // Demote the thin old lead to the front of the optional pool (a real, if thin,
+      // supplement) and drop the promoted replacement from it.
+      optionalResourceIds: [primaryId, ...l.optionalResourceIds.filter((id) => id !== replacement)],
     };
   });
 }

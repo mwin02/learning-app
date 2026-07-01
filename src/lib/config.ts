@@ -256,6 +256,18 @@ export const MAP_DURATION_RANKING = {
   default: { targetMin: 60, spanMin: 120, floor: 0.6 },
 } as const;
 
+// Track-build primary duration floor: a resource shorter than this (in minutes)
+// cannot be a lesson's LEAD primary when a longer `teaches` candidate exists on the
+// same concept — the thin one is demoted to an alternate and the better teacher
+// promoted (build-track `enforcePrimaryDurationFloor`). Guards against the composer
+// occasionally seating a too-thin clip (a ~1-min YouTube Short) as a concept's sole
+// primary. Sub-minute durations floor to 1 at ingest (isoDurationToMinutes), so a
+// Short reads as 1–2 min; 3 cleanly excludes those while sparing genuine short
+// explainers. The swap only fires when a qualifying replacement exists, so it can
+// never empty a lesson (the ≥1 guarantee holds — a thin-only concept keeps its clip).
+// Authored on-ramps (generated origin) are exempt: they are intentionally the primary.
+export const TRACK_MIN_PRIMARY_DURATION_MIN = 3;
+
 // Phase 2.5d-7c (inspector attach-resource picker): max pickable candidates the
 // resource-search endpoint returns to the attach picker. Small — the operator is
 // scanning for one resource to attach to a concept, not browsing the library.
