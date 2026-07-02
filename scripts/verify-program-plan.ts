@@ -182,6 +182,26 @@ async function main() {
     check('merged slot kept higher weight 8', la?.weight === 8, la);
   }
 
+  console.log('planProgram — dedup keeps higher weight but never downgrades a core tier');
+  {
+    // Same canonical from two labels where the higher-weight proposal is nice_to_have
+    // and the lower-weight one is core. The merged slot must stay core (else a core
+    // need becomes budget-droppable), while still adopting the higher weight.
+    const plan = await planProgram(
+      { goal: 'g', totalHoursPerWeek: 12, totalWeeks: 10 },
+      {
+        decompose: async () => [
+          proposed({ topic: 'python', weight: 3, priorityTier: 'core', orderHint: 1 }),
+          proposed({ topic: 'Python', weight: 9, priorityTier: 'nice_to_have', orderHint: 2 }),
+        ],
+        gate: stubGate,
+      },
+    );
+    const py = plan.topics.find((t) => t.key === 'python');
+    check('merged slot adopted higher weight 9', py?.weight === 9, py);
+    check('merged slot stayed core (not downgraded)', py?.priorityTier === PriorityTier.core, py);
+  }
+
   console.log('planProgram — all-weights-non-positive still spends the full budget (Σ = totalHoursPerWeek)');
   {
     // A degenerate decomposition: every weight ≤ 0 (schema permits it). Without the
