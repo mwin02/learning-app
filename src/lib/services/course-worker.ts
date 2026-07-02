@@ -27,6 +27,7 @@ import {
   finishCourseRequest,
   reclaimStale,
 } from '@/lib/services/course-request';
+import { maybeAssembleProgram } from '@/lib/services/program';
 
 export type ProcessOutcome = 'fulfilled' | 'failed';
 
@@ -40,10 +41,24 @@ export async function reclaimStaleClaims(): Promise<{ courseRequests: number; re
   return { courseRequests, remediationJobs };
 }
 
-// Run the full pipeline for one already-claimed (`running`) CourseRequest, and move
-// it to a terminal state. Never throws: any failure is recorded on the request as
-// `failed` with the error message, so the worker loop keeps draining.
+// Run the per-topic pipeline for one claimed request, then — if it's a child of a
+// Program (2.75c) — fire the assembler hook. The hook is a no-op until this request
+// was the last sibling to reach a terminal state, at which point it finalizes the
+// Program. Non-fatal: a hook failure must never fail an already-recorded request.
 export async function processCourseRequest(cr: CourseRequest): Promise<ProcessOutcome> {
+  const outcome = await processRequestPipeline(cr);
+  if (cr.programId) {
+    await maybeAssembleProgram(cr.programId).catch((err) =>
+      console.error('[course-worker] assembleProgram failed (non-fatal)', { programId: cr.programId, err }),
+    );
+  }
+  return outcome;
+}
+
+// The per-topic build pipeline: ensurePathMap → remediate → buildTrack → finish.
+// Unchanged by the Program layer. Never throws: any failure is recorded on the
+// request as `failed` with the error message, so the worker loop keeps draining.
+async function processRequestPipeline(cr: CourseRequest): Promise<ProcessOutcome> {
   console.log('[course-worker] processing', { id: cr.id, topic: cr.topic });
   try {
     const map = await ensurePathMap({ topic: cr.topic });
