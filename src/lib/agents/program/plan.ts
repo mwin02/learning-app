@@ -179,21 +179,6 @@ export async function decomposeProgram(
 
 type GateFn = (topic: string) => Promise<TopicGateResult>;
 
-// Call the gate, retrying once on a THROW (transient Gemini parse failure). A second
-// throw propagates to planProgram, which drops that one topic rather than the program.
-// A clean `{ valid: false }` reject is returned as-is — that's a decision, not a fault.
-async function gateWithRetry(gate: GateFn, topic: string): Promise<TopicGateResult> {
-  try {
-    return await gate(topic);
-  } catch (err) {
-    console.warn('[program-plan] gate attempt failed, retrying', {
-      topic,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return gate(topic);
-  }
-}
-
 // The full plan pass. `decompose` + `gate` are injectable for fixture tests; the
 // defaults are the real Gemini decomposition and the real topic gate.
 export async function planProgram(
@@ -214,11 +199,11 @@ export async function planProgram(
   for (const p of proposed) {
     let verdict: TopicGateResult;
     try {
-      verdict = await gateWithRetry(gate, p.topic);
+      verdict = await gate(p.topic);
     } catch (err) {
-      // The gate's own Gemini structured-output call is subject to the same transient
-      // `No object generated` hiccup as decompose. A gate that THROWS (vs. cleanly
-      // rejects) after a retry drops just this one topic — never the whole program.
+      // validateTopic retries its own Gemini structured-output call, so reaching here
+      // means it threw twice (a persistent `No object generated` / infra fault). A gate
+      // that THROWS (vs. cleanly rejects) drops just this one topic — never the program.
       const reason = `gate error: ${err instanceof Error ? err.message : String(err)}`;
       console.warn('[program-plan] gate threw, dropping topic', { topic: p.topic, reason });
       droppedByGate.push({ topic: p.topic, reason });
