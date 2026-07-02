@@ -67,3 +67,20 @@ export async function recordCanonicalization(args: {
     ),
   );
 }
+
+// Phase F7: repoint every alias that resolves to `from` so it resolves to `to`. Used
+// by the plan-pass scoped-topic reconciler to CORRECT a mint: when the gate minted a
+// scoped canonical (e.g. `calculus-for-machine-learning`) that reconciliation folds
+// into an existing library topic (`calculus`), this repoints both the gate's
+// phrasing→scoped row and its self-alias to the existing topic — so the same scoped
+// phrasing short-circuits at tier 2 next time. A deliberate override of
+// recordCanonicalization's first-writer-wins (a correction, not a race). Returns the
+// number of alias rows repointed. No-op when `from === to`.
+export async function repointCanonical(from: string, to: string): Promise<number> {
+  if (from === to) return 0;
+  const { count } = await prisma.topicAlias.updateMany({
+    where: { canonical: from },
+    data: { canonical: to },
+  });
+  return count;
+}
