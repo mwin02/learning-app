@@ -98,14 +98,20 @@ async function main() {
   for (const l of track.lessons) {
     const primaries = l.resources.filter((r) => r.role === LessonResourceRole.primary);
     const alternates = l.resources.filter((r) => r.role === LessonResourceRole.alternate);
-    const allNewtab = l.resources.every((r) => r.deliveryMode === DeliveryMode.newtab);
-    const primaryNotAlt = primaries.length === 1 && !alternates.some((a) => a.resourceId === primaries[0].resourceId);
-    if (primaries.length !== 1 || !allNewtab || !primaryNotAlt) {
+    // 2.5j: `embed` joins `newtab` as a legitimate delivery mode for lesson resources.
+    const validDelivery = l.resources.every(
+      (r) => r.deliveryMode === DeliveryMode.newtab || r.deliveryMode === DeliveryMode.embed,
+    );
+    // 2.5e-7b allocator: a lesson may legitimately carry MULTIPLE primaries (co-primary
+    // split), so require ≥1 (not exactly 1); and no primary may also appear as an alternate.
+    const primaryIds = new Set(primaries.map((p) => p.resourceId));
+    const primaryNotAlt = primaries.length >= 1 && !alternates.some((a) => primaryIds.has(a.resourceId));
+    if (primaries.length < 1 || !validDelivery || !primaryNotAlt) {
       shapeOk = false;
       console.error('    bad lesson:', l.orderInTrack, { primaries: primaries.length, alternates: alternates.length });
     }
   }
-  check('each lesson: exactly 1 primary, all newtab, primary ∉ alternates', shapeOk);
+  check('each lesson: ≥1 primary, delivery newtab|embed, primary ∉ alternates', shapeOk);
 
   // --- cleanup (cascade deletes lessons + lessonResources) -----------------
   await prisma.track.delete({ where: { id: result.trackId } });

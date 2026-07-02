@@ -133,10 +133,28 @@ describeDb('program fan-out + assembly', () => {
     });
     expect(enq.status).toBe(ProgramStatus.failed);
     expect(enq.topicCount).toBe(0);
+    expect(enq.failureKind).toBe('plan_empty'); // well-formed request, nothing in-domain → 422 class
 
     const prog = await prisma.program.findUniqueOrThrow({ where: { id: enq.programId }, select: { status: true, error: true } });
     expect(prog.status).toBe(ProgramStatus.failed);
     expect(prog.error).toBeTruthy();
+    expect((await siblings(enq.programId)).length).toBe(0);
+  });
+
+  it('throwing plan → failed with failureKind=internal + persisted error', async () => {
+    const enq = await enqueueProgram({ goal: `${MARK} goal5`, totalHoursPerWeek: 4, totalWeeks: 8 }, {
+      plan: async () => {
+        throw new Error('gemini exploded');
+      },
+    });
+    expect(enq.status).toBe(ProgramStatus.failed);
+    expect(enq.topicCount).toBe(0);
+    expect(enq.failureKind).toBe('internal'); // LLM/DB fault → 500 class, message not echoed to client
+    expect(enq.error).toContain('gemini exploded');
+
+    const prog = await prisma.program.findUniqueOrThrow({ where: { id: enq.programId }, select: { status: true, error: true } });
+    expect(prog.status).toBe(ProgramStatus.failed);
+    expect(prog.error).toContain('gemini exploded'); // persisted for audit
     expect((await siblings(enq.programId)).length).toBe(0);
   });
 });

@@ -147,6 +147,29 @@ describe('planProgram — dedup keeps higher weight but never downgrades a core 
   });
 });
 
+describe('planProgram — dedup tie-break: on EQUAL weight, core beats nice_to_have', () => {
+  it("adopts the core proposal's fields (not just its tier) when weights tie", async () => {
+    // Same canonical, EQUAL weight. The first (existing) is nice_to_have; the second
+    // (candidate) is core. The `candidateWins` tie-break must select the core proposal,
+    // so the merged slot carries the CANDIDATE's fields (phaseLabel/rationale), not the
+    // nice_to_have's — proving the tie-break, not merely the never-downgrade-tier rule.
+    const plan = await planProgram(
+      { goal: 'g', totalHoursPerWeek: 12, totalWeeks: 10 },
+      {
+        decompose: async () => [
+          proposed({ topic: 'python', weight: 5, priorityTier: 'nice_to_have', phaseLabel: 'EXISTING', rationale: 'existing' }),
+          proposed({ topic: 'Python', weight: 5, priorityTier: 'core', phaseLabel: 'CANDIDATE', rationale: 'candidate' }),
+        ],
+        gate: stubGate,
+      },
+    );
+    const py = plan.topics.find((t) => t.key === 'python');
+    expect(py?.priorityTier).toBe(PriorityTier.core);
+    expect(py?.phaseLabel).toBe('CANDIDATE');
+    expect(py?.rationale).toBe('candidate');
+  });
+});
+
 describe('planProgram — all-weights-non-positive still spends the full budget', () => {
   it('keeps all topics and Σ hoursPerWeek === totalHoursPerWeek', async () => {
     // A degenerate decomposition: every weight ≤ 0 (schema permits it). Without the

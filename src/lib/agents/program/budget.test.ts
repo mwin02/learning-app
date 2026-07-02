@@ -85,6 +85,28 @@ describe('allocateProgramBudget — maxTopics cap drops nice_to_have first', () 
   });
 });
 
+describe('allocateProgramBudget — droppabilityRank tie-break: equal tier+weight → drop the more-downstream (later orderHint)', () => {
+  // Same tier, same weight → droppabilityRank falls through to orderHint. Keys are set
+  // so the FINAL key tie-break would drop 'a-early' (alphabetically first); asserting
+  // 'z-late' is dropped proves orderHint is compared BEFORE key.
+  const r = allocateProgramBudget(
+    [
+      T('a-early', { weight: 5, priorityTier: PriorityTier.nice_to_have, orderHint: 1 }),
+      T('z-late', { weight: 5, priorityTier: PriorityTier.nice_to_have, orderHint: 2 }),
+    ],
+    { totalHoursPerWeek: 20, totalWeeks: 10, maxTopics: 1 },
+  );
+
+  it('keeps the earlier (upstream) topic', () => {
+    expect(r.topics.map((t) => t.key)).toEqual(['a-early']);
+  });
+  it('drops the later (downstream) topic despite key ordering', () => {
+    expect(r.dropped.length).toBe(1);
+    expect(r.dropped[0].key).toBe('z-late');
+    expect(r.dropped[0].reason).toBe('over_max_topics');
+  });
+});
+
 describe('allocateProgramBudget — tight budget drops on floor (nice_to_have before core)', () => {
   // floor=1, budget=2 → only 2 topics fit; 3 proposed → drop the 1 nice_to_have.
   const r = allocateProgramBudget(
