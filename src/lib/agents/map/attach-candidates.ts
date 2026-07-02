@@ -241,13 +241,18 @@ async function attachOne(
     statuses: ['active'],
     pickableOnly: true,
     limit: MAP_CANDIDATES_PER_CONCEPT,
+    // F6: a generated on-ramp row is `active` + `atomic`, so before this flag it came
+    // back from search as a candidate for SIBLING concepts too — one on-ramp article
+    // ended up the primary of unrelated lessons. Generated rows now enter ONLY via the
+    // `injected` map below, for their own concept.
+    excludeGenerated: true,
   });
 
   // Phase 2g-4: prepend injected candidates (the generated on-ramp lesson), deduped
-  // against search hits by id — a generated row from a PRIOR build is `active` and so
-  // can also come back from searchResources; we keep one copy. Injected rows are
-  // judged like any other (the on-ramp rubric scores the scoped orientation high),
-  // so they earn their place rather than bypassing the judge.
+  // against search hits by id. With excludeGenerated the search no longer returns
+  // generated rows, so this dedup is now defensive; injected rows are judged like any
+  // other (the on-ramp rubric scores the scoped orientation high), so they earn their
+  // place rather than bypassing the judge.
   const injectedIds = new Set(injected.map((c) => c.id));
   const candidates = [...injected, ...searched.filter((c) => !injectedIds.has(c.id))];
 
