@@ -141,10 +141,12 @@ async function main() {
     check('only python planned', plan.topics.length === 1 && plan.topics[0].key === 'python');
   }
 
-  console.log('planProgram — a gate THROW drops only that topic (after one retry), not the program');
+  console.log('planProgram — a gate THROW drops only that topic, not the program');
   {
     let calls = 0;
-    // Throws on the first two calls (the topic + its retry), succeeds for others.
+    // Throws every call. planProgram no longer wraps the gate in its own retry —
+    // the one-shot retry now lives inside validateTopic (the real gate), which the
+    // injected stub bypasses — so planProgram calls the injected gate exactly once.
     const flakyGate = async (topic: string): Promise<TopicGateResult> => {
       if (topic === 'flaky') {
         calls++;
@@ -159,7 +161,7 @@ async function main() {
         gate: flakyGate,
       },
     );
-    check('gate retried the throwing topic once (2 calls)', calls === 2, calls);
+    check('planProgram calls the injected gate once (retry lives in validateTopic)', calls === 1, calls);
     check('flaky topic dropped by gate', plan.droppedByGate.some((d) => d.topic === 'flaky'));
     check('program still formed from the survivor', plan.topics.length === 1 && plan.topics[0].key === 'python');
   }
