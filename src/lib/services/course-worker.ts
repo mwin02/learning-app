@@ -31,6 +31,23 @@ import { maybeAssembleProgram } from '@/lib/services/program';
 
 export type ProcessOutcome = 'fulfilled' | 'failed';
 
+// Injectable pipeline stages (same `opts` pattern as enqueueProgram's `plan`): the
+// four expensive/LLM-backed steps default to the real implementations, so production
+// callers pass nothing, while tests stub them to exercise the branch logic without an
+// LLM. finishCourseRequest stays real (the DB write the tests assert against).
+export type PipelineStages = {
+  ensureMap?: typeof ensurePathMap;
+  remediate?: typeof remediatePath;
+  build?: typeof buildTrack;
+  backfillBanks?: typeof backfillConceptBanks;
+};
+
+// processCourseRequest adds one more seam over the pipeline: the post-fulfill Program
+// assembler hook, so its fires / failure-is-non-fatal behavior is observable in tests.
+export type ProcessOpts = PipelineStages & {
+  assembleProgram?: (programId: string) => Promise<void>;
+};
+
 // Reclaim both queues' dead-worker claims. Run once per poll cycle BEFORE claiming,
 // so a request/job orphaned by a crashed worker is freed rather than stuck.
 export async function reclaimStaleClaims(): Promise<{ courseRequests: number; remediationJobs: number }> {
@@ -45,10 +62,11 @@ export async function reclaimStaleClaims(): Promise<{ courseRequests: number; re
 // Program (2.75c) — fire the assembler hook. The hook is a no-op until this request
 // was the last sibling to reach a terminal state, at which point it finalizes the
 // Program. Non-fatal: a hook failure must never fail an already-recorded request.
-export async function processCourseRequest(cr: CourseRequest): Promise<ProcessOutcome> {
-  const outcome = await processRequestPipeline(cr);
+export async function processCourseRequest(cr: CourseRequest, opts: ProcessOpts = {}): Promise<ProcessOutcome> {
+  const outcome = await processRequestPipeline(cr, opts);
   if (cr.programId) {
-    await maybeAssembleProgram(cr.programId).catch((err) =>
+    const assembleProgram = opts.assembleProgram ?? maybeAssembleProgram;
+    await assembleProgram(cr.programId).catch((err) =>
       console.error('[course-worker] assembleProgram failed (non-fatal)', { programId: cr.programId, err }),
     );
   }
@@ -58,10 +76,15 @@ export async function processCourseRequest(cr: CourseRequest): Promise<ProcessOu
 // The per-topic build pipeline: ensurePathMap → remediate → buildTrack → finish.
 // Unchanged by the Program layer. Never throws: any failure is recorded on the
 // request as `failed` with the error message, so the worker loop keeps draining.
-async function processRequestPipeline(cr: CourseRequest): Promise<ProcessOutcome> {
+async function processRequestPipeline(cr: CourseRequest, opts: PipelineStages = {}): Promise<ProcessOutcome> {
+  const ensureMap = opts.ensureMap ?? ensurePathMap;
+  const remediate = opts.remediate ?? remediatePath;
+  const build = opts.build ?? buildTrack;
+  const backfillBanks = opts.backfillBanks ?? backfillConceptBanks;
+
   console.log('[course-worker] processing', { id: cr.id, topic: cr.topic });
   try {
-    const map = await ensurePathMap({ topic: cr.topic });
+    const map = await ensureMap({ topic: cr.topic });
     let status = map.status;
     console.log('[course-worker] map ready', { id: cr.id, pathId: map.pathId, status, reclaimed: map.reclaimed });
 
@@ -69,7 +92,7 @@ async function processRequestPipeline(cr: CourseRequest): Promise<ProcessOutcome
     // gets one remediation pass: source gaps / split conflations, then relax or
     // escalate the leftovers. remediatePath single-flights via RemediationJob.
     if (status === PathStatus.building) {
-      const rem = await remediatePath(map.pathId);
+      const rem = await remediate(map.pathId);
       console.log('[course-worker] remediation', { id: cr.id, outcome: rem.outcome, status: rem.status, escalated: rem.escalatedConceptSlugs });
       if (rem.outcome === 'busy') {
         // Under single-worker concurrency this is an anomaly (stale jobs are
@@ -100,7 +123,7 @@ async function processRequestPipeline(cr: CourseRequest): Promise<ProcessOutcome
     // Tracks of this Path; non-fatal — a generation failure must never block the
     // Track the learner is waiting on.
     try {
-      const banks = await backfillConceptBanks({ pathId: map.pathId });
+      const banks = await backfillBanks({ pathId: map.pathId });
       console.log('[course-worker] concept banks', { id: cr.id, pathId: map.pathId, ...banks });
     } catch (err) {
       console.warn('[course-worker] concept bank backfill failed (non-fatal)', {
@@ -110,7 +133,7 @@ async function processRequestPipeline(cr: CourseRequest): Promise<ProcessOutcome
       });
     }
 
-    const track = await buildTrack({
+    const track = await build({
       pathId: map.pathId,
       priorKnowledge: cr.priorKnowledge,
       goal: cr.goal,
