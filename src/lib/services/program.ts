@@ -19,9 +19,14 @@ export type EnqueueProgramResult = {
   programId: string;
   status: ProgramStatus;
   topicCount: number;
-  // Set only when status=failed — the persisted diagnostic, echoed to the caller so
-  // the route can 422 with a reason without a second DB read.
+  // Set only when status=failed — the persisted diagnostic. Safe to echo to the
+  // caller ONLY when failureKind='plan_empty' (a fixed, non-sensitive message); the
+  // 'internal' message is a raw exception string and must not leave the server.
   error?: string;
+  // Why the plan failed, so the HTTP boundary can pick the right status class:
+  //   'plan_empty' — well-formed request, no in-domain topics survived → 422.
+  //   'internal'   — an LLM/DB exception during plan or fan-out → 500 (generic).
+  failureKind?: 'plan_empty' | 'internal';
 };
 
 // Create Program(planning) → plan → fan out child requests + plan slots → building.
@@ -53,7 +58,7 @@ export async function enqueueProgram(
       const error = 'plan pass produced no in-domain topics';
       await failProgram(program.id, error);
       console.warn('[program] plan produced nothing', { programId: program.id, droppedByGate: result.droppedByGate });
-      return { programId: program.id, status: ProgramStatus.failed, topicCount: 0, error };
+      return { programId: program.id, status: ProgramStatus.failed, topicCount: 0, error, failureKind: 'plan_empty' };
     }
 
     // Fan out atomically: one ProgramPath slot + one child CourseRequest per topic,
@@ -100,7 +105,9 @@ export async function enqueueProgram(
     const message = err instanceof Error ? err.message : String(err);
     console.error('[program] plan/fan-out failed', { programId: program.id, error: message });
     await failProgram(program.id, message);
-    return { programId: program.id, status: ProgramStatus.failed, topicCount: 0, error: message };
+    // A genuine server fault (Gemini/Vertex or Prisma threw) — persisted for audit,
+    // but 'internal' so the route reports 500 and never echoes `message` to the client.
+    return { programId: program.id, status: ProgramStatus.failed, topicCount: 0, error: message, failureKind: 'internal' };
   }
 }
 

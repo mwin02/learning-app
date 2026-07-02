@@ -60,9 +60,21 @@ export const POST = withAuth(async (req, session) => {
   }
 
   if (result.status === 'failed') {
+    if (result.failureKind === 'internal') {
+      // An LLM/DB exception during the plan or fan-out — a server fault, not the
+      // client's. Mirror generate-path: generic 500, never echo the raw exception
+      // (result.error) which can carry internal detail. The failed Program is still
+      // persisted and its id returned so the failure is inspectable.
+      console.error('[generate-program] plan/fan-out failed', {
+        programId: result.programId,
+        userId: session.userId,
+      });
+      return errorResponse(500, 'INTERNAL', 'Internal error.', { programId: result.programId });
+    }
     // The plan produced no buildable topics (all out-of-domain / cut). 422: the
-    // request was well-formed but couldn't be turned into a program. The programId is
-    // returned so the failure is inspectable.
+    // request was well-formed but couldn't be turned into a program. result.error is
+    // the fixed empty-plan diagnostic (safe to echo). The programId is returned so the
+    // failure is inspectable.
     return errorResponse(422, 'PLAN_EMPTY', result.error ?? 'Could not build a program from this goal.', {
       programId: result.programId,
     });
