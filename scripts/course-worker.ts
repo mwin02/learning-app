@@ -14,6 +14,7 @@ import { COURSE_WORKER_POLL_MS } from '../src/lib/config';
 import { prisma } from '../src/lib/db';
 import { tickOnce, reclaimStaleClaims, processCourseRequest } from '../src/lib/services/course-worker';
 import { claimNextQueued } from '../src/lib/services/course-request';
+import { sweepStuckPrograms } from '../src/lib/services/program';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -39,6 +40,10 @@ async function runWatch() {
     if (reclaimed.courseRequests || reclaimed.remediationJobs) {
       console.log('[course-worker] reclaimed stale claims', reclaimed);
     }
+    // Re-run assembly for any Program stranded in `building` (last-sibling hook
+    // failure or a worker crash after finishCourseRequest) — reclaim doesn't cover it.
+    const swept = await sweepStuckPrograms();
+    if (swept) console.log('[course-worker] swept stuck programs', { swept });
     let cr;
     while (running && (cr = await claimNextQueued())) {
       await processCourseRequest(cr);
