@@ -237,16 +237,25 @@ export async function planProgram(
       rationale: p.rationale,
     };
     const existing = bySlug.get(verdict.canonical);
-    // Same canonical from two labels: keep the higher-weight one; a core tier wins
-    // over nice_to_have on a tie so the merged slot isn't silently downgraded.
-    if (
-      !existing ||
-      candidate.weight > existing.weight ||
-      (candidate.weight === existing.weight &&
-        candidate.priorityTier === PriorityTier.core &&
-        existing.priorityTier === PriorityTier.nice_to_have)
-    ) {
+    if (!existing) {
       bySlug.set(verdict.canonical, candidate);
+    } else {
+      // Same canonical from two labels. Keep the higher-weight proposal's fields
+      // (a core tier wins a weight tie), but NEVER downgrade the tier: the merged
+      // slot is core if EITHER label was core. Otherwise a differently-labelled
+      // nice_to_have that happens to score higher would silently demote a core
+      // need to nice_to_have — making it budget-droppable under a tight budget.
+      const candidateWins =
+        candidate.weight > existing.weight ||
+        (candidate.weight === existing.weight &&
+          candidate.priorityTier === PriorityTier.core &&
+          existing.priorityTier === PriorityTier.nice_to_have);
+      const winner = candidateWins ? candidate : existing;
+      const priorityTier =
+        candidate.priorityTier === PriorityTier.core || existing.priorityTier === PriorityTier.core
+          ? PriorityTier.core
+          : PriorityTier.nice_to_have;
+      bySlug.set(verdict.canonical, { ...winner, priorityTier });
     }
   }
 
