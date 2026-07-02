@@ -1,42 +1,17 @@
-// Block 2.5h-4 verify:
-//  (A) pickStratified — pure, deterministic (seeded rng): coverage guarantee,
-//      no-replacement, breadth-first, respects n.
-//  (B) LIVE — buildTrack on the banked linear-algebra Path, then assert the frozen
-//      Track has per-Lesson Exercises sampled from the banks; re-run is idempotent.
+// Block 2.5h-4 verify (LIVE half): buildTrack on the banked linear-algebra Path, then
+// assert the frozen Track has per-Lesson Exercises sampled from the banks; re-run is
+// idempotent. Costs a Pro compose + sampling.
+//   npx tsx --env-file=.env.local scripts/verify/2_5h_4_exercises.ts
+//
+// The pure Part A (pickStratified determinism) migrated to
+// src/lib/agents/content/exercise-track.test.ts (R2).
 import { prisma } from '@/lib/db';
-import { pickStratified, exerciseTrack } from '@/lib/agents/content/exercise-track';
+import { exerciseTrack } from '@/lib/agents/content/exercise-track';
 import { mcqHasOptions } from '@/lib/agents/content/mcq-options';
 import { buildTrack } from '@/lib/agents/track/build-track';
 import { EXERCISE_SAMPLE_PER_LESSON } from '@/lib/config';
 
 function assert(c: boolean, m: string) { if (!c) throw new Error(m); }
-// mulberry32 seeded PRNG for deterministic sampling.
-function rng(seed: number) { return () => { seed |= 0; seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
-
-function partA() {
-  console.log('=== (A) pickStratified ===');
-  // Two concepts, plenty of questions; sample 4 → expect 2 from each (breadth-first).
-  const A = ['a1', 'a2', 'a3', 'a4', 'a5'];
-  const B = ['b1', 'b2', 'b3', 'b4', 'b5'];
-  const s = pickStratified([A, B], 4, rng(7));
-  assert(s.length === 4, `expected 4, got ${s.length}`);
-  const fromA = s.filter((x) => x.startsWith('a')).length;
-  const fromB = s.filter((x) => x.startsWith('b')).length;
-  assert(fromA === 2 && fromB === 2, `expected 2+2 balanced, got ${fromA}+${fromB}`);
-  assert(new Set(s).size === 4, 'sample contained a duplicate (replacement!)');
-
-  // Coverage: n >= group count → every non-empty group represented.
-  const cov = pickStratified([['x'], ['y1', 'y2'], ['z1', 'z2', 'z3']], 4, rng(3));
-  assert(cov.includes('x') && cov.some((q) => q.startsWith('y')) && cov.some((q) => q.startsWith('z')), 'coverage not guaranteed');
-
-  // Fewer available than n → return all, no padding/dupes.
-  const few = pickStratified([['p'], ['q']], 5, rng(1));
-  assert(few.length === 2 && new Set(few).size === 2, 'overdraw should return exactly the 2 available');
-
-  // Empty groups handled.
-  assert(pickStratified([], 4, rng(1)).length === 0, 'empty groups → empty sample');
-  console.log('(A) ✓ — breadth-first, no-replacement, coverage, overdraw, empty all hold');
-}
 
 async function partB() {
   console.log('\n=== (B) LIVE buildTrack on the banked linear-algebra Path ===');
@@ -86,8 +61,7 @@ async function partB() {
 }
 
 async function main() {
-  partA();
   await partB();
-  console.log('\n✅ block 2.5h-4 verified');
+  console.log('\n✅ block 2.5h-4 (live) verified');
 }
 main().catch((e) => { console.error('❌', e); process.exit(1); }).finally(() => prisma.$disconnect());

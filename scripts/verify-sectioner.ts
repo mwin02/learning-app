@@ -1,18 +1,14 @@
-// Throwaway verification for Phase 2.5e (track sections). Two layers:
+// Verify (LIVE half) for Phase 2.5e (track sections): build a real Track over a
+// spine_ready map (which auto-sections best-effort), assert the persisted Section rows
+// cover every lesson contiguously, re-run sectionTrack to prove idempotency, then delete
+// the Track. Costs one Pro compose + one/two Flash section calls.
+//   npx tsx --env-file=.env.local scripts/verify-sectioner.ts <topic>
 //
-//   1. PURE (free, always runs): exercises group-into-sections.ts — the
-//      contiguity-by-construction invariant + every repair path. No LLM, no DB.
-//   2. LIVE (opt-in, pass a topic): builds a real Track over a spine_ready map
-//      (which now auto-sections best-effort), asserts the persisted Section rows
-//      cover every lesson contiguously, re-runs sectionTrack to prove idempotency,
-//      then deletes the Track. Costs one Pro compose + one/two Flash section calls.
-//
-//   npx tsx --env-file=.env.local scripts/verify-sectioner.ts                # pure only
-//   npx tsx --env-file=.env.local scripts/verify-sectioner.ts javascript     # + live build
+// The PURE half (group-into-sections invariants + repair paths) migrated to
+// src/lib/agents/track/group-into-sections.test.ts (R2).
 
 import { TrackStatus } from '@prisma/client';
 import { prisma } from '../src/lib/db';
-import { groupIntoSections } from '../src/lib/agents/track/group-into-sections';
 import { sectionTrack } from '../src/lib/agents/track/section-track';
 import { buildTrack } from '../src/lib/agents/track/build-track';
 
@@ -43,65 +39,6 @@ function assertContiguousPartition(
     `${label}: each section ascending + contiguous internally`,
     sections.every((s) => s.lessonOrders.every((o, i) => i === 0 || o > s.lessonOrders[i - 1])),
   );
-}
-
-function pureTests() {
-  console.log('PURE group-into-sections:');
-  const orders = [1, 2, 3, 4, 5, 6];
-
-  // Happy path: three clean chapters.
-  {
-    const r = groupIntoSections({
-      lessonOrders: orders,
-      boundaries: [
-        { startsAtLesson: 1, title: 'A', intro: 'a' },
-        { startsAtLesson: 3, title: 'B', intro: 'b' },
-        { startsAtLesson: 5, title: 'C', intro: 'c' },
-      ],
-      fallbackTitle: 'T',
-    });
-    assertContiguousPartition('happy', orders, r.sections);
-    check('happy: 3 sections', r.sections.length === 3);
-    check('happy: boundaries respected', JSON.stringify(r.sections[1].lessonOrders) === JSON.stringify([3, 4]));
-  }
-
-  // Model didn't start at lesson 1 → clamp, no orphan lead-in.
-  {
-    const r = groupIntoSections({
-      lessonOrders: orders,
-      boundaries: [
-        { startsAtLesson: 3, title: 'B', intro: 'b' },
-        { startsAtLesson: 5, title: 'C', intro: 'c' },
-      ],
-      fallbackTitle: 'T',
-    });
-    assertContiguousPartition('clamp', orders, r.sections);
-    check('clamp: first section absorbs lead-in 1,2', JSON.stringify(r.sections[0].lessonOrders) === JSON.stringify([1, 2, 3, 4]));
-  }
-
-  // Out-of-range + duplicate + unsorted boundaries are repaired.
-  {
-    const r = groupIntoSections({
-      lessonOrders: orders,
-      boundaries: [
-        { startsAtLesson: 4, title: 'B', intro: 'b' },
-        { startsAtLesson: 99, title: 'X', intro: 'x' },
-        { startsAtLesson: 1, title: 'A', intro: 'a' },
-        { startsAtLesson: 4, title: 'Bdup', intro: 'b2' },
-      ],
-      fallbackTitle: 'T',
-    });
-    assertContiguousPartition('repair', orders, r.sections);
-    check('repair: 2 sections (dup + oob dropped)', r.sections.length === 2, r.sections.length);
-    check('repair: warned', r.warnings.length >= 2, r.warnings);
-  }
-
-  // No usable boundaries → single fallback chapter.
-  {
-    const r = groupIntoSections({ lessonOrders: orders, boundaries: [], fallbackTitle: 'Whole Course' });
-    check('empty: single chapter', r.sections.length === 1 && r.sections[0].title === 'Whole Course');
-    assertContiguousPartition('empty', orders, r.sections);
-  }
 }
 
 async function liveTest(topic: string) {
@@ -158,9 +95,13 @@ async function liveTest(topic: string) {
 }
 
 async function main() {
-  pureTests();
   const topic = process.argv[2];
-  if (topic) await liveTest(topic);
+  if (!topic) {
+    console.error('usage: verify-sectioner.ts <topic>   (needs a seeded spine_ready Path)');
+    process.exitCode = 1;
+    return;
+  }
+  await liveTest(topic);
   console.log(failures === 0 ? '\nALL PASSED' : `\n${failures} CHECK(S) FAILED`);
   process.exitCode = failures === 0 ? 0 : 1;
 }
