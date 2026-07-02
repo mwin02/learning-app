@@ -369,3 +369,18 @@ export const CONCEPT_BANK_GEN_CONCURRENCY = 4;
 // a few well-chosen checks per lesson, not a quiz; comfortably below
 // CONCEPT_BANK_TARGET_QUESTIONS so there's a pool to sample from.
 export const EXERCISE_SAMPLE_PER_LESSON = 4;
+
+// Phase 2.75b: the program plan pass caps a goal's decomposition at this many
+// single-topic Tracks. Bounds the child CourseRequest fan-out (worker cost) and
+// keeps a Program legible — the decomposition prompt asks for ≤ this, and the pure
+// budget allocator hard-slices to it by priority as a defensive backstop (echoing
+// the DECOMPOSITION_MAX_AUTO_CHILDREN oversize gate on the per-topic side).
+export const MAX_PROGRAM_TOPICS = 6;
+
+// Phase 2.75b: the per-topic floor for the deterministic hours/week split — every
+// surviving topic gets at least this many hours/week so no topic rounds to zero and
+// silently vanishes from the plan. When Σ floors exceeds the program's
+// totalHoursPerWeek, the allocator drops lowest-priority topics (nice_to_have before
+// core) until the floors fit — which is what makes "re-run with a tighter budget
+// visibly drops nice_to_have" a deterministic, auditable behavior.
+export const PROGRAM_TOPIC_FLOOR_HOURS = 1;

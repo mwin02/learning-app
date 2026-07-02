@@ -26,6 +26,7 @@ type AgentName =
   | 'docTocExtractor'
   | 'validityAgent'
   | 'topicGate'
+  | 'programPlanner'
   | 'health';
 
 type ModelConfig = {
@@ -246,6 +247,21 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     modelId: 'gemini-2.5-flash',
     temperature: 0,
     maxOutputTokens: 512,
+  },
+  programPlanner: {
+    // Phase 2.75b: the program plan pass — decomposes a goal into ≤N single-topic
+    // learning topics with per-topic importance/gap weights, priority tier, phase
+    // grouping, and cross-topic order. Flash, not Pro: the roadmap frames this as a
+    // "cheap synchronous plan pass", and it's judgment over a short goal, not the
+    // deep spine-authoring of mapSpineAuthor. Temperature low for a stable, defensible
+    // decomposition, not zero so a re-run can vary a marginal topic. 16k output (not
+    // 8k): Flash 2.5 spends the budget on internal thinking FIRST, and an 8k ceiling
+    // occasionally capped mid-JSON → a `No object generated: could not parse` throw
+    // that sank the whole plan pass (seen once in the 2.75 full e2e). 16k leaves ample
+    // headroom for thinking + ~6 topics with rationales, matching mapSpineReviewer.
+    modelId: 'gemini-2.5-flash',
+    temperature: 0.2,
+    maxOutputTokens: 16384,
   },
   health: {
     modelId: 'gemini-2.5-flash',
