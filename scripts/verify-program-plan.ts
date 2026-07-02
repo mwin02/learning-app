@@ -182,6 +182,26 @@ async function main() {
     check('merged slot kept higher weight 8', la?.weight === 8, la);
   }
 
+  console.log('planProgram — all-weights-non-positive still spends the full budget (Σ = totalHoursPerWeek)');
+  {
+    // A degenerate decomposition: every weight ≤ 0 (schema permits it). Without the
+    // even-split fallback the above-floor remainder would vanish (each topic = floor).
+    const plan = await planProgram(
+      { goal: 'g', totalHoursPerWeek: 10, totalWeeks: 8 },
+      {
+        decompose: async () => [
+          proposed({ topic: 'python', weight: 0, orderHint: 1 }),
+          proposed({ topic: 'calculus', weight: 0, orderHint: 2 }),
+          proposed({ topic: 'statistics', weight: -5, orderHint: 3 }),
+        ],
+        gate: stubGate,
+      },
+    );
+    const sum = plan.topics.reduce((s, t) => s + t.hoursPerWeek, 0);
+    check('all 3 topics kept', plan.topics.length === 3, plan.topics.map((t) => t.key));
+    check('Σ hoursPerWeek === totalHoursPerWeek (10)', sum === 10, sum);
+  }
+
   console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);
   process.exit(failures === 0 ? 0 : 1);
 }

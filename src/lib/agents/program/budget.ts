@@ -31,7 +31,8 @@ export type ProgramTopicInput = {
   key: string;
   // Importance/gap weight — higher ⇒ more of the weekly budget. Any positive scale
   // (the split is proportional); non-positive is clamped to 0 (floor-only) so a
-  // degenerate weight can't break the largest-remainder math.
+  // degenerate weight can't break the largest-remainder math. If EVERY weight is
+  // non-positive the remainder is split evenly, preserving Σ = totalHoursPerWeek.
   weight: number;
   priorityTier: PriorityTier;
   phaseLabel: string;
@@ -126,7 +127,13 @@ export function allocateProgramBudget(
   // Split the ABOVE-floor remainder by weight, then add the floor back to each so
   // every topic clears the floor and the slices still sum to totalHoursPerWeek.
   const remainder = Math.max(0, totalHoursPerWeek - ordered.length * floor);
-  const extra = allotByWeight(remainder, ordered.map((t) => t.weight));
+  // allotByWeight zeroes every slice when Σweights ≤ 0 (the degenerate case where the
+  // LLM emitted all-non-positive weights, all clamped to 0 above). That would silently
+  // drop the whole remainder and break the Σ = totalHoursPerWeek invariant, so fall
+  // back to an equal split — the remainder is always fully allocated.
+  const weights = ordered.map((t) => t.weight);
+  const splitWeights = weights.some((w) => w > 0) ? weights : weights.map(() => 1);
+  const extra = allotByWeight(remainder, splitWeights);
 
   const allocated: AllocatedProgramTopic[] = ordered.map((t, i) => ({
     key: t.key,
