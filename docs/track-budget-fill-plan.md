@@ -127,7 +127,22 @@ measurable on its own. Re-measure the four audited tracks after each of Blocks 1
 
 ## Status
 
-- [ ] Block 0 merged
-- [ ] Block 1 merged
-- [ ] Block 2 merged
+- [ ] Block 0 merged (PR #179)
+- [ ] Block 1 merged (PR #180)
+- [ ] Block 2 merged (PR #181)
 - [ ] Block 3 merged
+
+## Measured results (2026-07-03, live builds on the audited scenarios)
+
+| Scenario | Audit | After Block 1 (sim) | After Blocks 1+2 (real build) |
+| --- | --- | --- | --- |
+| calculus refresher (720m) | ~53% | 93% | **111%** (marginally over; warn fired) |
+| linear algebra (1440m) | 12.5% | 52% | **62%** |
+| prob/stats (960m) | 12% | 39% | **63%** |
+
+Notes: real builds include the thicken cycle (prob/stats +14 candidates,
+LA +17, calculus +8 — previously zero-candidate frontier concepts now join
+their courses, and both LA and calculus recompose to `enough: true` with no
+thin flags). Fill is measured on the CLEANED persisted lessons (post
+cross-lesson dedup), which is what the learner actually receives — the
+allocator's pre-dedup total overstates it (LA: 0.76 vs 0.62).

@@ -78,6 +78,7 @@ const buildResult = (trackId: string): BuildTrackResult => ({
   budgetWeak: false,
   depthConstrained: false,
   underResourced: [],
+  fillRatio: null,
   warnings: [],
 });
 

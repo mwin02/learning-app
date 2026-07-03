@@ -216,3 +216,51 @@ describe('depthTier — budget-per-concept core-sizing tier (Block 1)', () => {
     expect(depthTier(DEPTH_TIER_THRESHOLDS.immersive * 10, 10)).toBe('immersive');
   });
 });
+
+describe('fill mechanics — ground truth for the Block 3 fill telemetry', () => {
+  const lesson = (key: string, core: AllocatorCandidate[], extra: Partial<AllocatorLesson> = {}): AllocatorLesson => ({
+    key,
+    isFrontier: false,
+    masteryRelevant: false,
+    timeWeight: 'normal',
+    mandatory: core,
+    optional: [],
+    ...extra,
+  });
+
+  it('tier-sized cores + matching budget → 100% fill (every core seated)', () => {
+    // 10 lessons × (3 × 20m core) against a 600m budget: slices are 60m each.
+    const lessons = Array.from({ length: 10 }, (_, i) =>
+      lesson(`L${i}`, [c(`a${i}`, 20), c(`b${i}`, 20), c(`c${i}`, 20)]),
+    );
+    const r = allocate({ lessons, budgetMinutes: 600 });
+    expect(r.totalMinutes).toBe(600);
+    expect(r.depthConstrained).toBe(false);
+    expect(r.kept.every((k) => k.primaries.length === 3)).toBe(true);
+  });
+
+  it('under-supplied cores leave a big budget unfilled (fill is supply-bound, not allocator-bound)', () => {
+    // The audit shape: 1-resource 10m cores against a generous budget — the
+    // allocator has nothing to buy, so low fill here indicts supply/composer.
+    const lessons = Array.from({ length: 10 }, (_, i) => lesson(`L${i}`, [c(`a${i}`, 10)]));
+    const r = allocate({ lessons, budgetMinutes: 960 });
+    expect(r.totalMinutes).toBe(100);
+    expect(r.depthConstrained).toBe(false); // full (tiny) cores seated — depth wasn't cut
+  });
+
+  it('a small budget degrades rank-first: primaries only, fill ≈ budget', () => {
+    const lessons = Array.from({ length: 5 }, (_, i) =>
+      lesson(`L${i}`, [c(`a${i}`, 20), c(`b${i}`, 30), c(`c${i}`, 30)]),
+    );
+    const r = allocate({ lessons, budgetMinutes: 100 }); // 20m slices — primary only
+    expect(r.totalMinutes).toBe(100);
+    expect(r.depthConstrained).toBe(true);
+    expect(r.kept.every((k) => k.primaries.length === 1)).toBe(true);
+  });
+
+  it('an outlier primary overshoots honestly (≥1 guarantee — the metric must not hide it)', () => {
+    const lessons = [lesson('L0', [c('monster', 500)]), lesson('L1', [c('ok', 20)])];
+    const r = allocate({ lessons, budgetMinutes: 100 });
+    expect(r.totalMinutes).toBe(520); // fillRatio 5.2 — loud, not clamped
+  });
+});

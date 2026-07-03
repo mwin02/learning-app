@@ -344,6 +344,14 @@ export const TRACK_MAX_THICKEN_ATTEMPTS = 1;
 // "fix the worst few, best-effort the rest".
 export const TRACK_MAX_THICKEN_CONCEPTS = 6;
 
+// Budget-fill Block 3: the healthy fill band for a budgeted Track — kept minutes
+// over the requested budget. Outside it the build logs a loud warning (telemetry
+// only; the build still succeeds — a must-have resource is never dropped and a
+// thin library is a sourcing problem, not a build failure). 1.1 matches the
+// allocator's DEFAULT_BUDGET_SLACK cap; 0.6 is the floor the audited scenarios
+// now clear (calculus 93%, prob/stats 63% after Blocks 1–2).
+export const TRACK_FILL_BAND = { min: 0.6, max: 1.1 } as const;
+
 // Phase 2.5e-8 (block 2b): which composer backs a Track build.
 //   'single' — the one-shot Output.object pass (composer.ts), today's default.
 //   'agent'  — the tool-using loop (composer-agent.ts): reads the map/candidates and
