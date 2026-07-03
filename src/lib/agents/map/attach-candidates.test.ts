@@ -17,7 +17,12 @@ vi.mock('@/lib/db', () => ({ prisma: {} }));
 vi.mock('@/lib/ai/models', () => ({ getModel: () => ({ model: {}, temperature: 0, maxOutputTokens: 0 }) }));
 
 import { capCandidates, selectAttachable } from '@/lib/agents/map/attach-candidates';
-import { MAP_MAX_CANDIDATES_PER_CONCEPT, MAP_ATTACH_MIN_COVERAGE, MAP_DURATION_RANKING } from '@/lib/config';
+import {
+  MAP_MAX_CANDIDATES_PER_CONCEPT,
+  MAP_ATTACH_MIN_COVERAGE,
+  MAP_DURATION_RANKING,
+  MAX_ATTACHABLE_DURATION_MIN,
+} from '@/lib/config';
 
 type Cand = {
   resourceId: string;
@@ -171,5 +176,29 @@ describe('symmetric (short-end) duration penalty', () => {
     const nul = teach('null', 0.8, { trustScore: 0.8 });
     const one = teach('one', 0.8, { trustScore: 0.8, durationMin: 1 });
     expect(capCandidates([one, nul])[0].resourceId).toBe('null');
+  });
+});
+
+describe('attachable duration ceiling (Block 0 — admission drop in selectAttachable only)', () => {
+  const over = MAX_ATTACHABLE_DURATION_MIN + 1;
+
+  it('drops an over-ceiling candidate from fresh judge output', () => {
+    const out = selectAttachable([teach('ok', 0.8, { durationMin: 60 }), teach('monster', 0.95, { durationMin: over })]);
+    expect(ids(out)).toEqual(['ok']);
+  });
+  it('can empty a concept whose only candidate is over-ceiling (a hole beats a whole-course attachment)', () => {
+    expect(selectAttachable([teach('monster', 0.95, { durationMin: over })]).length).toBe(0);
+  });
+  it('admits exactly at the ceiling', () => {
+    const out = selectAttachable([teach('edge', 0.8, { durationMin: MAX_ATTACHABLE_DURATION_MIN })]);
+    expect(ids(out)).toEqual(['edge']);
+  });
+  it('passes rows without a durationMin (like trust-less rows)', () => {
+    const out = selectAttachable([teach('nodur', 0.8)]);
+    expect(ids(out)).toEqual(['nodur']);
+  });
+  it('capCandidates does NOT drop over-ceiling rows (re-cap never re-litigates admission)', () => {
+    const out = capCandidates([teach('monster', 0.95, { durationMin: over })]);
+    expect(ids(out)).toEqual(['monster']);
   });
 });

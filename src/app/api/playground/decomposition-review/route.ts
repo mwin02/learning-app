@@ -82,6 +82,7 @@ export const POST = withAdminAuth(async (req) => {
       difficulty: true,
       summary: true,
       conceptsTaught: true,
+      durationMin: true,
     },
   });
   if (!resource) {
@@ -125,6 +126,7 @@ export const POST = withAdminAuth(async (req) => {
             difficulty: resource.difficulty,
             summary: resource.summary,
             conceptsTaught: resource.conceptsTaught,
+            durationMin: resource.durationMin,
           },
           { force: input.force },
         );

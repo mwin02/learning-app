@@ -263,6 +263,7 @@ async function persistDiscovered(
         difficulty: row.difficulty,
         summary: row.summary,
         conceptsTaught: row.rawConceptsTaught,
+        durationMin: row.durationMin,
       }),
     })),
   );

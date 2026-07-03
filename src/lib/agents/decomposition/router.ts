@@ -45,7 +45,11 @@ const PAYWALLED_PLATFORMS: Record<string, string> = {
 // index (keep whole as atomic). `docs` is included because official doc trees
 // are prime decomposition targets; the router's reference_index classification
 // is what keeps an API/method reference from being shattered into fragments.
-const CONTAINER_TYPES = new Set(['course', 'interactive', 'docs']);
+// `book` (Block 0, container containment): an online book is a chaptered tree —
+// exactly what doc-TOC decomposes — and classifying it atomic is how the 1,200m
+// MML book got attached whole to concepts. Single-page/short `book` rows the
+// router judges non-container reroute to atomic as before.
+const CONTAINER_TYPES = new Set(['course', 'interactive', 'docs', 'book']);
 
 function hostnameOf(url: string): string | null {
   try {

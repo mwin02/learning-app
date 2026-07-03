@@ -17,7 +17,11 @@ import type { DecompositionStatus } from '@prisma/client';
 import { classify } from './router';
 import { decomposePlaylist } from './youtube';
 import { decomposeDocToc } from './doctoc';
-import { DECOMPOSITION_MAX_DEPTH, DECOMPOSITION_MAX_TOTAL_NODES } from '@/lib/config';
+import {
+  DECOMPOSITION_MAX_DEPTH,
+  DECOMPOSITION_MAX_TOTAL_NODES,
+  MAX_ATTACHABLE_DURATION_MIN,
+} from '@/lib/config';
 
 // What decompose() needs about a resource: classification inputs (url, type)
 // plus the context a router needs to build children — topic + difficulty
@@ -31,6 +35,11 @@ export type DecomposeInput = {
   difficulty: string;
   summary: string;
   conceptsTaught: string[];
+  // Block 0 (container containment): the discovery/seed duration estimate. An
+  // `atomic` outcome over MAX_ATTACHABLE_DURATION_MIN parks as human_review
+  // instead — see the gate in decompose(). Optional so callers without a
+  // duration (none today) degrade to the ungated behavior.
+  durationMin?: number;
 };
 
 // One child produced by a router. Inherits topic / sourceId / trustScore /
@@ -75,6 +84,34 @@ export async function decompose(
   input: DecomposeInput,
   opts: DecomposeOptions = {},
 ): Promise<DecompositionResult> {
+  const result = await route(input, opts);
+
+  // Container containment (Block 0): an atomic outcome past the attachable
+  // ceiling is whole-course/book content that escaped decomposition — whether via
+  // the classifier fast-path (a mistyped book), a router's keep-whole reroute
+  // (the OCW course), or a single monster video. Only atomic units may be
+  // pickable, so park it for curation instead. `force` deliberately does NOT
+  // bypass this: force vouches for exploding a large container fully, not for
+  // attaching one whole (the review API's accept_atomic is that override).
+  if (
+    result.status === 'atomic' &&
+    input.durationMin != null &&
+    input.durationMin > MAX_ATTACHABLE_DURATION_MIN
+  ) {
+    console.log('[decompose] atomic outcome over attachable ceiling; parked for review', {
+      url: input.url,
+      durationMin: input.durationMin,
+    });
+    return {
+      status: 'human_review',
+      children: [],
+      reason: `atomic but ~${input.durationMin}min exceeds the ${MAX_ATTACHABLE_DURATION_MIN}min attachable ceiling — whole-course/book content must be decomposed (or operator-accepted) before it is pickable`,
+    };
+  }
+  return result;
+}
+
+async function route(input: DecomposeInput, opts: DecomposeOptions): Promise<DecompositionResult> {
   const plan = classify(input);
   const force = opts.force ?? false;
 

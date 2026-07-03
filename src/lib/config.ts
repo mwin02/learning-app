@@ -258,9 +258,10 @@ export const TRUST_SELECTION_WEIGHT = 0.3;
 // Phase 2g-1: scope-aware duration ranking in selectAttachable / capCandidates.
 // A resource whose duration far exceeds what a single concept warrants is over-
 // broad for it (a whole-chapter or whole-course page mapped to one concept — the
-// calculus 3h Paul's-Notes chapters; the python 2h "Full Course" on-ramp). We can't
-// FILTER on duration (it would empty a concept whose only candidate is long, or drop
-// it below readiness), so — exactly like trust — duration only ORDERS: selectionScore
+// calculus 3h Paul's-Notes chapters; the python 2h "Full Course" on-ramp). Within
+// the attachable band (≤ MAX_ATTACHABLE_DURATION_MIN below) we don't FILTER on
+// duration (it would empty a concept whose only candidate is long, or drop it
+// below readiness), so — exactly like trust — duration only ORDERS: selectionScore
 // is multiplied by a durationFactor in (floor, 1], so a better-scoped alternative
 // outranks the over-long one WHEN one exists, and the over-long one still survives as
 // the lone candidate when it doesn't. Applied to EVERY concept; the on-ramp gets the
@@ -291,6 +292,23 @@ export const MAP_DURATION_RANKING = {
   // a 3h chapter/course page reaches the 0.6 floor by ~180 min.
   default: { shortTargetMin: 5, shortFloor: 0.5, targetMin: 60, spanMin: 120, floor: 0.6 },
 } as const;
+
+// Container containment (track-budget-fill-plan Block 0): the hard ceiling past
+// which a resource is whole-course/book-shaped, not an atomic lesson unit, and must
+// never be ATTACHED to a concept. Two enforcement points share it:
+//   - decompose(): an `atomic` outcome (classifier fast-path or a router's
+//     keep-whole reroute) over the ceiling parks as `human_review` instead — the
+//     2.5b invariant is "only atomic units are pickable", and a 30h course that
+//     escaped decomposition (the MIT OCW course, the MML book) is not one.
+//   - selectAttachable(): admission-time DROP of over-ceiling candidates from
+//     fresh judge output — the backstop for rows already in the library. Unlike
+//     the 2g-1 ordering penalty above, past the ceiling a hole (which thickening/
+//     remediation can fill properly) beats a whole-course attachment that devours
+//     an entire Track budget. Admission only: capCandidates (the persisted re-cap)
+//     never re-litigates, so existing links can't be evicted by a re-cap.
+// 300 = 5h: keeps legitimately-long atomic units (a 234m lecture video, a 282m
+// chapter) while dropping the 365m+ whole-course rows the audit found.
+export const MAX_ATTACHABLE_DURATION_MIN = 300;
 
 // Track-build primary duration floor: a resource shorter than this (in minutes)
 // cannot be a lesson's LEAD primary when a longer `teaches` candidate exists on the
