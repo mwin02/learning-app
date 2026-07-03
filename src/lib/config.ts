@@ -181,6 +181,21 @@ export const SPINE_MAX_REPAIRS = 2;
 // maxIterations (SPINE_MAX_REPAIRS + SPINE_MAX_REVIEW_REPAIRS + 1) scales with this.
 export const SPINE_MAX_REVIEW_REPAIRS = 3;
 
+// Frontier authoring (map build): after the spine persists, one batch author
+// call proposes the map's FRONTIER — optional enrichment concepts beyond the
+// required backbone (applications, specializations, adjacent techniques).
+// The prompt targets MIN–MAX; the sanitizer truncates overflow (author order is
+// the author's own priority) rather than re-prompting. Frontier never gates
+// spine_ready, so these bound cost, not readiness. ~40–60% of spine size.
+export const FRONTIER_MIN_CONCEPTS = 5;
+export const FRONTIER_MAX_CONCEPTS = 10;
+
+// Max times the frontier author re-runs after cycle validation rejects its
+// output (the only repair-worthy defect — slug/prereq hygiene is fixed
+// deterministically by the sanitizer). After the budget, cycles are broken by
+// dropping edges rather than failing: frontier is best-effort by design.
+export const FRONTIER_MAX_REPAIRS = 2;
+
 // Phase 2.5d-2 (candidate attachment): per spine concept, how many pickable
 // library resources to pull as candidates before the LLM judge scores them.
 // Small — the Track builder only needs a primary + a few frozen alternates per
