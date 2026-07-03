@@ -16,8 +16,8 @@
 //   3. allocateProgramBudget — the pure, deterministic hours split + ordering.
 //
 // The seams are injectable (`decompose`, `gate`) so planProgram is fixture-testable
-// with no LLM and no DB; the pure allocator is separately fixture-tested. See
-// scripts/verify-program-plan.ts.
+// with no LLM and no DB; the pure allocator is separately fixture-tested. See the
+// colocated program/plan.test.ts (this pass) and program/budget.test.ts (the allocator).
 
 import { generateObject } from 'ai';
 import { z } from 'zod';
