@@ -53,6 +53,13 @@ export type SearchParams = {
   // an above-gate topic whose window is active-only — a deliberate per-session
   // exception to the pending-review gate. Empty/omitted = no exception.
   includeIds?: string[];
+  // Phase F6: drop `origin = generated` rows (the AI-authored on-ramp lessons).
+  // Those enter a concept's candidate set ONLY via the injected map for their OWN
+  // concept (attach-candidates); returning them from the ordinary search let one
+  // on-ramp article become a candidate — and sometimes the primary — for unrelated
+  // sibling concepts. Opt-in (default false) so only the map's attach path excludes
+  // them; every other caller (playground, retrieval) is unchanged.
+  excludeGenerated?: boolean;
   limit?: number;
 };
 
@@ -89,7 +96,7 @@ const COLS = Prisma.sql`
   "decompositionStatus"::text AS "decompositionStatus"
 `;
 
-function buildConditions(params: SearchParams): Prisma.Sql[] {
+export function buildConditions(params: SearchParams): Prisma.Sql[] {
   const {
     topic,
     topics,
@@ -99,6 +106,7 @@ function buildConditions(params: SearchParams): Prisma.Sql[] {
     pickableOnly = true,
     statuses = DEFAULT_STATUSES,
     includeIds,
+    excludeGenerated = false,
   } = params;
   const conds: Prisma.Sql[] = [];
   if (topics && topics.length > 0) {
@@ -128,6 +136,10 @@ function buildConditions(params: SearchParams): Prisma.Sql[] {
     } else {
       conds.push(Prisma.sql`status::text IN (${Prisma.join(statuses)})`);
     }
+  }
+  // F6: keep AI-generated on-ramp rows out of the ordinary candidate search.
+  if (excludeGenerated) {
+    conds.push(Prisma.sql`origin::text <> 'generated'`);
   }
   return conds;
 }
