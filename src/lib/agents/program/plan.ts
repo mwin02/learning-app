@@ -193,22 +193,38 @@ export async function planProgram(
 
   const proposed = await decompose(input);
 
-  // Stage 2 — gate each proposal, dedup by canonical slug (higher weight wins).
+  // Stage 2 — gate each proposal in PARALLEL (each gate call is an independent LLM
+  // round-trip, with its own one-shot retry inside validateTopic), up to MAX_PROGRAM_TOPICS
+  // of them. Then fold the verdicts into the dedup map SEQUENTIALLY in proposal order, so
+  // the canonical-collapse tie-break stays deterministic. Promise.all preserves array
+  // order, so the fold sees proposals in exactly their original sequence.
+  //
+  // Tradeoff (accepted 2026-07-02): same-batch tier-3 mints can't see each other's fresh
+  // canonicals in the grounding list, a slightly higher near-duplicate risk — mitigated by
+  // the grounded prompt and F2's canonical-slug validation.
+  const gated = await Promise.all(
+    proposed.map(async (p) => {
+      try {
+        return { ok: true as const, p, verdict: await gate(p.topic) };
+      } catch (err) {
+        // validateTopic retries its own Gemini structured-output call, so reaching here
+        // means it threw twice (a persistent `No object generated` / infra fault). A gate
+        // that THROWS (vs. cleanly rejects) drops just this one topic — never the program.
+        const reason = `gate error: ${err instanceof Error ? err.message : String(err)}`;
+        console.warn('[program-plan] gate threw, dropping topic', { topic: p.topic, reason });
+        return { ok: false as const, p, reason };
+      }
+    }),
+  );
+
   const droppedByGate: GateDroppedTopic[] = [];
   const bySlug = new Map<string, ProgramTopicInput>();
-  for (const p of proposed) {
-    let verdict: TopicGateResult;
-    try {
-      verdict = await gate(p.topic);
-    } catch (err) {
-      // validateTopic retries its own Gemini structured-output call, so reaching here
-      // means it threw twice (a persistent `No object generated` / infra fault). A gate
-      // that THROWS (vs. cleanly rejects) drops just this one topic — never the program.
-      const reason = `gate error: ${err instanceof Error ? err.message : String(err)}`;
-      console.warn('[program-plan] gate threw, dropping topic', { topic: p.topic, reason });
-      droppedByGate.push({ topic: p.topic, reason });
+  for (const g of gated) {
+    if (!g.ok) {
+      droppedByGate.push({ topic: g.p.topic, reason: g.reason });
       continue;
     }
+    const { p, verdict } = g;
     if (!verdict.valid) {
       droppedByGate.push({ topic: p.topic, reason: verdict.reason });
       continue;
