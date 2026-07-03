@@ -93,6 +93,13 @@ export type ComposedLesson = {
 export type ResourceSufficiency = {
   enough: boolean;
   underResourced: { conceptSlug: string; reason: string }[];
+  // Budget-fill Block 2: the SECOND sufficiency axis — concepts that ARE teachable
+  // (so not in underResourced, and this never flips `enough`) but whose candidate
+  // pool can't fill the stated depth tier's core size without redundancy (e.g. a
+  // deep tier where the only teacher is one 7-minute clip). Routed to the thickener
+  // with a substantial-duration sourcing bias; judged against the tier, never
+  // minutes. Empty when no budget / light–standard tier.
+  thinForBudget: { conceptSlug: string; reason: string }[];
 };
 
 export type ComposerResult = {
@@ -139,6 +146,7 @@ const CompositionSchema = z.object({
   resourceSufficiency: z.object({
     enough: z.boolean(),
     underResourced: z.array(z.object({ conceptSlug: z.string(), reason: z.string() })),
+    thinForBudget: z.array(z.object({ conceptSlug: z.string(), reason: z.string() })),
   }),
 });
 
@@ -219,6 +227,7 @@ export async function composeTrack(args: {
     omittedForIntent: raw.omitForIntent.length,
     intent: raw.intent,
     enough: raw.resourceSufficiency.enough,
+    thinForBudget: raw.resourceSufficiency.thinForBudget.length,
     usage: result.usage,
     finishReason: result.finishReason,
   });
@@ -270,6 +279,7 @@ export async function composeTrack(args: {
       intent: raw.intent,
       enough: raw.resourceSufficiency.enough,
       underResourced: raw.resourceSufficiency.underResourced.map((u) => u.conceptSlug),
+      thinForBudget: raw.resourceSufficiency.thinForBudget.map((t) => t.conceptSlug),
     },
   });
 
@@ -322,6 +332,8 @@ You produce, in one pass:
 4. \`trackTitle\`, \`trackSummary\` — a motivating course title and a short summary tailored to the learner's level and goal.
 
 5. \`resourceSufficiency\` — judge whether the included concepts have GOOD ENOUGH resources to actually TEACH them TO THE TARGET MASTERY. Set \`enough\` false and list \`underResourced\` concepts (with a one-line reason) when a concept's only candidates are thin, off-level, or merely "uses"/"assesses" rather than a solid "teaches". This is about TEACHABILITY/COVERAGE, not about time — ignore the budget here. It is ALSO NOT about practice or assessment availability: every concept gets agent-generated practice questions elsewhere, so the LACK of an "assesses"/practice resource is NEVER a reason to set \`enough\` false. Only a missing/weak way to LEARN the concept (no solid "teaches") counts.
+
+5b. \`resourceSufficiency.thinForBudget\` — the separate BUDGET axis. List an INCLUDED concept here when it IS teachable (do not also list it in \`underResourced\`; this never affects \`enough\`) but its candidate pool cannot fill the stated DEPTH TIER's core size without redundancy — e.g. a \`deep\` tier where the concept's only solid teacher is a single short clip, so there is nothing complementary to add. The builder sources more substantial resources for these concepts and rebuilds. Judge against the tier's rough per-lesson count and the candidates' substance — never do minute arithmetic. Leave this EMPTY when the tier is \`light\` or \`standard\`, and be selective at \`deep\`/\`immersive\`: list the few genuinely thin load-bearing concepts, not every lesson that fell one resource short.
 
 6. \`intent\` — the ONE category that best fits WHY the learner is taking this Track, inferred from their free-text goal (and prior knowledge). This label both guides your own pruning + resource choices above and is recorded for later stages, so pick deliberately:
    - \`learn\` — a fresh first pass through new material (the default when no goal is given, or the goal is just "learn X").

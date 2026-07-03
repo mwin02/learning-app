@@ -60,8 +60,13 @@ export async function searchYouTubeForConcept(args: {
   maxResults: number;
   difficulty?: Difficulty;
   denyUrls?: string[];
+  // Budget-fill Block 2: restrict search.list to videoDuration=long (>20m) so the
+  // prong surfaces full lessons rather than more of the short clips the concept
+  // already has. The attach ceiling (MAX_ATTACHABLE_DURATION_MIN) still drops any
+  // whole-course monster this returns.
+  preferSubstantial?: boolean;
 }): Promise<YoutubeSourcedResource[]> {
-  const { topic, conceptTitle, maxResults, difficulty = 'intermediate', denyUrls = [] } = args;
+  const { topic, conceptTitle, maxResults, difficulty = 'intermediate', denyUrls = [], preferSubstantial = false } = args;
   const key = process.env.YOUTUBE_API_KEY?.trim();
   if (!key) {
     console.log('[youtube-search] YOUTUBE_API_KEY not set — prong skipped', { conceptTitle });
@@ -70,7 +75,7 @@ export async function searchYouTubeForConcept(args: {
 
   let videoIds: string[];
   try {
-    videoIds = await searchVideoIds(`${conceptTitle} ${topic}`, maxResults, key);
+    videoIds = await searchVideoIds(`${conceptTitle} ${topic}`, maxResults, key, preferSubstantial);
   } catch (err) {
     console.warn('[youtube-search] search.list failed — prong degraded to empty', {
       conceptTitle,
@@ -137,11 +142,13 @@ export async function searchYouTubeForConcept(args: {
 
 const watchUrl = (videoId: string) => `https://www.youtube.com/watch?v=${videoId}`;
 
-async function searchVideoIds(query: string, maxResults: number, key: string): Promise<string[]> {
+async function searchVideoIds(query: string, maxResults: number, key: string, preferSubstantial = false): Promise<string[]> {
   const url = new URL(`${API_BASE}/search`);
   url.searchParams.set('part', 'snippet');
   url.searchParams.set('type', 'video');
   url.searchParams.set('order', 'relevance');
+  if (preferSubstantial) url.searchParams.set('videoDuration', 'long'); // >20 minutes
+
   url.searchParams.set('maxResults', String(Math.min(Math.max(maxResults, 1), 50)));
   url.searchParams.set('relevanceLanguage', 'en');
   url.searchParams.set('q', query);

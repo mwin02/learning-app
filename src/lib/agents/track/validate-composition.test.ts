@@ -47,7 +47,7 @@ function comp(over: Partial<ComposerResult>): ComposerResult {
     intent: TrackIntent.learn,
     lessons: [],
     trackTitle: 'T', trackSummary: 'S',
-    resourceSufficiency: { enough: true, underResourced: [] },
+    resourceSufficiency: { enough: true, underResourced: [], thinForBudget: [] },
     ...over,
   };
 }

@@ -39,10 +39,13 @@ export async function sourceAndAttachConcept(args: {
   // Lever C: judge sourced rows with the strict on-ramp rubric when this concept
   // is the orientation on-ramp, so re-sourcing it can't re-admit deep-dives.
   isOnRamp?: boolean;
+  // Budget-fill Block 2: bias discovery toward substantial (~20–90m) resources —
+  // set for budget-thin concepts, where more short clips can't fill the tier.
+  preferSubstantial?: boolean;
 }): Promise<number> {
-  const { pathId, topic, conceptId, slug, title, targetMastery, isOnRamp = false } = args;
+  const { pathId, topic, conceptId, slug, title, targetMastery, isOnRamp = false, preferSubstantial = false } = args;
 
-  const sourced = await sourceForConcept({ topic, concept: { slug, title }, targetMastery });
+  const sourced = await sourceForConcept({ topic, concept: { slug, title }, targetMastery, preferSubstantial });
   let rows = await loadAsSearchResults(sourced.insertedIds);
 
   // Phase 2g-4: on-ramp backstop. The cold build (ensure-path-map) normally authors the

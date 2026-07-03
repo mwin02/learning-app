@@ -119,11 +119,18 @@ export async function sourceForConcept({
   concept,
   targetCount = REMEDIATION_SOURCE_TARGET_COUNT,
   targetMastery,
+  preferSubstantial = false,
 }: {
   topic: string;
   concept: { slug: string; title: string };
   targetCount?: number;
   targetMastery?: Difficulty;
+  // Budget-fill Block 2: bias every prong toward substantial (~20-90m) resources.
+  // Set for budget-thin concepts (thinForBudget) - the library is mostly <=30m
+  // clips, and another clip can't fill a deep-tier core. Prompt-level steer for
+  // the grounded prongs; videoDuration=long for the YouTube prong. The Block 0
+  // attach ceiling still drops whole-course monsters this surfaces.
+  preferSubstantial?: boolean;
 }): Promise<WebFallbackResult> {
   const label = `${topic}::${concept.slug}`;
   // The sourcing LADDER (replaces the old "same vague open-web query, repeated"):
@@ -142,8 +149,8 @@ export async function sourceForConcept({
     maxIterations: REMEDIATION_MAX_DISCOVERY_ITERATIONS,
     discover: (oversample, denyList, iteration) =>
       iteration === 1
-        ? discoverAllowlisted(topic, concept.title, oversample, denyList, allowDomains, targetMastery)
-        : discoverForConcept(topic, concept.title, oversample, denyList, targetMastery),
+        ? discoverAllowlisted(topic, concept.title, oversample, denyList, allowDomains, targetMastery, preferSubstantial)
+        : discoverForConcept(topic, concept.title, oversample, denyList, targetMastery, preferSubstantial),
   });
   return persistDiscovered(topic, survivors, { label, iterations, totalDiscovered, targetCount });
 }
@@ -358,14 +365,15 @@ async function discoverAllowlisted(
   denyList: string[],
   allowDomains: string[],
   targetMastery?: Difficulty,
+  preferSubstantial = false,
 ): Promise<SourcedResource[]> {
   const [ytRows, groundedRows] = await Promise.all([
-    searchYouTubeForConcept({ topic, conceptTitle, maxResults: oversample, difficulty: targetMastery, denyUrls: denyList })
+    searchYouTubeForConcept({ topic, conceptTitle, maxResults: oversample, difficulty: targetMastery, denyUrls: denyList, preferSubstantial })
       .catch((err) => {
         console.warn('[web-fallback] youtube prong failed', { conceptTitle, error: err instanceof Error ? err.message : String(err) });
         return [] as YoutubeSourcedResource[];
       }),
-    discoverForConceptScoped(topic, conceptTitle, oversample, denyList, allowDomains, targetMastery),
+    discoverForConceptScoped(topic, conceptTitle, oversample, denyList, allowDomains, targetMastery, preferSubstantial),
   ]);
   return [...ytRows.map(youtubeToSourced), ...groundedRows];
 }
@@ -381,6 +389,7 @@ async function discoverForConceptScoped(
   denyList: string[],
   allowDomains: string[],
   targetMastery?: Difficulty,
+  preferSubstantial = false,
 ): Promise<SourcedResource[]> {
   if (allowDomains.length === 0) return [];
   const rows = await runDiscovery({
@@ -388,7 +397,7 @@ async function discoverForConceptScoped(
     oversample,
     denyListSize: denyList.length,
     system: CONCEPT_DISCOVERY_SYSTEM_PROMPT,
-    prompt: buildScopedConceptDiscoveryPrompt(topic, conceptTitle, oversample, denyList, allowDomains, targetMastery),
+    prompt: buildScopedConceptDiscoveryPrompt(topic, conceptTitle, oversample, denyList, allowDomains, targetMastery, preferSubstantial),
   });
   const allow = new Set(allowDomains);
   const onAllowlist = rows.filter((r) => {
@@ -435,13 +444,14 @@ async function discoverForConcept(
   oversample: number,
   denyList: string[],
   targetMastery?: Difficulty,
+  preferSubstantial = false,
 ): Promise<DiscoveredResource[]> {
   return runDiscovery({
     label: `${topic}::${conceptTitle}`,
     oversample,
     denyListSize: denyList.length,
     system: CONCEPT_DISCOVERY_SYSTEM_PROMPT,
-    prompt: buildConceptDiscoveryPrompt(topic, conceptTitle, oversample, denyList, targetMastery),
+    prompt: buildConceptDiscoveryPrompt(topic, conceptTitle, oversample, denyList, targetMastery, preferSubstantial),
   });
 }
 
@@ -523,6 +533,7 @@ function buildConceptDiscoveryPrompt(
   oversample: number,
   denyList: string[],
   targetMastery?: Difficulty,
+  preferSubstantial = false,
 ): string {
   const lines = [
     `Target concept: ${conceptTitle}`,
@@ -537,6 +548,7 @@ function buildConceptDiscoveryPrompt(
       `Target learner level: ${targetMastery}. Prefer resources pitched at or approaching ${targetMastery} depth (adjacent levels are acceptable if strong).`,
     );
   }
+  appendSubstantialBias(lines, preferSubstantial);
   appendDenyList(lines, denyList);
   return lines.join('\n');
 }
@@ -552,6 +564,7 @@ function buildScopedConceptDiscoveryPrompt(
   denyList: string[],
   allowDomains: string[],
   targetMastery?: Difficulty,
+  preferSubstantial = false,
 ): string {
   const lines = [
     `Target concept: ${conceptTitle}`,
@@ -566,8 +579,19 @@ function buildScopedConceptDiscoveryPrompt(
       `Target learner level: ${targetMastery}. Prefer resources pitched at or approaching ${targetMastery} depth (adjacent levels are acceptable if strong).`,
     );
   }
+  appendSubstantialBias(lines, preferSubstantial);
   appendDenyList(lines, denyList);
   return lines.join('\n');
+}
+
+// Budget-fill Block 2: the substantial-duration steer for budget-thin concepts.
+// The existing candidates are short clips that can't fill a deep-tier core, so
+// surfacing more of the same wastes the sourcing round.
+function appendSubstantialBias(lines: string[], preferSubstantial: boolean): void {
+  if (!preferSubstantial) return;
+  lines.push(
+    'Prefer SUBSTANTIAL resources a learner can spend real time with - full lessons, chapters, or in-depth videos of roughly 20-90 minutes. Avoid short overview clips (under ~10 minutes); the concept already has those.',
+  );
 }
 
 function appendDenyList(lines: string[], denyList: string[]): void {

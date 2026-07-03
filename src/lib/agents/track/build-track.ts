@@ -168,13 +168,18 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
       validatedLessons = validation.lessons;
       warnings = validation.warnings;
 
-      // Axis-1 (resource) insufficiency → thicken + rebuild, bounded. The
-      // thickener sources biased toward the target mastery; if it attaches
-      // nothing new we fall through to a best-effort weaker Track.
-      if (composition.resourceSufficiency.enough || attempt >= TRACK_MAX_THICKEN_ATTEMPTS) break;
+      // Axis-1 (resource) insufficiency and/or the Block-2 budget axis (teachable
+      // but too thin for the depth tier) → thicken + rebuild, bounded. The
+      // thickener sources biased toward the target mastery (and toward substantial
+      // durations for budget-thin concepts), worst-first under a per-cycle concept
+      // cap; if it attaches nothing new we fall through to a best-effort Track.
+      const thinForBudget = composition.resourceSufficiency.thinForBudget;
+      const needsThicken = !composition.resourceSufficiency.enough || thinForBudget.length > 0;
+      if (!needsThicken || attempt >= TRACK_MAX_THICKEN_ATTEMPTS) break;
       const thicken = await thickenSpine({
         pathId,
         underResourced: composition.resourceSufficiency.underResourced,
+        thinForBudget,
         targetMastery,
       });
       onTrace({ kind: 'stage', label: 'thicken attempt', detail: { attempt, ...thicken } });
