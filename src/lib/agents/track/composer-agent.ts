@@ -242,6 +242,8 @@ export async function composeTrackAgent(args: {
         resourceSufficiency: z.object({
           enough: z.boolean(),
           underResourced: z.array(z.object({ conceptSlug: z.string(), reason: z.string() })).default([]),
+          // Block 2: the budget axis — teachable but too thin for the depth tier.
+          thinForBudget: z.array(z.object({ conceptSlug: z.string(), reason: z.string() })).default([]),
         }),
       }),
       execute: async ({ intent, trackTitle, trackSummary, resourceSufficiency }) => {
@@ -311,7 +313,7 @@ export async function composeTrackAgent(args: {
     console.warn('[composer-agent] loop ended without finalize; synthesizing framing', { topic, lessons: composedLessons.length });
     try {
       const gen = await generateFallbackFraming({ topic, goal, priorKnowledge, lessonTitles: composedLessons.map((l) => l.title) });
-      fr = { ...gen, resourceSufficiency: { enough: true, underResourced: [] } };
+      fr = { ...gen, resourceSufficiency: { enough: true, underResourced: [], thinForBudget: [] } };
     } catch (err) {
       console.warn('[composer-agent] fallback framing call failed; using minimal defaults', err);
     }
@@ -319,7 +321,7 @@ export async function composeTrackAgent(args: {
   const intent = fr?.intent ?? TrackIntent.learn;
   const trackTitle = fr?.trackTitle ?? topic;
   const trackSummary = fr?.trackSummary ?? `A learning path for ${topic}.`;
-  const resourceSufficiency = fr?.resourceSufficiency ?? { enough: true, underResourced: [] };
+  const resourceSufficiency = fr?.resourceSufficiency ?? { enough: true, underResourced: [], thinForBudget: [] };
 
   console.log('[composer-agent]', {
     topic,
@@ -410,6 +412,7 @@ How to work:
    - \`intent\`: the one category that best fits WHY the learner is here, inferred from their goal — learn (fresh first pass; default when no goal) | review (refresh known material) | practice (drill/apply) | master (go deep beyond a first pass) | exam_prep (time-boxed cram, breadth/recall over depth).
    - \`trackTitle\`, \`trackSummary\`: motivating, tailored to their level and goal.
    - \`resourceSufficiency\`: enough=false (+ underResourced concepts with reasons) when an included concept's only candidates are thin, off-level, or merely 'uses'/'assesses' rather than a solid 'teaches'. This is about TEACHABILITY, not time — and NOT about practice/assessment availability: practice questions are generated for every concept elsewhere, so a missing 'assesses'/practice resource is NEVER a reason to set enough=false. Only a missing/weak way to LEARN the concept (no solid 'teaches') counts.
+   - \`resourceSufficiency.thinForBudget\`: the separate BUDGET axis (never affects \`enough\`; don't duplicate an \`underResourced\` entry). List an included concept that IS teachable but whose candidates cannot fill the stated DEPTH TIER's core size without redundancy — the builder sources more substantial resources and rebuilds. Leave empty at \`light\`/\`standard\` tier; be selective at \`deep\`/\`immersive\` (the few genuinely thin load-bearing concepts, not every lesson one resource short).
 6. After a successful \`finalize\`, STOP.
 
 Rules:

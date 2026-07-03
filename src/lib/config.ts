@@ -312,6 +312,15 @@ export const MAP_RESOURCE_PICKER_LIMIT = 20;
 // best-effort weaker Track. Raise once the real thickener can actually fill holes.
 export const TRACK_MAX_THICKEN_ATTEMPTS = 1;
 
+// Budget-fill Block 2: how many concepts ONE thicken cycle may source for. The
+// thickener is synchronous per-concept web sourcing inside the build (until the
+// 2.5g async cutover), so an immersive-tier build flagging a dozen thin concepts
+// would multiply build latency unboundedly. Targets are taken worst-first —
+// teachability holes (underResourced) before budget-thin (thinForBudget), each
+// list already in the composer's order — so the cap degrades gracefully to
+// "fix the worst few, best-effort the rest".
+export const TRACK_MAX_THICKEN_CONCEPTS = 6;
+
 // Phase 2.5e-8 (block 2b): which composer backs a Track build.
 //   'single' — the one-shot Output.object pass (composer.ts), today's default.
 //   'agent'  — the tool-using loop (composer-agent.ts): reads the map/candidates and
