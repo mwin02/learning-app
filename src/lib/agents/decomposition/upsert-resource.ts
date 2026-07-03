@@ -18,6 +18,7 @@ import { safeEmbedResource } from '@/lib/ai/embeddings';
 import { safeClassifyAndPersist } from '@/lib/curation/embeddability';
 import { computeTrustScore } from '@/lib/curation/trust-score';
 import { youtubeEngagementSignal } from '@/lib/curation/youtube-signal';
+import { normalizeResourceUrl } from './normalize-url';
 import type { PrismaClient, ResourceType, Difficulty, DecompositionStatus, ResourceStatus } from '@prisma/client';
 import type { DecompositionResult, ChildInput } from './decompose';
 
@@ -59,14 +60,17 @@ export async function upsertResource(
   resource: UpsertResourceInput,
   decomposition: DecompositionResult,
 ): Promise<UpsertOutcome> {
+  // F8: dedup on the canonical URL — strip tracking params / fragment / trailing slash /
+  // host case so a trivially-different URL for the same page collapses onto one row.
+  const url = normalizeResourceUrl(resource.url);
   const existing = await prisma.resource.findUnique({
-    where: { url: resource.url },
+    where: { url },
     select: { id: true, topic: true },
   });
   if (existing) {
     if (existing.topic !== topic) {
       console.log('[upsert-resource] skip cross-topic URL collision', {
-        url: resource.url,
+        url,
         existingTopic: existing.topic,
         requestedTopic: topic,
       });
@@ -80,7 +84,7 @@ export async function upsertResource(
   // its own reception; other resources have no signal and rest on the source prior.
   const source = resource.youtube
     ? await resolveYouTubeSource(resource.youtube.channelId)
-    : await resolveSource(resource.url);
+    : await resolveSource(url);
   const engagement = resource.youtube ? youtubeEngagementSignal(resource.youtube) : null;
   const sourceTrust = computeTrustScore({
     base: source.trustScore,
@@ -91,13 +95,13 @@ export async function upsertResource(
 
   try {
     await prisma.$transaction(async (tx) => {
-      const parentSlug = await uniqueSlug(tx, resource.title, resource.url, taken);
+      const parentSlug = await uniqueSlug(tx, resource.title, url, taken);
       const parent = await tx.resource.create({
         data: {
           slug: parentSlug,
           topic,
           title: resource.title,
-          url: resource.url,
+          url,
           type: resource.type as ResourceType,
           durationMin: resource.durationMin,
           summary: resource.summary,
@@ -123,7 +127,7 @@ export async function upsertResource(
       if (decomposition.status === 'atomic') {
         embedTasks.push({
           id: parent.id,
-          url: resource.url,
+          url,
           title: resource.title,
           summary: resource.summary,
           conceptsTaught: resource.conceptsTaught,
@@ -147,7 +151,7 @@ export async function upsertResource(
     });
   } catch (err) {
     console.log('[upsert-resource] transaction failed', {
-      url: resource.url,
+      url,
       error: (err as Error).message,
     });
     return { outcome: 'skipped', atomicIds: [] };
@@ -324,23 +328,25 @@ async function createChild(
 ): Promise<number> {
   const { topic, parentId, sourceId, trustScore, childStatus, child, taken, embedTasks } = args;
 
+  // F8: same canonical-URL dedup as the parent path (see upsertResource).
+  const url = normalizeResourceUrl(child.url);
   const clash = await tx.resource.findUnique({
-    where: { url: child.url },
+    where: { url },
     select: { id: true },
   });
   if (clash) {
-    console.log('[upsert-resource] skip existing child URL', { url: child.url, parentId });
+    console.log('[upsert-resource] skip existing child URL', { url, parentId });
     return 0;
   }
 
   const decompStatus: DecompositionStatus = child.decompositionStatus ?? 'atomic';
-  const slug = await uniqueSlug(tx, child.title, child.url, taken);
+  const slug = await uniqueSlug(tx, child.title, url, taken);
   const created = await tx.resource.create({
     data: {
       slug,
       topic,
       title: child.title,
-      url: child.url,
+      url,
       type: child.type as ResourceType,
       durationMin: child.durationMin,
       summary: child.summary,
@@ -362,7 +368,7 @@ async function createChild(
   if (decompStatus === 'atomic') {
     embedTasks.push({
       id: created.id,
-      url: child.url,
+      url,
       title: child.title,
       summary: child.summary,
       conceptsTaught: child.conceptsTaught,
