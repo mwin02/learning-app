@@ -19,6 +19,7 @@ import {
   MAP_SPINE_MIN_PRIMARY_COVERAGE,
   TRUST_SELECTION_WEIGHT,
   MAP_DURATION_RANKING,
+  MAX_ATTACHABLE_DURATION_MIN,
 } from '@/lib/config';
 import { relatedTopics } from '@/types/resource';
 import type { SearchResult } from '@/lib/agents/tools/search-resources';
@@ -101,19 +102,30 @@ export function capCandidates<T extends { role: ConceptResourceRole; coverageSco
 }
 
 // Lever A — admission filter for FRESH judge output. Drops candidates below the
-// coverage floor (MAP_ATTACH_MIN_COVERAGE), then count-bounds via capCandidates.
-// The floor is an ADMISSION policy — "is this freshly-judged candidate good enough
-// to attach?" — so it belongs only on newly-judged sets, never on a re-cap of rows
-// already in the DB (those were admitted under whatever policy applied then, incl.
-// 2.5f relaxed readiness; re-flooring them can wrongly delete a relaxed concept's
-// only candidates and regress the Path). For the persisted re-cap use capCandidates.
-// Pure + generic; tests without a DB. Output is selection-score-desc (the floor is
-// still a pure COVERAGE gate — trust/duration never admit a sub-floor candidate).
+// coverage floor (MAP_ATTACH_MIN_COVERAGE) and past the attachable duration ceiling
+// (MAX_ATTACHABLE_DURATION_MIN — Block 0: a whole-course/book row that escaped
+// decomposition is never attachable; past the ceiling a hole beats a monster, unlike
+// the in-band 2g-1 penalty which only demotes), then count-bounds via capCandidates.
+// Floor and ceiling are ADMISSION policies — "is this freshly-judged candidate good
+// enough to attach?" — so they belong only on newly-judged sets, never on a re-cap of
+// rows already in the DB (those were admitted under whatever policy applied then,
+// incl. 2.5f relaxed readiness; re-litigating them can wrongly delete a relaxed
+// concept's only candidates and regress the Path). For the persisted re-cap use
+// capCandidates. Pure + generic; tests without a DB. Output is selection-score-desc
+// (the floor is still a pure COVERAGE gate — trust/duration never admit a sub-floor
+// candidate; rows without a durationMin pass the ceiling, like trust-less rows).
 export function selectAttachable<T extends { role: ConceptResourceRole; coverageScore: number; trustScore?: number; durationMin?: number }>(
   candidates: T[],
   opts: RankOpts = {},
 ): T[] {
-  return capCandidates(candidates.filter((c) => c.coverageScore >= MAP_ATTACH_MIN_COVERAGE), opts);
+  return capCandidates(
+    candidates.filter(
+      (c) =>
+        c.coverageScore >= MAP_ATTACH_MIN_COVERAGE &&
+        (c.durationMin == null || c.durationMin <= MAX_ATTACHABLE_DURATION_MIN),
+    ),
+    opts,
+  );
 }
 
 export type ConceptAttachment = {
