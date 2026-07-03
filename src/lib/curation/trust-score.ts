@@ -18,7 +18,7 @@
 // source's resource BELOW its prior (a poorly-received video from a great channel
 // is genuinely weaker). `confidence` guards against acting on thin evidence.
 //
-// Pure and dependency-free so scripts/verify-trust-score.ts can exercise the math
+// Pure and dependency-free so the colocated trust-score.test.ts can exercise the math
 // without a DB. The only knobs are the prior strength and the floor (config.ts);
 // signal-specific knobs (engagement thresholds, selection weight) live with their
 // callers.

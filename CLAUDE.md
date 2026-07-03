@@ -67,6 +67,40 @@ Two failure modes this ordering prevents — both bit us merging the 2.5f stack 
 - **Commit messages: no `Co-Authored-By: Claude` trailer.** Write commit messages without the AI attribution footer.
 - This file (CLAUDE.md) and shared skills under `.claude/skills/` are tracked; everything else under `.claude/` stays git-ignored (local settings, worktrees).
 
+## Testing (Vitest — colocated unit + gated integration)
+
+Tests run on **Vitest** (config in [`vitest.config.ts`](vitest.config.ts)), split into two projects that resolve the `@/*` alias like the app:
+
+- **unit** — pure, fast, no DB/LLM. Files are **colocated** next to the code as `src/**/*.test.ts`.
+- **integration** — hits the real dev DB. Files live in [`tests/integration/`](tests/integration/). A setup file loads `.env.local`, and DB blocks skip cleanly (with a message) when there's no `DATABASE_URL`.
+
+**npm scripts:** `test` = unit only (the safe default — runs with no secrets); `test:unit`; `test:int`; `test:all` (both projects).
+
+**Which kind to write:**
+
+- **Pure logic** (deterministic transforms, allocators, validators, slug/formatting helpers) → a **colocated unit test**. This is the default and where most coverage lives.
+- **Needs the DB** but no LLM → an **integration test** under `tests/integration/`.
+- **Costs LLM calls, needs a seeded DB, or drives live external APIs** → do **not** migrate to Vitest. It stays a manual `scripts/verify-*.ts` driver, run with `npx tsx --env-file=.env.local scripts/verify-*.ts`. Several scripts are split: the pure half is a colocated unit test, the live half remains a driver (see `scripts/verify-composer.ts`, `scripts/verify-sectioner.ts`). The historical assertion-style `verify-*` scripts were migrated to Vitest in the R-blocks; the survivors are all live/seeded drivers by design.
+
+**Writing a unit test:** import from `@/*`, use `describe`/`it`/`expect`. Assertions are the plain `expect(...)` matchers — no `check(name, cond)` helper (that was the old script pattern; the conversion is `check(name, cond)` → `it(name, () => expect(...))`).
+
+⚠️ **Module-eval gotcha.** Importing an app module that transitively pulls in `@/lib/db` or `@/lib/ai/vertex` will **throw at import** when the env vars are absent (`DATABASE_URL` / `GOOGLE_VERTEX_PROJECT`), even if the function under test never touches them — those modules validate env at module-eval. When the code under test is pure, stub the offending leaf so the unit test stays secret-free:
+
+```ts
+vi.mock('@/lib/db', () => ({ prisma: {} }));
+// If the graph imports @/lib/ai/vertex directly (e.g. via tools/web-fallback), stub the leaf:
+vi.mock('@/lib/ai/vertex', () => ({
+  vertex: Object.assign(() => ({}), { textEmbeddingModel: () => ({}) }),
+  chatModel: () => ({}), geminiFlash: {}, vertexAnthropic: {}, vertexGlobal: {},
+}));
+// Otherwise stubbing @/lib/ai/models is enough:
+vi.mock('@/lib/ai/models', () => ({ getModel: () => ({ model: {}, temperature: 0, maxOutputTokens: 0 }) }));
+```
+
+Reach for a stub only when the import throws; most pure modules import cleanly and need none.
+
+**Writing an integration test:** wrap every DB-touching block in **`describeDb`** (from [`tests/integration/db.ts`](tests/integration/db.ts)) instead of `describe`, so it skips (not fails) without a `DATABASE_URL`. `.env.local` loads automatically. **Self-clean**: prefix throwaway rows with a unique marker (e.g. `__verify_prog__`) and delete them in `beforeAll`/`afterAll` — these tests write to the shared dev DB. Queue-scoped tests (`claimNextQueued`/`reclaimStale` scan the whole table) assume the **worker is stopped**; see `tests/integration/course-request-queue.test.ts` for the quarantine-and-restore pattern that keeps a stray foreign row from being stranded.
+
 ## Styling (Tailwind v4 — centralized design tokens)
 
 Styling uses **Tailwind CSS v4**. The single source of truth for the visual language is **[`src/app/globals.css`](src/app/globals.css)**. The goal is that a global change — palette, type size, corner rounding, spacing — is **one edit there**, never a find-replace across components. Honor that when adding or changing UI.

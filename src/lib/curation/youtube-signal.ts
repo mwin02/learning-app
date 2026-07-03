@@ -12,7 +12,7 @@
 //     that nudges its trustScore. Likes may be hidden by a channel; then the signal
 //     rests on views alone (likeScore falls out of the blend, re-normalized).
 //
-// Pure + dependency-light (config only) so scripts/verify-youtube-signal.ts can
+// Pure + dependency-light (config only) so the colocated youtube-signal.test.ts can
 // exercise it without the API or a DB.
 
 import {

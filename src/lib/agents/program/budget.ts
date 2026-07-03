@@ -17,8 +17,8 @@
 //      topics (nice_to_have before core, then lowest weight) until the floors fit.
 // Survivors are then dense-renumbered 1..M by the LLM's cross-topic order hint.
 //
-// Pure + deterministic: no IO, no Prisma, no LLM. Fixture-tested in
-// scripts/verify-program-budget.ts.
+// Pure + deterministic: no IO, no Prisma, no LLM. Fixture-tested in the colocated
+// budget.test.ts.
 
 import { PriorityTier } from '@prisma/client';
 import { allotByWeight } from '@/lib/agents/track/allocate';
