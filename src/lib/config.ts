@@ -435,6 +435,16 @@ export const EXERCISE_SAMPLE_PER_LESSON = 4;
 // the DECOMPOSITION_MAX_AUTO_CHILDREN oversize gate on the per-topic side).
 export const MAX_PROGRAM_TOPICS = 6;
 
+// Phase 3c: how many Programs a (free) user may CREATE per calendar month (UTC).
+// Creation is the metered action because it's where the LLM spend happens (plan
+// pass + child Track builds); enrolling in an EXISTING Program is free and
+// unlimited. Failed Programs don't count — a failed plan pass shouldn't burn
+// quota. Read through programQuota (services/program-limits.ts) only, so the
+// Stripe phase can swap that function's internals to a per-plan lookup without
+// touching routes. Soft limit: two racing requests can each pass the pre-create
+// check — acceptable (off-by-one on a free cap, not a security boundary).
+export const FREE_PROGRAMS_PER_MONTH = 3;
+
 // Phase 2.75b: the per-topic floor for the deterministic hours/week split — every
 // surviving topic gets at least this many hours/week so no topic rounds to zero and
 // silently vanishes from the plan. When Σ floors exceeds the program's

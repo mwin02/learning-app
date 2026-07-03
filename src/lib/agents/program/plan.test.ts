@@ -21,7 +21,12 @@ vi.mock('@/lib/ai/models', () => ({
 }));
 vi.mock('@/lib/db', () => ({ prisma: {} }));
 
-import { planProgram, buildDecomposePrompt, type ProposedTopic } from '@/lib/agents/program/plan';
+import {
+  planProgram,
+  buildDecomposePrompt,
+  type ProposedTopic,
+  type ProgramDecomposition,
+} from '@/lib/agents/program/plan';
 import type { TopicGateResult } from '@/lib/agents/topic-gate';
 
 const proposed = (over: Partial<ProposedTopic>): ProposedTopic => ({
@@ -32,6 +37,13 @@ const proposed = (over: Partial<ProposedTopic>): ProposedTopic => ({
   orderHint: 1,
   rationale: 'r',
   ...over,
+});
+// Phase 3c: decompose returns { title, description, topics } — wrap topic
+// fixtures in a canned program name.
+const decomp = (topics: ProposedTopic[]): ProgramDecomposition => ({
+  title: 'Test Program',
+  description: 'A test program.',
+  topics,
 });
 // A stub gate: slugify the label; reject anything containing "cooking".
 const stubGate = async (topic: string): Promise<TopicGateResult> => {
@@ -66,10 +78,10 @@ describe('planProgram — gate drops out-of-domain topics', () => {
     const plan = await planProgram(
       { goal: 'g', totalHoursPerWeek: 10, totalWeeks: 10 },
       {
-        decompose: async () => [
+        decompose: async () => decomp([
           proposed({ topic: 'Python', weight: 3 }),
           proposed({ topic: 'Cooking', weight: 2 }),
-        ],
+        ]),
         gate: stubGate,
         listLibrary: async () => [],
       },
@@ -97,7 +109,7 @@ describe('planProgram — a gate THROW drops only that topic, not the program', 
     const plan = await planProgram(
       { goal: 'g', totalHoursPerWeek: 10, totalWeeks: 10 },
       {
-        decompose: async () => [proposed({ topic: 'python', weight: 3 }), proposed({ topic: 'flaky', weight: 2 })],
+        decompose: async () => decomp([proposed({ topic: 'python', weight: 3 }), proposed({ topic: 'flaky', weight: 2 })]),
         gate: flakyGate,
         listLibrary: async () => [],
       },
@@ -114,11 +126,11 @@ describe('planProgram — two labels → same canonical collapse (higher weight 
     const plan = await planProgram(
       { goal: 'g', totalHoursPerWeek: 12, totalWeeks: 10 },
       {
-        decompose: async () => [
+        decompose: async () => decomp([
           proposed({ topic: 'linear algebra', weight: 2, orderHint: 1 }),
           proposed({ topic: 'Linear Algebra', weight: 8, orderHint: 2 }),
           proposed({ topic: 'calculus', weight: 4, orderHint: 3 }),
-        ],
+        ]),
         gate: stubGate,
         listLibrary: async () => [],
       },
@@ -137,10 +149,10 @@ describe('planProgram — dedup keeps higher weight but never downgrades a core 
     const plan = await planProgram(
       { goal: 'g', totalHoursPerWeek: 12, totalWeeks: 10 },
       {
-        decompose: async () => [
+        decompose: async () => decomp([
           proposed({ topic: 'python', weight: 3, priorityTier: 'core', orderHint: 1 }),
           proposed({ topic: 'Python', weight: 9, priorityTier: 'nice_to_have', orderHint: 2 }),
-        ],
+        ]),
         gate: stubGate,
         listLibrary: async () => [],
       },
@@ -160,10 +172,10 @@ describe('planProgram — dedup tie-break: on EQUAL weight, core beats nice_to_h
     const plan = await planProgram(
       { goal: 'g', totalHoursPerWeek: 12, totalWeeks: 10 },
       {
-        decompose: async () => [
+        decompose: async () => decomp([
           proposed({ topic: 'python', weight: 5, priorityTier: 'nice_to_have', phaseLabel: 'EXISTING', rationale: 'existing' }),
           proposed({ topic: 'Python', weight: 5, priorityTier: 'core', phaseLabel: 'CANDIDATE', rationale: 'candidate' }),
-        ],
+        ]),
         gate: stubGate,
         listLibrary: async () => [], // F7 Stage 2.5 now always reads the library; keep this unit pure
       },
@@ -182,11 +194,11 @@ describe('planProgram — all-weights-non-positive still spends the full budget'
     const plan = await planProgram(
       { goal: 'g', totalHoursPerWeek: 10, totalWeeks: 8 },
       {
-        decompose: async () => [
+        decompose: async () => decomp([
           proposed({ topic: 'python', weight: 0, orderHint: 1 }),
           proposed({ topic: 'calculus', weight: 0, orderHint: 2 }),
           proposed({ topic: 'statistics', weight: -5, orderHint: 3 }),
-        ],
+        ]),
         gate: stubGate,
         listLibrary: async () => [],
       },
@@ -194,6 +206,25 @@ describe('planProgram — all-weights-non-positive still spends the full budget'
     const total = plan.topics.reduce((s, t) => s + t.hoursPerWeek, 0);
     expect(plan.topics.length).toBe(3);
     expect(total).toBe(10);
+  });
+});
+
+describe('planProgram — carries the generated title/description through (3c)', () => {
+  it('returns the decomposition title/description on the plan', async () => {
+    const plan = await planProgram(
+      { goal: 'g', totalHoursPerWeek: 10, totalWeeks: 10 },
+      {
+        decompose: async () => ({
+          title: 'Calculus Foundations',
+          description: 'Core calculus for STEM coursework.',
+          topics: [proposed({ topic: 'calculus', weight: 1 })],
+        }),
+        gate: stubGate,
+        listLibrary: async () => [],
+      },
+    );
+    expect(plan.title).toBe('Calculus Foundations');
+    expect(plan.description).toBe('Core calculus for STEM coursework.');
   });
 });
 
@@ -212,7 +243,7 @@ describe('planProgram — F7 scoped-topic reconciliation', () => {
   it('remaps a scoped variant onto its existing library topic and folds the scope into the rationale', async () => {
     const plan = await planProgram(
       { goal: 'g', totalHoursPerWeek: 12, totalWeeks: 10 },
-      { decompose: async () => [proposed({ topic: 'calculus for machine learning', weight: 5 })], ...opts },
+      { decompose: async () => decomp([proposed({ topic: 'calculus for machine learning', weight: 5 })]), ...opts },
     );
     expect(plan.topics.length).toBe(1);
     expect(plan.topics[0].key).toBe('calculus'); // remapped, not the scoped mint
@@ -222,7 +253,7 @@ describe('planProgram — F7 scoped-topic reconciliation', () => {
   it('passes a genuinely novel topic through untouched', async () => {
     const plan = await planProgram(
       { goal: 'g', totalHoursPerWeek: 12, totalWeeks: 10 },
-      { decompose: async () => [proposed({ topic: 'rust', weight: 3 })], ...opts },
+      { decompose: async () => decomp([proposed({ topic: 'rust', weight: 3 })]), ...opts },
     );
     expect(plan.topics.map((t) => t.key)).toEqual(['rust']);
     expect(plan.topics[0].rationale).not.toContain('scoped focus');
@@ -232,10 +263,10 @@ describe('planProgram — F7 scoped-topic reconciliation', () => {
     const plan = await planProgram(
       { goal: 'g', totalHoursPerWeek: 12, totalWeeks: 10 },
       {
-        decompose: async () => [
+        decompose: async () => decomp([
           proposed({ topic: 'calculus', weight: 2, priorityTier: 'core', orderHint: 1 }),
           proposed({ topic: 'calculus for machine learning', weight: 8, priorityTier: 'nice_to_have', orderHint: 2 }),
-        ],
+        ]),
         ...opts,
       },
     );

@@ -38,7 +38,11 @@ export async function enqueueProgram(
 ): Promise<EnqueueProgramResult> {
   const plan = opts.plan ?? ((i: ProgramPlanInput) => planProgram(i));
 
-  // Durable anchor before the fallible plan pass.
+  // Durable anchor before the fallible plan pass. Phase 3c: the creator is
+  // auto-enrolled HERE (nested create, same insert) rather than at assembly, so
+  // the dashboard sees in-flight — even failed — Programs through the same
+  // enrollment lens as finished ones. Enrollment is free; creation is what the
+  // route meters (programQuota).
   const program = await prisma.program.create({
     data: {
       goal: input.goal,
@@ -48,6 +52,7 @@ export async function enqueueProgram(
       antiList: input.antiList ?? [],
       status: ProgramStatus.planning,
       userId: input.userId ?? null,
+      ...(input.userId ? { enrollments: { create: { userId: input.userId } } } : {}),
     },
     select: { id: true },
   });
@@ -91,7 +96,17 @@ export async function enqueueProgram(
           },
         });
       }
-      await tx.program.update({ where: { id: program.id }, data: { status: ProgramStatus.building } });
+      await tx.program.update({
+        where: { id: program.id },
+        // Phase 3c: persist the plan's generated public-facing name alongside the
+        // status flip — title/description are what non-creators see (goal stays
+        // creator-private). Null when an injected/legacy plan doesn't carry them.
+        data: {
+          status: ProgramStatus.building,
+          title: result.title ?? null,
+          description: result.description ?? null,
+        },
+      });
     });
 
     console.log('[program] enqueued', {
