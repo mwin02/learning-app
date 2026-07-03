@@ -71,6 +71,7 @@ describe('planProgram — gate drops out-of-domain topics', () => {
           proposed({ topic: 'Cooking', weight: 2 }),
         ],
         gate: stubGate,
+        listLibrary: async () => [],
       },
     );
     expect(plan.droppedByGate.length).toBe(1);
@@ -98,6 +99,7 @@ describe('planProgram — a gate THROW drops only that topic, not the program', 
       {
         decompose: async () => [proposed({ topic: 'python', weight: 3 }), proposed({ topic: 'flaky', weight: 2 })],
         gate: flakyGate,
+        listLibrary: async () => [],
       },
     );
     expect(calls).toBe(1);
@@ -118,6 +120,7 @@ describe('planProgram — two labels → same canonical collapse (higher weight 
           proposed({ topic: 'calculus', weight: 4, orderHint: 3 }),
         ],
         gate: stubGate,
+        listLibrary: async () => [],
       },
     );
     expect(plan.topics.length).toBe(2);
@@ -139,6 +142,7 @@ describe('planProgram — dedup keeps higher weight but never downgrades a core 
           proposed({ topic: 'Python', weight: 9, priorityTier: 'nice_to_have', orderHint: 2 }),
         ],
         gate: stubGate,
+        listLibrary: async () => [],
       },
     );
     const py = plan.topics.find((t) => t.key === 'python');
@@ -161,6 +165,7 @@ describe('planProgram — dedup tie-break: on EQUAL weight, core beats nice_to_h
           proposed({ topic: 'Python', weight: 5, priorityTier: 'core', phaseLabel: 'CANDIDATE', rationale: 'candidate' }),
         ],
         gate: stubGate,
+        listLibrary: async () => [], // F7 Stage 2.5 now always reads the library; keep this unit pure
       },
     );
     const py = plan.topics.find((t) => t.key === 'python');
@@ -183,10 +188,62 @@ describe('planProgram — all-weights-non-positive still spends the full budget'
           proposed({ topic: 'statistics', weight: -5, orderHint: 3 }),
         ],
         gate: stubGate,
+        listLibrary: async () => [],
       },
     );
     const total = plan.topics.reduce((s, t) => s + t.hoursPerWeek, 0);
     expect(plan.topics.length).toBe(3);
     expect(total).toBe(10);
+  });
+});
+
+describe('planProgram — F7 scoped-topic reconciliation', () => {
+  const library = ['calculus', 'python'];
+  // Reconciler stub: "<x>-for-<y>" scoped variants remap to their base library topic;
+  // anything else is a genuine novelty (null). Only ever runs for canonicals NOT in the
+  // library (planProgram short-circuits library topics before calling reconcile).
+  const stubReconcile = async (canonical: string): Promise<string | null> => {
+    if (canonical === 'calculus-for-machine-learning') return 'calculus';
+    if (canonical === 'python-for-data-science') return 'python';
+    return null;
+  };
+  const opts = { gate: stubGate, listLibrary: async () => library, reconcile: stubReconcile };
+
+  it('remaps a scoped variant onto its existing library topic and folds the scope into the rationale', async () => {
+    const plan = await planProgram(
+      { goal: 'g', totalHoursPerWeek: 12, totalWeeks: 10 },
+      { decompose: async () => [proposed({ topic: 'calculus for machine learning', weight: 5 })], ...opts },
+    );
+    expect(plan.topics.length).toBe(1);
+    expect(plan.topics[0].key).toBe('calculus'); // remapped, not the scoped mint
+    expect(plan.topics[0].rationale).toContain('scoped focus within calculus');
+  });
+
+  it('passes a genuinely novel topic through untouched', async () => {
+    const plan = await planProgram(
+      { goal: 'g', totalHoursPerWeek: 12, totalWeeks: 10 },
+      { decompose: async () => [proposed({ topic: 'rust', weight: 3 })], ...opts },
+    );
+    expect(plan.topics.map((t) => t.key)).toEqual(['rust']);
+    expect(plan.topics[0].rationale).not.toContain('scoped focus');
+  });
+
+  it('merges a remap that collides with an already-planned topic by weight (never downgrading core)', async () => {
+    const plan = await planProgram(
+      { goal: 'g', totalHoursPerWeek: 12, totalWeeks: 10 },
+      {
+        decompose: async () => [
+          proposed({ topic: 'calculus', weight: 2, priorityTier: 'core', orderHint: 1 }),
+          proposed({ topic: 'calculus for machine learning', weight: 8, priorityTier: 'nice_to_have', orderHint: 2 }),
+        ],
+        ...opts,
+      },
+    );
+    // Both collapse onto 'calculus': higher weight (8) wins, tier stays core.
+    expect(plan.topics.length).toBe(1);
+    const cal = plan.topics[0];
+    expect(cal.key).toBe('calculus');
+    expect(cal.weight).toBe(8);
+    expect(cal.priorityTier).toBe(PriorityTier.core);
   });
 });
