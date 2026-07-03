@@ -41,7 +41,12 @@ import { cleanupLessons } from '@/lib/agents/track/cleanup-lessons';
 import { thickenSpine } from '@/lib/agents/track/thicken-seam';
 import { sectionTrack } from '@/lib/agents/track/section-track';
 import { exerciseTrack } from '@/lib/agents/content/exercise-track';
-import { TRACK_MAX_THICKEN_ATTEMPTS, TRACK_COMPOSER_MODE, TRACK_MIN_PRIMARY_DURATION_MIN } from '@/lib/config';
+import {
+  TRACK_MAX_THICKEN_ATTEMPTS,
+  TRACK_COMPOSER_MODE,
+  TRACK_MIN_PRIMARY_DURATION_MIN,
+  TRACK_FILL_BAND,
+} from '@/lib/config';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 
 export type BuildTrackInput = {
@@ -70,6 +75,9 @@ export type BuildTrackResult = {
   budgetWeak: boolean;
   depthConstrained: boolean;
   underResourced: string[];
+  // Budget-fill Block 3: kept minutes / requested budget (2dp), null when the
+  // learner gave no budget. Warned on outside TRACK_FILL_BAND at build time.
+  fillRatio: number | null;
   warnings: string[];
 };
 
@@ -356,6 +364,29 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
     const underResourced = composition.resourceSufficiency.enough
       ? []
       : composition.resourceSufficiency.underResourced.map((u) => u.conceptSlug);
+    // Budget-fill Block 3: fill telemetry — kept minutes over the requested budget
+    // (null when no budget given). Measured on the CLEANED lessons (post cross-
+    // lesson dedup), i.e. what actually persists for the learner, not the
+    // allocator's pre-dedup total (which overstated LA's live re-measure 0.76 vs
+    // 0.62 persisted). Logged on every budgeted build and WARNED on loudly outside
+    // TRACK_FILL_BAND, so under-fill regressions (the 2026-07-02 audit's ~12–20%
+    // tracks) surface in logs instead of waiting for a data audit. Telemetry only:
+    // the build still succeeds either way.
+    const keptMinutes = cleaned.lessons.reduce((s, l) => s + l.estMinutes, 0);
+    const fillRatio =
+      budgetMinutes !== null && budgetMinutes > 0
+        ? Number((keptMinutes / budgetMinutes).toFixed(2))
+        : null;
+    if (fillRatio !== null && (fillRatio < TRACK_FILL_BAND.min || fillRatio > TRACK_FILL_BAND.max)) {
+      console.warn('[track-build-track] fill outside band', {
+        pathId,
+        trackId: track.id,
+        fillRatio,
+        band: TRACK_FILL_BAND,
+        keptMinutes,
+        budgetMinutes,
+      });
+    }
     onTrace({
       kind: 'stage',
       label: 'track build done',
@@ -366,6 +397,7 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
         omittedForIntent: composition.omitForIntent.length,
         budgetWeak: allocation.budgetWeak,
         depthConstrained: allocation.depthConstrained,
+        fillRatio,
         underResourced,
       },
     });
@@ -377,6 +409,7 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
       pruned: composition.prune.length,
       omittedForIntent: composition.omitForIntent.length,
       totalMinutes: allocation.totalMinutes,
+      fillRatio,
       budgetWeak: allocation.budgetWeak,
       depthConstrained: allocation.depthConstrained,
       underResourced,
@@ -389,6 +422,7 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
       budgetWeak: allocation.budgetWeak,
       depthConstrained: allocation.depthConstrained,
       underResourced,
+      fillRatio,
       warnings,
     };
   } catch (err) {
