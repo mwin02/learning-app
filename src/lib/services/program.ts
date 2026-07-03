@@ -171,6 +171,38 @@ export async function maybeAssembleProgram(programId: string): Promise<void> {
   if (count > 0) await logBuiltProgram(programId, finalStatus);
 }
 
+// The stuck-Program backstop. maybeAssembleProgram only runs inline after a child
+// finishes (course-worker), and a failure there is swallowed as non-fatal — so if
+// the hook throws on the LAST sibling, or the worker dies between finishCourseRequest
+// and the hook, the Program stays `building` forever with every child terminal.
+// reclaimStale only bounces `running` CourseRequests; nothing else re-triggers
+// assembly. This sweep finds those stranded Programs — `building`, ≥1 child, none
+// still non-terminal — and re-runs the (idempotent) assembler on each. Returns how
+// many it found, for the worker's per-cycle log.
+//
+// The `some: {}` guard is deliberate: a `building` Program with ZERO children (mid
+// fan-out, before the transaction commits) is NOT swept — we must not finalize it to
+// `failed`. maybeAssembleProgram's updateMany status guard keeps the re-run safe if a
+// Program finalized concurrently.
+export async function sweepStuckPrograms(): Promise<number> {
+  const stuck = await prisma.program.findMany({
+    where: {
+      status: ProgramStatus.building,
+      courseRequests: { some: {} },
+      AND: [
+        {
+          courseRequests: {
+            none: { status: { in: [CourseRequestStatus.queued, CourseRequestStatus.running] } },
+          },
+        },
+      ],
+    },
+    select: { id: true },
+  });
+  for (const p of stuck) await maybeAssembleProgram(p.id);
+  return stuck.length;
+}
+
 // The "program ready" notification stub (mirrors course-worker's logBuiltTrack):
 // print a readable, phase-grouped summary of the assembled Program. Phase 3 replaces
 // this with the learner notification. Best-effort — never throws.

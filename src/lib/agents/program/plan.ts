@@ -287,22 +287,38 @@ export async function planProgram(
 
   const proposed = await decompose(input);
 
-  // Stage 2 — gate each proposal, dedup by canonical slug (higher weight wins).
+  // Stage 2 — gate each proposal in PARALLEL (each gate call is an independent LLM
+  // round-trip, with its own one-shot retry inside validateTopic), up to MAX_PROGRAM_TOPICS
+  // of them. Then fold the verdicts into the dedup map SEQUENTIALLY in proposal order, so
+  // the canonical-collapse tie-break stays deterministic. Promise.all preserves array
+  // order, so the fold sees proposals in exactly their original sequence.
+  //
+  // Tradeoff (accepted 2026-07-02): same-batch tier-3 mints can't see each other's fresh
+  // canonicals in the grounding list, a slightly higher near-duplicate risk — mitigated by
+  // the grounded prompt and F2's canonical-slug validation.
+  const gated = await Promise.all(
+    proposed.map(async (p) => {
+      try {
+        return { ok: true as const, p, verdict: await gate(p.topic) };
+      } catch (err) {
+        // validateTopic retries its own Gemini structured-output call, so reaching here
+        // means it threw twice (a persistent `No object generated` / infra fault). A gate
+        // that THROWS (vs. cleanly rejects) drops just this one topic — never the program.
+        const reason = `gate error: ${err instanceof Error ? err.message : String(err)}`;
+        console.warn('[program-plan] gate threw, dropping topic', { topic: p.topic, reason });
+        return { ok: false as const, p, reason };
+      }
+    }),
+  );
+
   const droppedByGate: GateDroppedTopic[] = [];
   const bySlug = new Map<string, ProgramTopicInput>();
-  for (const p of proposed) {
-    let verdict: TopicGateResult;
-    try {
-      verdict = await gate(p.topic);
-    } catch (err) {
-      // validateTopic retries its own Gemini structured-output call, so reaching here
-      // means it threw twice (a persistent `No object generated` / infra fault). A gate
-      // that THROWS (vs. cleanly rejects) drops just this one topic — never the program.
-      const reason = `gate error: ${err instanceof Error ? err.message : String(err)}`;
-      console.warn('[program-plan] gate threw, dropping topic', { topic: p.topic, reason });
-      droppedByGate.push({ topic: p.topic, reason });
+  for (const g of gated) {
+    if (!g.ok) {
+      droppedByGate.push({ topic: g.p.topic, reason: g.reason });
       continue;
     }
+    const { p, verdict } = g;
     if (!verdict.valid) {
       droppedByGate.push({ topic: p.topic, reason: verdict.reason });
       continue;
@@ -327,10 +343,10 @@ export async function planProgram(
   // library topic; if so, remap onto that canonical (folding the scope into the
   // rationale), re-dedup by weight, and repoint the scoped alias so tier 2 catches the
   // phrasing next time. Library topics and genuine novelties pass through untouched.
-  const gated = [...bySlug.values()]; // proposal insertion order — keeps the re-dedup deterministic
+  const deduped = [...bySlug.values()]; // proposal insertion order — keeps the re-dedup deterministic
   const library = new Set(await listLibrary());
   const targets = await Promise.all(
-    gated.map(async (t) => {
+    deduped.map(async (t) => {
       if (library.has(t.key)) return null;
       try {
         return await reconcile(t.key, [...library]);
@@ -348,7 +364,7 @@ export async function planProgram(
 
   const reconciled = new Map<string, ProgramTopicInput>();
   const remaps: Array<{ from: string; to: string }> = [];
-  gated.forEach((t, i) => {
+  deduped.forEach((t, i) => {
     const target = targets[i];
     const remapped = Boolean(target) && target !== t.key && library.has(target as string);
     const key = remapped ? (target as string) : t.key;

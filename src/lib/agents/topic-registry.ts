@@ -22,6 +22,28 @@ export function normalizeTopic(input: string): string {
   return input.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+// Longer emissions are truncated (not rejected) — a verbose but valid topic
+// shouldn't be turned away. 64 chars is ample for a real topic slug.
+const MAX_CANONICAL_SLUG_LEN = 64;
+
+// Safety net over the LLM-minted canonical slug (AR-5 tier 3): the model is asked
+// for kebab-case but that's prompt-only, and whatever it returns is frozen forever
+// as Path.topic / CourseRequest.topic / a first-writer-wins TopicAlias. Coerce it to
+// a safe slug — ASCII-fold accents, lowercase, collapse every run of non-alphanumerics
+// to a single hyphen, strip leading/trailing hyphens, cap the length. Returns '' when
+// nothing usable survives (empty or all-punctuation), which the gate treats as an
+// invalid verdict. Pure; unit-tested.
+export function toCanonicalSlug(input: string): string {
+  const slug = input
+    .normalize('NFKD') // decompose accents: "ö" → "o" + combining diaeresis
+    .replace(/[\u0300-\u036f]/g, '') // strip combining marks so accents fold: "schrodinger", not "schro-dinger"
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-') // any run of non-alphanumerics → one hyphen
+    .replace(/^-+|-+$/g, ''); // trim leading/trailing hyphens
+  if (slug.length <= MAX_CANONICAL_SLUG_LEN) return slug;
+  return slug.slice(0, MAX_CANONICAL_SLUG_LEN).replace(/-+$/g, ''); // re-trim after the cut
+}
+
 // Cached canonicalization for a previously-seen phrasing, or null on a miss.
 export async function lookupAlias(
   normalized: string,
