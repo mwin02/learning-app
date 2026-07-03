@@ -27,7 +27,7 @@ import {
   finishCourseRequest,
   reclaimStale,
 } from '@/lib/services/course-request';
-import { maybeAssembleProgram } from '@/lib/services/program';
+import { maybeAssembleProgram, sweepStuckPrograms } from '@/lib/services/program';
 
 export type ProcessOutcome = 'fulfilled' | 'failed';
 
@@ -136,6 +136,9 @@ async function processRequestPipeline(cr: CourseRequest): Promise<ProcessOutcome
 // empty (the loop sleeps). The CLI's --once mode is a single tickOnce().
 export async function tickOnce(): Promise<boolean> {
   await reclaimStaleClaims();
+  // Backstop for Programs stranded in `building` (last-sibling hook failure or a
+  // worker crash after finishCourseRequest) — reclaimStale doesn't re-trigger assembly.
+  await sweepStuckPrograms();
   const cr = await claimNextQueued();
   if (!cr) return false;
   await processCourseRequest(cr);
