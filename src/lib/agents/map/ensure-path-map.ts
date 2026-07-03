@@ -27,6 +27,7 @@ import { normalizeOnRamp } from '@/lib/agents/map/cycle';
 import { attachCandidates } from '@/lib/agents/map/attach-candidates';
 import { generateOnRampResource } from '@/lib/agents/map/generate-onramp';
 import { computeReadiness } from '@/lib/agents/map/readiness';
+import { ensureFrontier } from '@/lib/agents/map/ensure-frontier';
 import type { SearchResult } from '@/lib/agents/tools/search-resources';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 
@@ -205,6 +206,20 @@ export async function ensurePathMap(args: {
       .update({ where: { id: pathId }, data: { status: PathStatus.failed } })
       .catch(() => {});
     throw new PathMapError(`Failed to build spine map for topic '${topic}'.`, err);
+  }
+
+  // Frontier enrichment (optional breadth beyond the spine). Deliberately
+  // OUTSIDE the try/catch above: a frontier failure must not flip the Path to
+  // `failed` — the spine is already persisted and the status already set, so we
+  // degrade to a spine-only map (the backfill script can top it up later).
+  try {
+    await ensureFrontier({ pathId, subject, onTrace });
+  } catch (err) {
+    console.warn('[map-ensure-path-map] frontier pass failed; shipping spine-only map', {
+      pathId,
+      topic,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   const status = ready ? PathStatus.spine_ready : PathStatus.building;

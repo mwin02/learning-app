@@ -196,6 +196,14 @@ export const FRONTIER_MAX_CONCEPTS = 10;
 // dropping edges rather than failing: frontier is best-effort by design.
 export const FRONTIER_MAX_REPAIRS = 2;
 
+// Per frontier pass, how many unresourced frontier concepts (no qualifying
+// `teaches` primary after library attachment) get the web-sourcing ladder.
+// The ladder is the expensive half of resourcing; uncapped it would re-inflate
+// the per-map sourcing cost the frontier pass is meant to avoid. Concepts past
+// the cap stay unresourced — the composer simply can't spend budget on them,
+// and later enrichment can fill them.
+export const FRONTIER_MAX_WEB_SOURCED = 3;
+
 // Phase 2.5d-2 (candidate attachment): per spine concept, how many pickable
 // library resources to pull as candidates before the LLM judge scores them.
 // Small — the Track builder only needs a primary + a few frozen alternates per
