@@ -1,64 +1,88 @@
-import Image from "next/image";
+// Phase 3e: barebones landing — an integration-test surface for the auth + program
+// flow, NOT the designed 2.6a landing page (that comes with the frontend pass).
+// Anonymous: sign-in link. Signed in: identity, links to My Programs / Create.
 
-export default function Home() {
+import Link from 'next/link';
+import { prisma } from '@/lib/db';
+import { getViewer } from '@/lib/auth/viewer';
+
+export const dynamic = 'force-dynamic';
+
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<{ auth_error?: string }>;
+}) {
+  const [{ auth_error }, viewer] = await Promise.all([searchParams, getViewer()]);
+  const user = viewer.userId
+    ? await prisma.user.findUnique({
+        where: { id: viewer.userId },
+        select: { email: true, name: true },
+      })
+    : null;
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <div className="flex min-h-screen items-center justify-center bg-surface text-ink">
+      <main className="card w-full max-w-md p-8">
+        <div className="eyebrow mb-2">Adaptive Learning Path</div>
+        <h1 className="mb-4 text-2xl font-bold tracking-[-0.5px]">
+          A learning plan that gets you to your goal
+        </h1>
+
+        {auth_error && (
+          <p className="mb-4 rounded-control bg-fill px-3 py-2 text-sm text-red-600">
+            Sign-in failed. Please try again.
           </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+        )}
+
+        {viewer.userId ? (
+          <div className="flex flex-col gap-3">
+            <p className="meta">
+              Signed in as {user?.name ?? user?.email ?? viewer.userId}
+              {viewer.isAdmin ? ' (admin)' : ''}
+            </p>
+            <Link
+              href="/programs/new"
+              className="rounded-button bg-brand px-5 py-2.5 text-center font-semibold text-white"
+            >
+              Create a program
+            </Link>
+            <Link
+              href="/programs"
+              className="rounded-button border border-line px-5 py-2.5 text-center font-semibold"
+            >
+              My programs
+            </Link>
+            {viewer.isAdmin && (
+              <Link href="/playground" className="meta-xs text-center underline">
+                Playground
+              </Link>
+            )}
+            <form method="post" action="/auth/signout">
+              <button type="submit" className="meta-xs w-full text-center underline">
+                Sign out
+              </button>
+            </form>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            <p className="text-body">
+              Tell us your goal; we build a personalized, sequenced program of real
+              resources to get you there.
+            </p>
+            <a
+              href="/auth/login"
+              className="rounded-button bg-brand px-5 py-2.5 text-center font-semibold text-white"
+            >
+              Continue with Google
+            </a>
+            {viewer.isAdmin && (
+              <Link href="/playground" className="meta-xs text-center underline">
+                Playground (dev bypass)
+              </Link>
+            )}
+          </div>
+        )}
       </main>
     </div>
   );
