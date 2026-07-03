@@ -7,6 +7,8 @@ import { describe, it, expect } from 'vitest';
 import {
   allocate,
   allotByWeight,
+  depthTier,
+  DEPTH_TIER_THRESHOLDS,
   type AllocatorLesson,
   type AllocatorCandidate,
 } from '@/lib/agents/track/allocate';
@@ -187,4 +189,30 @@ describe('allocate — mandatory empty: optional[0] promoted to the ≥1 primary
 
   it('optional[0] is the primary', () => expect(ids(byKey(r, 'a').primaries)).toEqual(['o']));
   it('rest of optional → alternates', () => expect(ids(byKey(r, 'a').alternates)).toEqual(['o2']));
+});
+
+describe('depthTier — budget-per-concept core-sizing tier (Block 1)', () => {
+  it('null budget → standard (the neutral default)', () => {
+    expect(depthTier(null, 20)).toBe('standard');
+  });
+  it('degenerate concept count → standard', () => {
+    expect(depthTier(960, 0)).toBe('standard');
+  });
+  it('a 2h skim over 20 concepts → light', () => {
+    expect(depthTier(120, 20)).toBe('light');
+  });
+  it('audited calculus refresher (720m / 22 concepts ≈ 33) → deep', () => {
+    expect(depthTier(720, 22)).toBe('deep');
+  });
+  it('audited prob/stats (960m / 20 = 48) → deep', () => {
+    expect(depthTier(960, 20)).toBe('deep');
+  });
+  it('audited linear algebra (1440m / 21 ≈ 69) → immersive', () => {
+    expect(depthTier(1440, 21)).toBe('immersive');
+  });
+  it('thresholds are inclusive lower bounds', () => {
+    expect(depthTier(DEPTH_TIER_THRESHOLDS.standard * 10, 10)).toBe('standard');
+    expect(depthTier(DEPTH_TIER_THRESHOLDS.deep * 10, 10)).toBe('deep');
+    expect(depthTier(DEPTH_TIER_THRESHOLDS.immersive * 10, 10)).toBe('immersive');
+  });
 });

@@ -36,7 +36,7 @@ import {
   type ValidatedLesson,
 } from '@/lib/agents/track/validate-composition';
 import { lessonPrereqKeys, budgetMinutesFor } from '@/lib/agents/track/plan';
-import { allocate, type AllocatorLesson } from '@/lib/agents/track/allocate';
+import { allocate, depthTier, type AllocatorLesson } from '@/lib/agents/track/allocate';
 import { cleanupLessons } from '@/lib/agents/track/cleanup-lessons';
 import { thickenSpine } from '@/lib/agents/track/thicken-seam';
 import { sectionTrack } from '@/lib/agents/track/section-track';
@@ -129,6 +129,11 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
       // TRACK_COMPOSER_MODE selects the one-shot composer (today's default) or the
       // tool-using agent (2.5e-8 block 2b); both return the same ComposerResult, so
       // everything below — validate, allocate, freeze — is identical.
+      // Budget-fill Block 1: the coarse core-sizing tier, computed in code over the
+      // concepts GIVEN to the composer (its own pruning only raises the true
+      // per-concept budget). Recomputed per attempt — thickening doesn't change the
+      // concept count, but the recompute is free and keeps the loop self-contained.
+      const tier = depthTier(budgetMinutes, loaded.concepts.length);
       composition =
         TRACK_COMPOSER_MODE === 'agent'
           ? await composeTrackAgent({
@@ -139,6 +144,7 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
               goal,
               targetMastery,
               budgetMinutes,
+              depthTier: tier,
               onTrace,
             })
           : await composeTrack({
@@ -148,6 +154,7 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
               goal,
               targetMastery,
               budgetMinutes,
+              depthTier: tier,
               onTrace,
             });
       const validation = validateComposition({

@@ -21,6 +21,7 @@ import { composeTrack } from '../src/lib/agents/track/composer';
 import { composeTrackAgent } from '../src/lib/agents/track/composer-agent';
 import { validateComposition } from '../src/lib/agents/track/validate-composition';
 import { budgetMinutesFor } from '../src/lib/agents/track/plan';
+import { depthTier } from '../src/lib/agents/track/allocate';
 
 type Scenario = {
   label: string;
@@ -47,7 +48,15 @@ async function buildOnce(
   s: Scenario,
 ): Promise<Built> {
   const budgetMinutes = budgetMinutesFor(s.timeframeWeeks, s.hoursPerWeek);
-  const common = { topic, concepts: loaded.concepts, priorKnowledge: s.priorKnowledge, goal: s.goal, targetMastery: s.targetMastery, budgetMinutes };
+  const common = {
+    topic,
+    concepts: loaded.concepts,
+    priorKnowledge: s.priorKnowledge,
+    goal: s.goal,
+    targetMastery: s.targetMastery,
+    budgetMinutes,
+    depthTier: depthTier(budgetMinutes, loaded.concepts.length),
+  };
   const composition =
     mode === 'agent'
       ? await composeTrackAgent({ ...common, edges: loaded.edges })
