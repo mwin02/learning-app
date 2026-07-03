@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/db';
-import { isDevAuthEnabled } from '@/lib/dev-auth';
+import { requireAdminPage } from '@/lib/auth/viewer';
 import { STATUS_STYLE } from './status-style';
 
 export const dynamic = 'force-dynamic';
@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
 // renders its spine DAG + per-concept candidates. Observability only — the
 // human/agent edit surface is a later block (2.5d-6/7).
 export default async function ConceptMapsPage() {
-  if (!isDevAuthEnabled()) notFound();
+  await requireAdminPage();
 
   const paths = await prisma.path.findMany({
     select: {

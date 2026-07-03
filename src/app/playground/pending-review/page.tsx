@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { isDevAuthEnabled } from '@/lib/dev-auth';
+import { requireAdminPage } from '@/lib/auth/viewer';
 import { listPendingReview, type PendingReviewRoot } from '@/lib/curation/pending-review';
 import { ReviewActions, CONTAINER_BUTTONS, ROW_BUTTONS } from './review-actions';
 
@@ -123,7 +123,7 @@ function BlockedList({ roots }: { roots: PendingReviewRoot[] }) {
 }
 
 export default async function PendingReviewPage() {
-  if (!isDevAuthEnabled()) notFound();
+  await requireAdminPage();
 
   const queue = await listPendingReview();
   const blocked = queue.filter((r) => r.blocked);

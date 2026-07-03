@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/db';
-import { isDevAuthEnabled } from '@/lib/dev-auth';
+import { requireAdminPage } from '@/lib/auth/viewer';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,7 +10,7 @@ export default async function ResourceDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  if (!isDevAuthEnabled()) notFound();
+  await requireAdminPage();
 
   const { id } = await params;
 

@@ -129,6 +129,32 @@ dev server running:
    with no cookies, `DEV_AUTH` unset) → `POST /api/generate-path` → **404**;
    as admin (§5.5) → 400 `INVALID_INPUT` on an empty body (handler ran).
 
+## 7. Verification pass (3d — page gating + program privacy)
+
+Needs §1–5. Two browsers help here: one signed in as you (call it A), one
+incognito/anonymous (call it B). Use a Program you created in §6 (its id from
+Studio) and one of its Track ids (ProgramPath.trackId once built).
+
+1. **Anonymous redirect:** in B, open `/programs/<id>` → redirected to Google
+   sign-in (via `/auth/login?next=…`); same for `/learn/<trackId>`. After
+   completing sign-in in B (a second Google account if you have one), you land
+   back on the page you asked for.
+2. **Unenrolled view + privacy:** in B (signed in, NOT the creator), open
+   `/programs/<id>` → the barebones enroll card shows the **generated
+   title/description — not your goal/background text** (put something
+   identifiable in the goal in §6 to make this checkable). The tab title is the
+   generated title too.
+3. **Enroll flow:** click "Enroll — free" in B → page refreshes into the program
+   hub. The hub heading for B is still the sanitized title (goal/background
+   stay creator-only); in A (creator) the hub shows the raw goal + background.
+4. **Track gating:** in B, open `/learn/<trackId>` of a Track in that program →
+   renders. Un-enroll B in Studio (delete its EnrolledProgram row) → same URL
+   now 404s. A non-`ready` Track id (Studio: any Track with status ≠ ready)
+   404s for non-admins even when enrolled.
+5. **Playground pages:** in B (non-admin) `/playground/...` → 404. In A after
+   the §5.5 admin grant → renders. With `DEV_AUTH` unset and no session (curl)
+   → 404.
+
 ## Troubleshooting
 
 - **`redirect_uri_mismatch` (Google page):** the GCP OAuth client's redirect URI

@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/db';
-import { isDevAuthEnabled } from '@/lib/dev-auth';
+import { requireAdminPage } from '@/lib/auth/viewer';
 import { searchResources } from '@/lib/agents/tools/search-resources';
 import { listCanonicals } from '@/lib/agents/topic-registry';
 import { SEARCH_RANK_THRESHOLD } from '@/lib/config';
@@ -45,7 +45,7 @@ export default async function ResourceSearchPage({
 }: {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
-  if (!isDevAuthEnabled()) notFound();
+  await requireAdminPage();
 
   const sp = await searchParams;
   const query = firstParam(sp.q);

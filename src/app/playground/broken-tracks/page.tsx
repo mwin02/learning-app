@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { DeprecationSeverity } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import { isDevAuthEnabled } from '@/lib/dev-auth';
+import { requireAdminPage } from '@/lib/auth/viewer';
 
 export const dynamic = 'force-dynamic';
 
@@ -55,7 +55,7 @@ export default async function BrokenTracksPage({
 }: {
   searchParams: Promise<{ severity?: string }>;
 }) {
-  if (!isDevAuthEnabled()) notFound();
+  await requireAdminPage();
 
   const { severity } = await searchParams;
   const active: Severity = severity === 'hard' || severity === 'soft' ? severity : 'all';

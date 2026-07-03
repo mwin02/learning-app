@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ConceptResourceRole } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import { isDevAuthEnabled } from '@/lib/dev-auth';
+import { requireAdminPage } from '@/lib/auth/viewer';
 import { MAP_SPINE_MIN_PRIMARY_COVERAGE } from '@/lib/config';
 import { layerBySlug } from '@/lib/agents/map/order';
 import { STATUS_STYLE } from '../status-style';
@@ -37,7 +37,7 @@ export default async function ConceptMapDetailPage({
 }: {
   params: Promise<{ pathId: string }>;
 }) {
-  if (!isDevAuthEnabled()) notFound();
+  await requireAdminPage();
   const { pathId } = await params;
 
   const path = await prisma.path.findUnique({

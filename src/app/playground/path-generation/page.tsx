@@ -1,11 +1,11 @@
 import { notFound } from 'next/navigation';
-import { isDevAuthEnabled } from '@/lib/dev-auth';
+import { requireAdminPage } from '@/lib/auth/viewer';
 import { PlaygroundForm } from './PlaygroundForm';
 
 export const dynamic = 'force-dynamic';
 
 export default async function PlaygroundPage() {
-  if (!isDevAuthEnabled()) notFound();
+  await requireAdminPage();
 
   return (
     <main className="p-6 flex flex-col gap-8">
