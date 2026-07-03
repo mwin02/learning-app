@@ -9,6 +9,7 @@ import { Difficulty } from '@prisma/client';
 import { prisma } from '../src/lib/db';
 import { validateComposition } from '../src/lib/agents/track/validate-composition';
 import { composeTrack, type ComposerInputConcept } from '../src/lib/agents/track/composer';
+import { depthTier } from '../src/lib/agents/track/allocate';
 import type { OrderEdge } from '../src/lib/agents/map/order';
 
 async function liveRun(topic: string) {
@@ -55,6 +56,7 @@ async function liveRun(topic: string) {
     priorKnowledge: 'I am comfortable with basic programming and high-school algebra.',
     targetMastery: Difficulty.intermediate,
     budgetMinutes: 6 * 5 * 60,
+    depthTier: depthTier(6 * 5 * 60, inputConcepts.length),
   });
   const { lessons, warnings } = validateComposition({ composition, concepts: inputConcepts, edges: liveEdges });
 

@@ -44,6 +44,37 @@
 export const TIME_WEIGHTS = ['low', 'normal', 'high', 'deep'] as const;
 export type TimeWeight = (typeof TIME_WEIGHTS)[number];
 
+// Budget-fill Block 1 (docs/track-budget-fill-plan.md): the coarse DEPTH TIER the
+// builder computes from the learner's minute budget and hands the composer, so the
+// composer can size each lesson's mandatory complementary core to the budget WITHOUT
+// doing minute math (the LLM judges which resources complement; code does the
+// arithmetic). This is the fix for the audit's under-fill: the composer used to be
+// told the budget was "informational" and to keep cores at ~1, so the allocator's
+// depth fill — which buys ONLY from the mandatory core — had nothing to buy and
+// big-budget Tracks landed at ~12–20% fill.
+export const DEPTH_TIERS = ['light', 'standard', 'deep', 'immersive'] as const;
+export type DepthTier = (typeof DEPTH_TIERS)[number];
+
+// Budget-per-concept thresholds (minutes) — a tier starts at its threshold. Chosen
+// against the audited tracks and the library's duration profile (mostly 5–30m
+// resources, so e.g. ~48 min/concept comfortably funds a 2–3 resource core):
+//   calculus refresher 720m/22 ≈ 33 → deep; prob/stats 960m/20 = 48 → deep;
+//   linear algebra 1440m/21 ≈ 69 → immersive; a 2h skim over 20 concepts → light.
+// Computed over the concepts GIVEN to the composer (pre-prune — code can't know the
+// composer's own pruning in advance), so thresholds sit slightly low on purpose:
+// pruning only raises the true per-concept budget, never lowers it. Tunable.
+export const DEPTH_TIER_THRESHOLDS = { standard: 12, deep: 25, immersive: 50 } as const;
+
+// No budget (or a degenerate concept count) → `standard`, the neutral default.
+export function depthTier(budgetMinutes: number | null, conceptCount: number): DepthTier {
+  if (budgetMinutes === null || conceptCount <= 0) return 'standard';
+  const perConcept = budgetMinutes / conceptCount;
+  if (perConcept >= DEPTH_TIER_THRESHOLDS.immersive) return 'immersive';
+  if (perConcept >= DEPTH_TIER_THRESHOLDS.deep) return 'deep';
+  if (perConcept >= DEPTH_TIER_THRESHOLDS.standard) return 'standard';
+  return 'light';
+}
+
 // Coarse buckets → integer weights (locked decision #6: tune later). A `deep`
 // lesson claims 8× the minute-slice of a `low` one.
 export const TIME_WEIGHT: Record<TimeWeight, number> = { low: 1, normal: 2, high: 4, deep: 8 };
