@@ -7,7 +7,9 @@
 //
 // WIPES (content): Resource, Path, Track, Lesson, Section, LessonResource,
 //   Exercise, Concept, ConceptPrereq, ConceptResource, RemediationJob,
-//   CourseRequest, EnrolledPath, Progress.
+//   CourseRequest, Progress, Program, ProgramPath, EnrolledProgram. (Programs
+//   are generated content — and ProgramPath would be cascade-truncated via
+//   Track anyway, leaving husk Programs if they were kept.)
 // KEEPS: Source (allowlist/trust registry), TopicAlias (learned vocab), User,
 //   Subscription (accounts/billing).
 //
@@ -23,7 +25,8 @@ import { prisma } from '../src/lib/db';
 const CONTENT_TABLES = [
   'LessonResource', 'Exercise', 'Section', 'Lesson', 'Track',
   'ConceptResource', 'ConceptPrereq', 'Concept',
-  'RemediationJob', 'CourseRequest', 'Progress', 'EnrolledPath', 'Path', 'Resource',
+  'RemediationJob', 'CourseRequest', 'Progress',
+  'EnrolledProgram', 'ProgramPath', 'Program', 'Path', 'Resource',
 ] as const;
 
 async function snapshot(): Promise<string> {
@@ -42,8 +45,10 @@ async function snapshot(): Promise<string> {
   data.ConceptResource = await prisma.conceptResource.findMany();
   data.RemediationJob = await prisma.remediationJob.findMany();
   data.CourseRequest = await prisma.courseRequest.findMany();
-  data.EnrolledPath = await prisma.enrolledPath.findMany();
   data.Progress = await prisma.progress.findMany();
+  data.Program = await prisma.program.findMany();
+  data.ProgramPath = await prisma.programPath.findMany();
+  data.EnrolledProgram = await prisma.enrolledProgram.findMany();
 
   mkdirSync('backups', { recursive: true });
   const path = `backups/content-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
