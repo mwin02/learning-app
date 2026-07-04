@@ -174,6 +174,33 @@ Needs §1–5. This is the end-to-end product loop, so it subsumes parts of §6�
    the form again → inline "free limit" message, no crash. Also try a nonsense
    goal ("asdfgh") → the PLAN_EMPTY message.
 
+## 9. Verification pass (3f — DB-backed progress)
+
+Needs §1–5 and a built Program (§6/§8) with a `ready` Track you're enrolled in.
+Use browser A (signed in) on its `/learn/<trackId>` page; `<lessonId>`s are
+visible in Studio (Lesson rows for the track).
+
+1. **Signed-in progress writes to the DB:** in A, open a lesson and click "Mark
+   complete" → devtools Network shows `PUT /api/progress/<trackId>` → 200, and
+   Studio shows a `Progress` row (your userId + that lessonId). localStorage has
+   NO `learn:progress:<trackId>` key. Un-mark it → the row is gone.
+2. **Progress follows the account:** mark a lesson, then open the same
+   `/learn/<trackId>` in another browser/profile signed in as the SAME user →
+   the checkmark is already there (loaded via `GET /api/progress/<trackId>`).
+3. **localStorage migration:** in A's devtools console, seed anonymous-style
+   progress for a lesson you have NOT completed:
+   `localStorage.setItem('learn:progress:<trackId>', JSON.stringify(['<lessonId>']))`
+   then reload the track page → Network shows one `POST /api/progress/<trackId>`
+   (response `{"migrated":1}`), the localStorage key is removed, the lesson
+   shows complete, and the `Progress` row exists. Seeding a garbage id
+   (`['nonsense']`) migrates `0`, still clears the key, and nothing crashes.
+4. **Auth + access walls:** curl (no cookies) `GET /api/progress/<trackId>` →
+   401 `UNAUTHENTICATED`; same with `DEV_AUTH=1` locally (the dev bypass has no
+   userId to write for — its learn UI stays on localStorage, no `/api/progress`
+   calls at all). Signed in as B (NOT enrolled in a containing program) → 404
+   `NOT_FOUND`; a `PUT` naming a lesson from a DIFFERENT (accessible) track →
+   404 (lesson-in-track is validated per write).
+
 ## Troubleshooting
 
 - **`redirect_uri_mismatch` (Google page):** the GCP OAuth client's redirect URI

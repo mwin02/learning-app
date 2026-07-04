@@ -13,6 +13,7 @@
 import type { Metadata } from 'next';
 import { notFound, redirect } from 'next/navigation';
 import { getAuthorizedTrackView } from '@/lib/auth/track-access';
+import { getViewer } from '@/lib/auth/viewer';
 import { CourseProvider } from '../_components/course-context';
 import { TopNav } from '../_components/TopNav';
 import { CourseSidebar } from '../_components/CourseSidebar';
@@ -47,9 +48,14 @@ export default async function LearnLayout({
   }
   if (access.kind !== 'ok') notFound();
 
+  // Phase 3f: tell the provider whether a real user is signed in, so progress
+  // goes to the Progress table instead of localStorage. cache()'d — the access
+  // check above already resolved the viewer, so this is free.
+  const viewer = await getViewer();
+
   return (
     <div className="min-h-screen bg-surface text-ink">
-      <CourseProvider track={access.track}>
+      <CourseProvider track={access.track} signedIn={viewer.userId !== null}>
         <TopNav />
         <div className="flex items-start">
           <CourseSidebar />

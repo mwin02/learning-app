@@ -1,22 +1,18 @@
-// Phase 2.6 (learn UI): the progress-persistence seam.
+// Phase 2.6 (learn UI): the progress-persistence seam. Phase 3f: DB-backed.
 //
 // The course context depends ONLY on the ProgressStore interface, never on where
-// progress actually lives. Today that's localStorage (anonymous learners). In
-// Phase 3, once Supabase auth + the Progress table land, the swap is intentionally
-// small and self-contained:
-//
-//   1. Implement `DbProgressStore` (below interface) — `load()` reads the user's
-//      Progress rows for this track; `setComplete()` upserts/deletes one row. Both
-//      are already async, so the context needs zero changes.
-//   2. In `createProgressStore`, return the DB store when a session userId exists,
-//      else the local store. That's the only branching point.
-//   3. On first sign-in, call `migrateLocalToDb(trackId)` once to flush any
-//      anonymous localStorage progress into the Progress table, then clear it. The
-//      stub is here so the call site is obvious when auth arrives.
+// progress actually lives. `createProgressStore` is the single branching point:
+// signed-in viewers get `DbProgressStore` (the /api/progress/[trackId] route →
+// Progress table), everyone else — anonymous pre-3d visitors and the DEV_AUTH
+// dev bypass, whose sessions have no userId — keeps `LocalProgressStore`
+// (localStorage). On the first signed-in load of a track, any leftover anonymous
+// localStorage progress is flushed into the DB (`migrateLocalToDb`), then
+// cleared, so the DB becomes the single source of truth.
 //
 // Keeping the single-lesson `setComplete(lessonId, complete)` shape (rather than
 // "save the whole set") is deliberate: it maps 1:1 onto a DB upsert/delete of one
-// Progress row, so the DB implementation stays trivial.
+// Progress row. All failures degrade to "no progress" / lost write, never a
+// throw — progress is non-critical and the UI already updated optimistically.
 
 export interface ProgressStore {
   /** Load the set of completed lessonIds for this track. */
@@ -53,14 +49,66 @@ class LocalProgressStore implements ProgressStore {
   }
 }
 
-// The single place that decides where progress lives. Phase 3: branch on session.
-export function createProgressStore(trackId: string): ProgressStore {
-  return new LocalProgressStore(trackId);
+// Signed-in persistence via /api/progress/[trackId] (Phase 3f). Same
+// degrade-to-empty error posture as the local store.
+class DbProgressStore implements ProgressStore {
+  constructor(private readonly trackId: string) {}
+
+  async load(): Promise<Set<string>> {
+    // Flush any anonymous local progress BEFORE reading, so a first signed-in
+    // load already reflects it. Best-effort; failure keeps the local data.
+    await migrateLocalToDb(this.trackId);
+    try {
+      const res = await fetch(`/api/progress/${this.trackId}`);
+      if (!res.ok) return new Set<string>();
+      const data = (await res.json()) as { lessonIds: string[] };
+      return new Set<string>(data.lessonIds);
+    } catch {
+      return new Set<string>();
+    }
+  }
+
+  async setComplete(lessonId: string, complete: boolean): Promise<void> {
+    try {
+      await fetch(`/api/progress/${this.trackId}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ lessonId, complete }),
+      });
+    } catch {
+      // Best-effort: the optimistic UI already updated; a lost write simply
+      // resurfaces as un-checked on the next load.
+    }
+  }
 }
 
-// Phase 3 hook (intentionally unimplemented): flush anonymous localStorage progress
-// into the DB on first sign-in, then clear local so the DB becomes the source of
-// truth. Wired at the auth callback when DbProgressStore exists.
+// The single place that decides where progress lives. `signedIn` comes from the
+// server (the learn layout knows the viewer); the dev bypass's userId-less
+// admin viewer counts as NOT signed in — the API would 401 it anyway.
+export function createProgressStore(trackId: string, signedIn = false): ProgressStore {
+  return signedIn ? new DbProgressStore(trackId) : new LocalProgressStore(trackId);
+}
+
+// Flush anonymous localStorage progress into the DB (bulk POST), then clear the
+// local key — but ONLY on a confirmed 2xx, so a failed push (offline, 401)
+// keeps localStorage intact for a later retry instead of dropping progress.
 export async function migrateLocalToDb(trackId: string): Promise<void> {
-  void trackId; // no-op until Phase 3 auth + Progress table land
+  let lessonIds: string[];
+  try {
+    const raw = localStorage.getItem(storageKey(trackId));
+    lessonIds = raw ? (JSON.parse(raw) as string[]) : [];
+  } catch {
+    return;
+  }
+  if (lessonIds.length === 0) return;
+  try {
+    const res = await fetch(`/api/progress/${trackId}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ lessonIds }),
+    });
+    if (res.ok) localStorage.removeItem(storageKey(trackId));
+  } catch {
+    // Keep local data; the next signed-in load retries.
+  }
 }
