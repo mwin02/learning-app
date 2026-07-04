@@ -11,7 +11,7 @@ import type { TrackView } from '@/lib/track-view';
 import { buildCourseHomeModel, type CourseHomeModel } from '@/lib/course-home-model';
 import { createProgressStore } from '@/lib/progress-store';
 
-type CourseContextValue = {
+export type CourseContextValue = {
   model: CourseHomeModel;
   // Where this course player is mounted (`/learn/<trackId>` or
   // `/programs/<programId>/<trackId>`). Components build every lesson href off
@@ -21,7 +21,9 @@ type CourseContextValue = {
   toggleComplete: (lessonId: string) => void;
 };
 
-const CourseContext = createContext<CourseContextValue | null>(null);
+// Exported for the program shell's CourseContextBridge (Block 3), which
+// provides this same context backed by the program-wide progress provider.
+export const CourseContext = createContext<CourseContextValue | null>(null);
 
 export function CourseProvider({
   track,
