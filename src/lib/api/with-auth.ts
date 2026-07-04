@@ -20,7 +20,14 @@ export type Session = {
   userId: string | null;
 };
 
-export type AuthedHandler = (req: Request, session: Session) => Promise<Response> | Response;
+// Phase 3c: `ctx` is Next's second route-handler argument (holds `params` for
+// dynamic routes), passed through untouched so wrapped dynamic routes (e.g.
+// /api/programs/[programId]/enroll) can read their params. Static routes ignore it.
+export type AuthedHandler<C = unknown> = (
+  req: Request,
+  session: Session,
+  ctx: C
+) => Promise<Response> | Response;
 
 function devBypass(): boolean {
   return process.env.NODE_ENV === 'development' && process.env.DEV_AUTH === '1';
@@ -34,11 +41,11 @@ export async function getSessionUserId(): Promise<string | null> {
   return data.claims.sub;
 }
 
-export function withAuth(handler: AuthedHandler): (req: Request) => Promise<Response> {
-  return async (req: Request) => {
+export function withAuth<C = unknown>(handler: AuthedHandler<C>): (req: Request, ctx: C) => Promise<Response> {
+  return async (req: Request, ctx: C) => {
     const userId = await getSessionUserId();
-    if (userId) return handler(req, { userId });
-    if (devBypass()) return handler(req, { userId: null });
+    if (userId) return handler(req, { userId }, ctx);
+    if (devBypass()) return handler(req, { userId: null }, ctx);
     return Response.json({ error: 'Sign in required.', code: 'UNAUTHENTICATED' }, { status: 401 });
   };
 }

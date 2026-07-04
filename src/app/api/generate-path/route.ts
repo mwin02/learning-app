@@ -14,14 +14,16 @@
 // (so the worker's get-or-create keys on a normalized topic). It is the only
 // non-trivial work left in the request and is bounded (one classification call).
 //
-// Access control is delegated to withAuth. Today that's a placeholder env check
-// (DEV_AUTH=1); Phase 3 swaps the internals to a real Supabase session lookup and
-// populates session.userId (which flows onto CourseRequest.userId) without touching
-// this file.
+// Phase 3c: DEMOTED to admin-only (withAdminAuth). Programs are the only
+// user-facing artifact — public creation goes through /api/generate-program
+// (which meters per user and wraps even a single topic in a one-slot Program).
+// This route stays as the operator/playground tool for building a standalone
+// Track outside any Program; the enqueued CourseRequest carries the admin's
+// userId for audit.
 
 import { ZodError } from 'zod';
 import { generatePathInputSchema } from '@/lib/api/generate-path-schema';
-import { withAuth } from '@/lib/api/with-auth';
+import { withAdminAuth } from '@/lib/api/with-admin-auth';
 import { enqueueCourseRequest } from '@/lib/services/course-request';
 import { validateTopic } from '@/lib/agents/topic-gate';
 import { createTraceCollector } from '@/lib/agents/agent-trace';
@@ -46,7 +48,7 @@ function errorResponse(status: number, code: ErrorCode, error: string, details?:
 // the *return* here rather than relying on the route staying private.
 const traceInResponse = process.env.TRACE_RESPONSE === '1';
 
-export const POST = withAuth(async (req, session) => {
+export const POST = withAdminAuth(async (req, session) => {
   let raw: unknown;
   try {
     raw = await req.json();
@@ -91,14 +93,14 @@ export const POST = withAuth(async (req, session) => {
   try {
     const { id } = await enqueueCourseRequest({
       topic: gate.canonical,
-      userId: session.userId,
+      userId: session.adminId,
       priorKnowledge: input.priorKnowledge,
       goal: input.goal,
       timeframeWeeks: input.timeframeWeeks,
       hoursPerWeek: input.hoursPerWeek,
       targetMastery: input.targetMastery,
     });
-    console.log('[generate-path] enqueued', { requestId: id, topic: gate.canonical, userId: session.userId });
+    console.log('[generate-path] enqueued', { requestId: id, topic: gate.canonical, userId: session.adminId });
     return Response.json(
       { requestId: id, status: 'queued', topic: gate.canonical, ...(traceInResponse ? { trace: events } : {}) },
       { status: 202 },

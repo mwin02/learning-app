@@ -90,6 +90,45 @@ With the dev server running (`npm run dev`):
    gone; step 3's fetch now returns 401.
 7. Restore `.env.local` (`DEV_AUTH=1`) for normal local work.
 
+## 6. Verification pass (3c — limits, enrollment, program naming)
+
+Needs §1–5 done (real session + 3a migration on the shared dev DB). Signed in,
+dev server running:
+
+1. **Integration tests** (worker stopped, `DATABASE_URL` set):
+   `npm run test:int` — the new `program-enrollment` suite must pass (it fails
+   with a missing-column/table error if §4 hasn't run).
+2. **One real program** (costs one plan-pass LLM call + child builds — do this
+   once, with the course worker running): from the signed-in browser console:
+   ```js
+   fetch('/api/generate-program', { method: 'POST', headers: { 'content-type': 'application/json' },
+     body: JSON.stringify({ goal: 'refresh calculus before fall semester', totalHoursPerWeek: 4, totalWeeks: 6 }),
+   }).then(r => r.json()).then(console.log)
+   ```
+   → `202 { programId, status: 'building', topicCount }`. Check in Studio:
+   - the `Program` row has a **neutral `title` + `description`** (no personal
+     details even if you put them in the goal),
+   - `EnrolledProgram` has a row for (you, programId) — creator auto-enroll,
+   - single-topic behavior: a goal like the above should yield **1** ProgramPath
+     (the plan pass shouldn't pad it with adjacent topics).
+3. **Quota (without burning 3 real builds):** insert dummy rows for your user in
+   Studio until the month's count is 3 —
+   ```sql
+   INSERT INTO "Program" (id, goal, "totalHoursPerWeek", "totalWeeks", status, "userId", "createdAt", "updatedAt")
+   VALUES ('quota-test-1', 'quota filler', 1, 1, 'ready', '<your-user-uuid>', now(), now());
+   ```
+   (repeat with distinct ids) — then re-run the fetch from step 2 → expect
+   **429 `FREE_LIMIT_REACHED`** with `{ used, limit }`. Delete the filler rows
+   after (`DELETE FROM "Program" WHERE goal = 'quota filler';`).
+4. **Enroll endpoint:** with a second Program id (or after un-enrolling yourself
+   in Studio):
+   `fetch('/api/programs/<id>/enroll', { method: 'POST' }).then(r => r.status)`
+   → 200 and an `EnrolledProgram` row; repeat → still 200 (idempotent);
+   a made-up id → 404.
+5. **generate-path is admin-only now:** signed in as a NON-admin (or via curl
+   with no cookies, `DEV_AUTH` unset) → `POST /api/generate-path` → **404**;
+   as admin (§5.5) → 400 `INVALID_INPUT` on an empty body (handler ran).
+
 ## Troubleshooting
 
 - **`redirect_uri_mismatch` (Google page):** the GCP OAuth client's redirect URI

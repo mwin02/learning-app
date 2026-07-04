@@ -8,14 +8,15 @@
 // worker drains them, exactly as a standalone request. The caller gets a programId to
 // poll, not a finished program.
 //
-// Access control is delegated to withAuth (today the DEV_AUTH placeholder; Phase 3
-// swaps in a real Supabase session and populates session.userId → Program.userId
-// without touching this file).
+// Access control is delegated to withAuth (real Supabase sessions as of 3b);
+// session.userId flows onto Program.userId, and 3c meters creation per user
+// (programQuota) — the plan pass + child builds are the app's biggest spend.
 
 import { ZodError } from 'zod';
 import { generateProgramInputSchema } from '@/lib/api/generate-program-schema';
 import { withAuth } from '@/lib/api/with-auth';
 import { enqueueProgram } from '@/lib/services/program';
+import { programQuota } from '@/lib/services/program-limits';
 
 // Prisma + the Vertex SDK (plan pass) need the Node runtime, not Edge. The plan
 // pass's worst case (one Pro-tier-free Flash decomposition + a handful of topic-gate
@@ -23,7 +24,7 @@ import { enqueueProgram } from '@/lib/services/program';
 export const maxDuration = 60;
 export const runtime = 'nodejs';
 
-type ErrorCode = 'INVALID_INPUT' | 'PLAN_EMPTY' | 'INTERNAL';
+type ErrorCode = 'INVALID_INPUT' | 'PLAN_EMPTY' | 'INTERNAL' | 'FREE_LIMIT_REACHED';
 
 function errorResponse(status: number, code: ErrorCode, error: string, details?: unknown) {
   const body: { error: string; code: ErrorCode; details?: unknown } = { error, code };
@@ -47,6 +48,23 @@ export const POST = withAuth(async (req, session) => {
       return errorResponse(400, 'INVALID_INPUT', 'Request body failed validation.', err.flatten());
     }
     throw err;
+  }
+
+  // Phase 3c: the free-tier creation cap — Program creation is the app's most
+  // expensive user action (plan pass + N child Track builds), so it's metered per
+  // user per calendar month. Checked AFTER validation (a malformed request should
+  // say so, not burn a confusing quota error) and BEFORE the anchor insert. The
+  // dev bypass's null userId skips the check (local/scripted work is unmetered).
+  if (session.userId) {
+    const quota = await programQuota(session.userId);
+    if (!quota.allowed) {
+      return errorResponse(
+        429,
+        'FREE_LIMIT_REACHED',
+        `Free plan allows ${quota.limit} program${quota.limit === 1 ? '' : 's'} per month.`,
+        { used: quota.used, limit: quota.limit }
+      );
+    }
   }
 
   // enqueueProgram never throws — a plan/fan-out failure is recorded on the Program
