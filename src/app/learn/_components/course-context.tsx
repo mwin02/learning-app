@@ -1,10 +1,10 @@
 'use client';
 
 // Phase 2.6 (learn UI): the client-side course context. Holds the learner's
-// completed-lesson set (anonymous, persisted to localStorage — migrates to the
-// Progress table on auth in Phase 3) and exposes the derived CourseHomeModel so the
-// sidebar (layout) and the main column (page) re-render from one shared source as
-// lessons are marked complete.
+// completed-lesson set (Progress table when signed in, localStorage otherwise —
+// Phase 3f) and exposes the derived CourseHomeModel so the sidebar (layout) and
+// the main column (page) re-render from one shared source as lessons are marked
+// complete.
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { TrackView } from '@/lib/track-view';
@@ -21,14 +21,18 @@ const CourseContext = createContext<CourseContextValue | null>(null);
 
 export function CourseProvider({
   track,
+  signedIn,
   children,
 }: {
   track: TrackView;
+  // From the server layout (it knows the viewer): true only for a real session
+  // with a userId — the dev bypass's userId-less viewer stays on localStorage.
+  signedIn: boolean;
   children: React.ReactNode;
 }) {
-  // The persistence backend (localStorage today, DB in Phase 3) behind a stable
-  // interface — the provider never touches storage directly. Memoized per track.
-  const store = useMemo(() => createProgressStore(track.id), [track.id]);
+  // The persistence backend (DB when signed in, localStorage otherwise) behind a
+  // stable interface — the provider never touches storage directly.
+  const store = useMemo(() => createProgressStore(track.id, signedIn), [track.id, signedIn]);
 
   // Start empty on both server and first client render to avoid a hydration
   // mismatch; hydrate from the store after mount. setState lands in an async .then,
