@@ -17,6 +17,7 @@ import { getViewer } from '@/lib/auth/viewer';
 import { ProgramTopNav } from '../_components/ProgramTopNav';
 import { ProgramSidebar } from '../_components/ProgramSidebar';
 import { EnrollPrompt } from '../_components/EnrollPrompt';
+import { AutoRefresh } from '../_components/AutoRefresh';
 
 export const dynamic = 'force-dynamic';
 
@@ -53,6 +54,8 @@ export default async function ProgramLayout({
   const program = access.view;
   return (
     <div className="min-h-screen bg-surface text-ink">
+      {/* Phase 3e: live build status — re-render the (force-dynamic) hub while in flight. */}
+      {(program.status === 'planning' || program.status === 'building') && <AutoRefresh />}
       <ProgramTopNav builtCount={program.builtCount} trackCount={program.trackCount} />
       <div className="flex items-start">
         <ProgramSidebar program={program} />

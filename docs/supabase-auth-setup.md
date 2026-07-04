@@ -155,6 +155,25 @@ Studio) and one of its Track ids (ProgramPath.trackId once built).
    the §5.5 admin grant → renders. With `DEV_AUTH` unset and no session (curl)
    → 404.
 
+## 8. Verification pass (3e — barebones account UI)
+
+Needs §1–5. This is the end-to-end product loop, so it subsumes parts of §6–7:
+
+1. **Landing (`/`)**: anonymous → hero + "Continue with Google"; after sign-in →
+   your name/email, Create-a-program + My-programs links, admin Playground link
+   only if your role is admin, working Sign out (returns to the anonymous view).
+2. **Create flow**: `/programs/new` → fill goal/hours/weeks → submit → lands on
+   `/programs/<id>` showing the planning/building hub, which **auto-refreshes
+   every ~5s** until the worker (running!) finishes and it flips to the built
+   program — no manual reloads.
+3. **My programs (`/programs`)**: lists your enrollments newest-first with
+   status; while something is building the list self-refreshes. As a creator you
+   see your goal as the subtitle under the generated title; in the second
+   (non-creator) browser, an enrolled program shows only the title.
+4. **Quota surface**: with the month's quota filled (§6.3 filler rows), submit
+   the form again → inline "free limit" message, no crash. Also try a nonsense
+   goal ("asdfgh") → the PLAN_EMPTY message.
+
 ## Troubleshooting
 
 - **`redirect_uri_mismatch` (Google page):** the GCP OAuth client's redirect URI
