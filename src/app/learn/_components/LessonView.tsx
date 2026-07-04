@@ -70,7 +70,7 @@ const TYPE_BADGE: Record<
 };
 
 export function LessonView({ model }: { model: LessonViewModel }) {
-  const { isComplete, toggleComplete } = useCourse();
+  const { basePath, isComplete, toggleComplete } = useCourse();
   const done = isComplete(model.id);
   const badge = TYPE_BADGE[model.type];
 
@@ -114,10 +114,10 @@ export function LessonView({ model }: { model: LessonViewModel }) {
             concepts had a question bank to sample at build. */}
         <LessonExercises exercises={model.exercises} />
 
-        {model.next && <UpNext trackId={model.trackId} next={model.next} />}
+        {model.next && <UpNext basePath={basePath} next={model.next} />}
 
         <FooterNav
-          trackId={model.trackId}
+          basePath={basePath}
           prev={model.prev}
           next={model.next}
           done={done}
@@ -128,10 +128,10 @@ export function LessonView({ model }: { model: LessonViewModel }) {
   );
 }
 
-function UpNext({ trackId, next }: { trackId: string; next: LessonNextLesson }) {
+function UpNext({ basePath, next }: { basePath: string; next: LessonNextLesson }) {
   return (
     <Link
-      href={`/learn/${trackId}/${next.id}`}
+      href={`${basePath}/${next.id}`}
       className="card mt-6 flex items-center gap-3.5 p-4 hover:border-hairline"
     >
       <LessonTypeIcon type={next.type} />
@@ -145,13 +145,13 @@ function UpNext({ trackId, next }: { trackId: string; next: LessonNextLesson }) 
 }
 
 function FooterNav({
-  trackId,
+  basePath,
   prev,
   next,
   done,
   onToggle,
 }: {
-  trackId: string;
+  basePath: string;
   prev: LessonNavLesson | null;
   next: LessonNextLesson | null;
   done: boolean;
@@ -161,7 +161,7 @@ function FooterNav({
     <div className="mt-[26px] flex items-center gap-3 border-t border-line pt-5">
       {prev ? (
         <Link
-          href={`/learn/${trackId}/${prev.id}`}
+          href={`${basePath}/${prev.id}`}
           className="flex items-center gap-2 rounded-button border-[1.5px] border-hairline px-[15px] py-2.5 text-sm font-medium text-ink-soft hover:bg-fill-soft"
         >
           <ChevronLeftIcon size={15} /> Previous
@@ -189,14 +189,14 @@ function FooterNav({
 
       {next ? (
         <Link
-          href={`/learn/${trackId}/${next.id}`}
+          href={`${basePath}/${next.id}`}
           className="flex items-center gap-2 rounded-button bg-brand px-[18px] py-2.5 text-sm font-semibold text-white shadow-[0_1px_2px_rgba(63,106,216,0.3)] hover:bg-brand-dark"
         >
           Next lesson <ChevronRightIcon size={15} />
         </Link>
       ) : (
         <Link
-          href={`/learn/${trackId}`}
+          href={basePath}
           className="flex items-center gap-2 rounded-button bg-brand px-[18px] py-2.5 text-sm font-semibold text-white shadow-[0_1px_2px_rgba(63,106,216,0.3)] hover:bg-brand-dark"
         >
           Back to overview <ChevronRightIcon size={15} />

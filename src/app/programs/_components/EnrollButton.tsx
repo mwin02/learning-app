@@ -5,7 +5,23 @@
 // as the enrolled hub.
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { usePathname, useRouter } from 'next/navigation';
+
+// Anonymous variant of the CTA: into sign-in and back to the CURRENT path —
+// a deep course/lesson link shows the prompt at its own URL, and an already-
+// enrolled user signing in from it lands exactly where the link pointed.
+export function SignInToEnrollLink() {
+  const pathname = usePathname();
+  return (
+    <Link
+      href={`/signin?next=${encodeURIComponent(pathname)}`}
+      className="inline-block rounded-button bg-brand px-6 py-2.5 font-semibold text-white"
+    >
+      Sign in to enroll — free
+    </Link>
+  );
+}
 
 export function EnrollButton({ programId }: { programId: string }) {
   const router = useRouter();

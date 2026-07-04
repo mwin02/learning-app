@@ -44,7 +44,7 @@ export default async function LearnLayout({
   const { trackId } = await params;
   const access = await getAuthorizedTrackView(trackId);
   if (access.kind === 'login') {
-    redirect(`/auth/login?next=${encodeURIComponent(`/learn/${trackId}`)}`);
+    redirect(`/signin?next=${encodeURIComponent(`/learn/${trackId}`)}`);
   }
   if (access.kind !== 'ok') notFound();
 
@@ -55,7 +55,11 @@ export default async function LearnLayout({
 
   return (
     <div className="min-h-screen bg-surface text-ink">
-      <CourseProvider track={access.track} signedIn={viewer.userId !== null}>
+      <CourseProvider
+        track={access.track}
+        signedIn={viewer.userId !== null}
+        basePath={`/learn/${trackId}`}
+      >
         <TopNav />
         <div className="flex items-start">
           <CourseSidebar />

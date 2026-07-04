@@ -1,22 +1,22 @@
 // Phase 2.75e (learn UI): the program-hub shell. Loads the ProgramView once (server,
-// cache()'d so the page's load is free) and renders the design-system chrome — the
-// surface background, the sticky ProgramTopNav, and the sticky ProgramSidebar listing
-// the constituent Tracks — around the main column. Mirrors the course player's
-// /learn/[trackId] layout one level up, but the program hub needs no client progress
-// provider: it's a read-only overview that links into each Track's own player.
+// cache()'d so the pages' loads are free) and renders the shared chrome — the
+// surface background and the sticky ProgramTopNav — around the child routes: the
+// program home (which brings its own ProgramSidebar) and, since frontend-redesign
+// Block 1, the nested [trackId] course player (which brings the CourseSidebar).
 //
-// Phase 3d: gated. Anonymous → sign-in (with a return path). Signed-in but
-// unenrolled → the EnrollPrompt stub instead of the hub (enrollment is free).
-// Non-creators — enrolled or not — only ever receive the sanitized view (the
-// generated title/description; the creator's goal/background never leave the server).
+// Phase 3d, revised in frontend-redesign Block 1: programs are PUBLICLY
+// previewable. Anonymous and signed-in-but-unenrolled viewers both get the
+// EnrollPrompt (the prompt's CTA is "sign in" vs "enroll" respectively) — no
+// more bouncing straight into Google OAuth from a shared link. Non-creators —
+// enrolled or not — only ever receive the sanitized view (the generated
+// title/description; the creator's goal/background never leave the server).
 
 import type { Metadata } from 'next';
-import { notFound, redirect } from 'next/navigation';
-import { getProgramAccess } from '@/lib/auth/program-access';
+import { notFound } from 'next/navigation';
 import { getViewer } from '@/lib/auth/viewer';
-import { ProgramTopNav } from '../_components/ProgramTopNav';
-import { ProgramSidebar } from '../_components/ProgramSidebar';
 import { EnrollPrompt } from '../_components/EnrollPrompt';
+import { getProgramAccess } from '@/lib/auth/program-access';
+import { ProgramTopNav } from '../_components/ProgramTopNav';
 import { AutoRefresh } from '../_components/AutoRefresh';
 
 export const dynamic = 'force-dynamic';
@@ -27,8 +27,6 @@ export async function generateMetadata({
   params: Promise<{ programId: string }>;
 }): Promise<Metadata> {
   const { programId } = await params;
-  const viewer = await getViewer();
-  if (!viewer.userId && !viewer.isAdmin) return {};
   const access = await getProgramAccess(programId);
   if (!access) return {};
   return { title: access.view.title ?? access.view.goal };
@@ -42,14 +40,15 @@ export default async function ProgramLayout({
   params: Promise<{ programId: string }>;
 }) {
   const { programId } = await params;
-  const viewer = await getViewer();
-  if (!viewer.userId && !viewer.isAdmin) {
-    redirect(`/auth/login?next=${encodeURIComponent(`/programs/${programId}`)}`);
-  }
-
-  const access = await getProgramAccess(programId);
+  const [viewer, access] = await Promise.all([getViewer(), getProgramAccess(programId)]);
   if (!access) notFound();
-  if (!access.enrolled) return <EnrollPrompt program={access.view} />;
+  // Unenrolled (anonymous included): the prompt renders AT the requested URL —
+  // deep course/lesson links keep their path on purpose, so signing in from one
+  // (the prompt's CTA carries the current path as `next`) drops an already-
+  // enrolled user exactly where the link pointed.
+  if (!access.enrolled) {
+    return <EnrollPrompt program={access.view} signedIn={viewer.userId !== null} />;
+  }
 
   const program = access.view;
   return (
@@ -57,10 +56,11 @@ export default async function ProgramLayout({
       {/* Phase 3e: live build status — re-render the (force-dynamic) hub while in flight. */}
       {(program.status === 'planning' || program.status === 'building') && <AutoRefresh />}
       <ProgramTopNav builtCount={program.builtCount} trackCount={program.trackCount} />
-      <div className="flex items-start">
-        <ProgramSidebar program={program} />
-        <main className="min-h-[calc(100vh-var(--nav-h))] flex-1 min-w-0">{children}</main>
-      </div>
+      {/* Block 1 (frontend redesign): the left column moved down a level — the
+          program home renders the ProgramSidebar, the [trackId] player renders
+          the CourseSidebar — so each subtree owns its sidebar until the Block-2
+          accordion unifies them back here. */}
+      {children}
     </div>
   );
 }

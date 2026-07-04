@@ -14,11 +14,11 @@ import { useCourse } from './course-context';
 import type { CourseHomeLesson, CourseHomeSection, LessonStatus } from '@/lib/course-home-model';
 
 function LessonRow({
-  trackId,
+  basePath,
   lesson,
   active,
 }: {
-  trackId: string;
+  basePath: string;
   lesson: CourseHomeLesson;
   active: boolean;
 }) {
@@ -29,7 +29,7 @@ function LessonRow({
   const dotStatus: LessonStatus = lesson.status === 'done' ? 'done' : active ? 'current' : 'todo';
   return (
     <Link
-      href={`/learn/${trackId}/${lesson.id}`}
+      href={`${basePath}/${lesson.id}`}
       aria-current={active ? 'page' : undefined}
       className={`relative mx-2.5 my-px flex items-center gap-[11px] rounded-control py-2 pl-3.5 pr-2.5 hover:bg-fill ${
         active ? 'bg-brand-bg-soft' : 'bg-transparent'
@@ -47,11 +47,11 @@ function LessonRow({
 }
 
 function SectionGroup({
-  trackId,
+  basePath,
   section,
   activeLessonId,
 }: {
-  trackId: string;
+  basePath: string;
   section: CourseHomeSection;
   activeLessonId: string | null;
 }) {
@@ -92,7 +92,7 @@ function SectionGroup({
           {section.lessons.map((lesson) => (
             <LessonRow
               key={lesson.id}
-              trackId={trackId}
+              basePath={basePath}
               lesson={lesson}
               active={lesson.id === activeLessonId}
             />
@@ -104,7 +104,7 @@ function SectionGroup({
 }
 
 export function CourseSidebar() {
-  const { model } = useCourse();
+  const { model, basePath } = useCourse();
 
   // The location treatment (rail + tint + blue "current" dot) marks the lesson being
   // viewed — the active route. On the course-home route there's no lessonId, so
@@ -117,7 +117,7 @@ export function CourseSidebar() {
     <aside className="sticky top-[var(--nav-h)] min-h-[calc(100vh-var(--nav-h))] w-[322px] flex-none self-start border-r border-line bg-card pb-5">
       {/* The course header doubles as the "back to course home" link. */}
       <Link
-        href={`/learn/${model.trackId}`}
+        href={basePath}
         aria-label="Back to course overview"
         className="block border-b border-line-soft px-5 pb-[18px] pt-5 hover:bg-fill-soft"
       >
@@ -137,7 +137,7 @@ export function CourseSidebar() {
       {model.sections.map((section) => (
         <SectionGroup
           key={section.id}
-          trackId={model.trackId}
+          basePath={basePath}
           section={section}
           activeLessonId={activeLessonId}
         />
