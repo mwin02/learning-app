@@ -47,7 +47,7 @@ Every feature in every phase follows this loop:
 
 ### Merging a stacked PR chain into `main`
 
-When a chain of PRs is stacked (each branch off the previous), merge **bottom-up, one block at a time**, and only ever retarget the *immediate next* PR — never the whole chain at once. For each PR, from the base of the stack upward:
+When a chain of PRs is stacked (each branch off the previous), merge **bottom-up, one block at a time**, and only ever retarget the _immediate next_ PR — never the whole chain at once. For each PR, from the base of the stack upward:
 
 1. Merge it into `main` (`gh pr merge <n> --merge`), but **do not pass `--delete-branch` yet**.
 2. Retarget the immediate child (the PR based on this branch) to `main`: `gh pr edit <child> --base main`. Do this **while this branch still exists**.
@@ -55,8 +55,8 @@ When a chain of PRs is stacked (each branch off the previous), merge **bottom-up
 
 Two failure modes this ordering prevents — both bit us merging the 2.5f stack (#85–#94):
 
-- **Never blanket-retarget the whole chain to `main` up front.** A PR retargeted *before its parent merges* has its merge-base set to bare `main`, so its diff and commit list inflate to include every ancestor block's work. This is **permanent**: a merged PR's base branch is immutable, so the bloated "Files changed" / "Commits" record can't be fixed afterward. (`main`'s own history stays correct — only the PR record is wrong.)
-- **Never `--delete-branch` a parent while a child PR still targets it.** Deleting a branch that is the base of an open PR *closes* that PR instead of retargeting it, and a closed PR whose base branch is gone can't be reopened without recreating the branch. Retarget the child to `main` (step 2) before deleting (step 3).
+- **Never blanket-retarget the whole chain to `main` up front.** A PR retargeted _before its parent merges_ has its merge-base set to bare `main`, so its diff and commit list inflate to include every ancestor block's work. This is **permanent**: a merged PR's base branch is immutable, so the bloated "Files changed" / "Commits" record can't be fixed afterward. (`main`'s own history stays correct — only the PR record is wrong.)
+- **Never `--delete-branch` a parent while a child PR still targets it.** Deleting a branch that is the base of an open PR _closes_ that PR instead of retargeting it, and a closed PR whose base branch is gone can't be reopened without recreating the branch. Retarget the child to `main` (step 2) before deleting (step 3).
 
 ## Repo conventions
 
@@ -65,6 +65,7 @@ Two failure modes this ordering prevents — both bit us merging the 2.5f stack 
 - Secrets live in `.env.local` (git-ignored); `.env.example` documents required keys.
 - Never commit secrets, service-account JSON, or Stripe keys.
 - **Commit messages: no `Co-Authored-By: Claude` trailer.** Write commit messages without the AI attribution footer.
+- **Pull Requests: no `Generated with Claude Code` trailer** whenever opening new pull requests
 - This file (CLAUDE.md) and shared skills under `.claude/skills/` are tracked; everything else under `.claude/` stays git-ignored (local settings, worktrees).
 
 ## Testing (Vitest — colocated unit + gated integration)
@@ -87,14 +88,19 @@ Tests run on **Vitest** (config in [`vitest.config.ts`](vitest.config.ts)), spli
 ⚠️ **Module-eval gotcha.** Importing an app module that transitively pulls in `@/lib/db` or `@/lib/ai/vertex` will **throw at import** when the env vars are absent (`DATABASE_URL` / `GOOGLE_VERTEX_PROJECT`), even if the function under test never touches them — those modules validate env at module-eval. When the code under test is pure, stub the offending leaf so the unit test stays secret-free:
 
 ```ts
-vi.mock('@/lib/db', () => ({ prisma: {} }));
+vi.mock("@/lib/db", () => ({ prisma: {} }));
 // If the graph imports @/lib/ai/vertex directly (e.g. via tools/web-fallback), stub the leaf:
-vi.mock('@/lib/ai/vertex', () => ({
+vi.mock("@/lib/ai/vertex", () => ({
   vertex: Object.assign(() => ({}), { textEmbeddingModel: () => ({}) }),
-  chatModel: () => ({}), geminiFlash: {}, vertexAnthropic: {}, vertexGlobal: {},
+  chatModel: () => ({}),
+  geminiFlash: {},
+  vertexAnthropic: {},
+  vertexGlobal: {},
 }));
 // Otherwise stubbing @/lib/ai/models is enough:
-vi.mock('@/lib/ai/models', () => ({ getModel: () => ({ model: {}, temperature: 0, maxOutputTokens: 0 }) }));
+vi.mock("@/lib/ai/models", () => ({
+  getModel: () => ({ model: {}, temperature: 0, maxOutputTokens: 0 }),
+}));
 ```
 
 Reach for a stub only when the import throws; most pure modules import cleanly and need none.
