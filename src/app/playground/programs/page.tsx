@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/db';
-import { isDevAuthEnabled } from '@/lib/dev-auth';
+import { requireAdminPage } from '@/lib/auth/viewer';
 import { PROGRAM_STATUS_STYLE } from './status-style';
 
 export const dynamic = 'force-dynamic';
@@ -13,7 +13,7 @@ export const dynamic = 'force-dynamic';
 const ROW_CAP = 200;
 
 export default async function ProgramsListPage() {
-  if (!isDevAuthEnabled()) notFound();
+  await requireAdminPage();
 
   const programs = await prisma.program.findMany({
     orderBy: { createdAt: 'desc' },

@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { LessonResourceRole } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import { isDevAuthEnabled } from '@/lib/dev-auth';
+import { requireAdminPage } from '@/lib/auth/viewer';
 
 export const dynamic = 'force-dynamic';
 
@@ -103,7 +103,7 @@ export default async function TrackDetailPage({
 }: {
   params: Promise<{ trackId: string }>;
 }) {
-  if (!isDevAuthEnabled()) notFound();
+  await requireAdminPage();
   const { trackId } = await params;
 
   const track = await prisma.track.findUnique({

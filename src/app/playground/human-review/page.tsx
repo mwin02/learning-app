@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/db';
-import { isDevAuthEnabled } from '@/lib/dev-auth';
+import { requireAdminPage } from '@/lib/auth/viewer';
 import { classify } from '@/lib/agents/decomposition/router';
 import { ReviewActions } from './review-actions';
 
@@ -66,7 +66,7 @@ function QueueList({ rows }: { rows: Row[] }) {
 }
 
 export default async function HumanReviewPage() {
-  if (!isDevAuthEnabled()) notFound();
+  await requireAdminPage();
 
   // Top-level container rows that aren't pickable: human_review (a human must
   // decide) and pending (a transient/automatic retry — shown for visibility).

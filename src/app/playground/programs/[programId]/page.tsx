@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/db';
-import { isDevAuthEnabled } from '@/lib/dev-auth';
+import { requireAdminPage } from '@/lib/auth/viewer';
 import { PROGRAM_STATUS_STYLE, TIER_STYLE } from '../status-style';
 
 export const dynamic = 'force-dynamic';
@@ -24,7 +24,7 @@ export default async function ProgramDetailPage({
 }: {
   params: Promise<{ programId: string }>;
 }) {
-  if (!isDevAuthEnabled()) notFound();
+  await requireAdminPage();
   const { programId } = await params;
 
   const program = await prisma.program.findUnique({

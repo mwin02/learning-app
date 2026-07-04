@@ -33,7 +33,15 @@ export type ProgramPhaseView = { label: string; tracks: ProgramTrackView[] };
 
 export type ProgramView = {
   id: string;
+  // Phase 3d: goal/background/antiList are the creator's PRIVATE inputs; title/
+  // description are the generated shareable surface (3c). Non-creator viewers get
+  // a sanitized view (sanitizeProgramView below) where goal is replaced by the
+  // title and the other private fields are blanked — components render `goal` as
+  // the heading either way, so they need no viewer awareness.
   goal: string;
+  title: string | null;
+  description: string | null;
+  createdById: string | null;
   background: string | null;
   totalHoursPerWeek: number;
   totalWeeks: number;
@@ -48,6 +56,21 @@ export type ProgramView = {
   totalMinutes: number;
 };
 
+// Phase 3d: the view handed to a NON-creator (an enrolled learner who didn't
+// create the Program, or the unenrolled preview). Components render `goal` as the
+// display heading, so the sanitized view substitutes the generated title and
+// blanks the private inputs (background, antiList) and the internal failure
+// diagnostic. Creators and admins see the raw view.
+export function sanitizeProgramView(view: ProgramView): ProgramView {
+  return {
+    ...view,
+    goal: view.title ?? 'Learning program',
+    background: null,
+    antiList: [],
+    error: null,
+  };
+}
+
 // `cache()` dedupes within a single request (the layout + page both call this). It
 // does NOT cache across requests — `dynamic = 'force-dynamic'` on the route keeps the
 // program fresh as child Tracks finish building.
@@ -57,6 +80,9 @@ export const getProgramView = cache(async (programId: string): Promise<ProgramVi
     select: {
       id: true,
       goal: true,
+      title: true,
+      description: true,
+      userId: true,
       background: true,
       totalHoursPerWeek: true,
       totalWeeks: true,
@@ -124,6 +150,9 @@ export const getProgramView = cache(async (programId: string): Promise<ProgramVi
   return {
     id: program.id,
     goal: program.goal,
+    title: program.title,
+    description: program.description,
+    createdById: program.userId,
     background: program.background,
     totalHoursPerWeek: program.totalHoursPerWeek,
     totalWeeks: program.totalWeeks,
