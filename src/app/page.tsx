@@ -1,12 +1,37 @@
-// Phase 3e: barebones landing — an integration-test surface for the auth + program
-// flow, NOT the designed 2.6a landing page (that comes with the frontend pass).
-// Anonymous: sign-in link. Signed in: identity, links to My Programs / Create.
+// Notebook landing (Block A of the frontend redesign). Anonymous: the "what do
+// you want to learn?" sheet — goal scratchpad, example chips, how-it-works —
+// with the build CTA routing into sign-in. Signed in: a compact welcome-back
+// sheet (My programs / Create / sign out), keeping every affordance the 3e
+// barebones landing had; the designed dashboard replaces most of this later.
 
 import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { getViewer } from '@/lib/auth/viewer';
+import { BRAND } from '@/lib/brand';
+import { Desk, Sheet } from '@/components/notebook/Sheet';
+import { NotebookBrand } from '@/components/notebook/NotebookBrand';
+import { GoalScratchpad } from './_components/GoalScratchpad';
 
 export const dynamic = 'force-dynamic';
+
+const STEPS = [
+  { n: 1, color: 'var(--color-nb-coral)', title: 'Describe it', body: 'Tell us your goal and background — a sentence is enough.' },
+  { n: 2, color: 'var(--color-nb-gold)', title: 'Get a program', body: 'We plan the courses you need and sequence real lessons, readings and exercises into each one.' },
+  { n: 3, color: 'var(--color-nb-violet)', title: 'Start learning', body: 'Track progress in your own notebook and pick up where you left off.' },
+];
+
+function HighlightedTitle() {
+  return (
+    <h1 className="mb-2 mt-1.5 font-hand text-[64px] font-bold leading-[0.92] text-script">
+      What do you
+      <br />
+      want to{' '}
+      <span style={{ background: 'linear-gradient(transparent 60%, rgba(255,224,102,.75) 60%)' }}>
+        learn?
+      </span>
+    </h1>
+  );
+}
 
 export default async function Home({
   searchParams,
@@ -22,68 +47,88 @@ export default async function Home({
     : null;
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-surface text-ink">
-      <main className="card w-full max-w-md p-8">
-        <div className="eyebrow mb-2">Adaptive Learning Path</div>
-        <h1 className="mb-4 text-2xl font-bold tracking-[-0.5px]">
-          A learning plan that gets you to your goal
-        </h1>
+    <Desk>
+      <Sheet>
+        {/* header */}
+        <div className="mb-[26px] flex h-[60px] items-end gap-3.5">
+          <NotebookBrand />
+          <div className="flex-1" />
+          {viewer.userId ? (
+            <form method="post" action="/auth/signout">
+              <button type="submit" className="btn-doodle -rotate-1 px-4 py-[3px] text-[22px]">
+                Sign out
+              </button>
+            </form>
+          ) : (
+            <Link href="/signin" className="btn-doodle -rotate-1 px-4 py-[3px] text-[22px] no-underline">
+              Sign in
+            </Link>
+          )}
+        </div>
 
         {auth_error && (
-          <p className="mb-4 rounded-control bg-fill px-3 py-2 text-sm text-red-600">
-            Sign-in failed. Please try again.
+          <p className="mb-4 max-w-[440px] rounded border border-note-edge bg-note px-3.5 py-2 font-script text-sm text-crayon-red">
+            Sign-in didn’t work — please try again.
           </p>
         )}
 
         {viewer.userId ? (
-          <div className="flex flex-col gap-3">
-            <p className="meta">
-              Signed in as {user?.name ?? user?.email ?? viewer.userId}
+          /* ---- signed in: welcome back ---- */
+          <>
+            <div className="nb-kicker">welcome back —</div>
+            <h1 className="mb-2 mt-1.5 font-hand text-[52px] font-bold leading-[0.95] text-script">
+              {user?.name ?? user?.email ?? 'Your notebook'}
               {viewer.isAdmin ? ' (admin)' : ''}
+            </h1>
+            <p className="mb-[26px] max-w-[560px] text-lg leading-[34px]">
+              Flip back to your programs, or start a new chapter.
             </p>
-            <Link
-              href="/programs/new"
-              className="rounded-button bg-brand px-5 py-2.5 text-center font-semibold text-white"
-            >
-              Create a program
-            </Link>
-            <Link
-              href="/programs"
-              className="rounded-button border border-line px-5 py-2.5 text-center font-semibold"
-            >
-              My programs
-            </Link>
-            {viewer.isAdmin && (
-              <Link href="/playground" className="meta-xs text-center underline">
-                Playground
+            <div className="flex flex-wrap items-center gap-4">
+              <Link href="/programs" className="btn-ink -rotate-[0.8deg] px-[26px] py-[9px] text-[26px] no-underline">
+                My programs →
               </Link>
-            )}
-            <form method="post" action="/auth/signout">
-              <button type="submit" className="meta-xs w-full text-center underline">
-                Sign out
-              </button>
-            </form>
-          </div>
+              <Link href="/programs/new" className="btn-doodle px-5 py-2 text-[22px] no-underline">
+                + Create a program
+              </Link>
+              {viewer.isAdmin && (
+                <Link href="/playground" className="font-script text-sm text-script-faint underline">
+                  Playground
+                </Link>
+              )}
+            </div>
+          </>
         ) : (
-          <div className="flex flex-col gap-3">
-            <p className="text-body">
-              Tell us your goal; we build a personalized, sequenced program of real
-              resources to get you there.
+          /* ---- anonymous: the pitch ---- */
+          <>
+            <div className="nb-kicker">{BRAND} · learn anything</div>
+            <HighlightedTitle />
+            <p className="mb-[26px] max-w-[600px] text-[19px] leading-[34px]">
+              Write your goal in plain words. We’ll turn it into a guided program of courses —
+              sequenced videos, readings and problem sets, made just for you.
             </p>
-            <a
-              href="/auth/login"
-              className="rounded-button bg-brand px-5 py-2.5 text-center font-semibold text-white"
-            >
-              Continue with Google
-            </a>
-            {viewer.isAdmin && (
-              <Link href="/playground" className="meta-xs text-center underline">
-                Playground (dev bypass)
-              </Link>
-            )}
-          </div>
+
+            <GoalScratchpad />
+
+            <div className="mb-3 font-hand text-3xl font-bold text-script">How it works</div>
+            <div className="grid max-w-[820px] grid-cols-1 gap-[26px] sm:grid-cols-3">
+              {STEPS.map((step) => (
+                <div key={step.n}>
+                  <div className="flex items-center gap-2.5">
+                    <div
+                      className="flex h-[38px] w-[38px] flex-none -rotate-6 items-center justify-center rounded-[50%_50%_50%_8px] border-[2.5px] font-hand text-[22px] font-bold"
+                      style={{ borderColor: step.color, color: step.color }}
+                    >
+                      {step.n}
+                    </div>
+                    <div className="font-hand text-[23px] font-bold text-script">{step.title}</div>
+                  </div>
+                  <p className="mb-0 mt-1.5 text-sm leading-[26px]">{step.body}</p>
+                </div>
+              ))}
+            </div>
+          </>
         )}
-      </main>
-    </div>
+      </Sheet>
+    </Desk>
   );
 }
