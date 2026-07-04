@@ -57,6 +57,47 @@
   --color-accent-exercise-bg: #f3effc;
 }
 
+/* ===== Notebook palette (frontend redesign, Block A) =====
+   The paper-notebook design language: desk backdrop, ruled paper sheet, red
+   margin, pen-blue ink, sticky notes, and the five course accent colors the
+   dashboard/tabs cycle through. Lives alongside the legacy tokens above until
+   every surface migrates; new UI should use these. */
+@theme {
+  --color-desk: #c9c3b2; /* backdrop behind the sheet */
+  --color-paper: #fcfaf1; /* the sheet itself */
+  --color-rule: #bcd0e0; /* horizontal ruled lines */
+  --color-margin: #e2a0a0; /* red margin line */
+  --color-margin-soft: #eec4c4; /* its thinner companion */
+  --color-hole: #d9d4c7; /* punch holes */
+
+  --color-pen: #2f5aa8; /* pen-blue ink: links, primary buttons, kickers */
+  --color-pen-deep: #1f3f7d; /* button under-shadow ("pressed ink") */
+  --color-script: #22303f; /* handwritten headings */
+  --color-script-body: #3a4756; /* running text */
+  --color-script-faint: #8a8577; /* de-emphasized text */
+  --color-script-dim: #9a9486; /* smallest meta */
+
+  --color-note: #fff8dc; /* sticky-note fill */
+  --color-note-edge: #ecdfa0; /* sticky-note border */
+  --color-note-label: #b08900; /* gold field labels on notes/forms */
+
+  --color-crayon-red: #c0392b; /* marker annotations (progress %) */
+  --color-crayon-green: #3a7d44; /* checkmarks / encouragement */
+
+  /* Course accent cycle (chapter chips, bookmark tabs, section badges) with a
+     matching darker ink for text/bars on paper. */
+  --color-nb-coral: #e07a5f;
+  --color-nb-coral-ink: #8a3a26;
+  --color-nb-gold: #e0b34d;
+  --color-nb-gold-ink: #8a6210;
+  --color-nb-violet: #7d80b8;
+  --color-nb-violet-ink: #3a3c78;
+  --color-nb-green: #6ba368;
+  --color-nb-green-ink: #2f5c34;
+  --color-nb-pink: #c56b9a;
+  --color-nb-pink-ink: #7c3b60;
+}
+
 /* ===== Radius scale =====
    Semantic radii so corner rounding is consistent + adjustable in one place. */
 @theme {
@@ -88,6 +129,9 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-plex-sans);
   --font-mono: var(--font-plex-mono);
+  /* Notebook handwriting pair (root layout loads them via next/font). */
+  --font-hand: var(--font-caveat);
+  --font-script: var(--font-kalam);
 }
 
 /* ===== Dark mode (OS preference) =====
@@ -136,6 +180,50 @@
     --color-accent-link-bg: #14292e;
     --color-accent-exercise: #9a7ce8;
     --color-accent-exercise-bg: #231d33;
+
+    /* Notebook palette, dark: a desk lamp at night — deep warm desk, charcoal
+       paper, inks lifted for contrast. First pass; tune against real pages. */
+    --color-desk: #17140f;
+    --color-paper: #211e17;
+    --color-rule: #333d4a;
+    --color-margin: #5e3636;
+    --color-margin-soft: #4a2f31;
+    --color-hole: #12100c;
+
+    --color-pen: #7da2e0;
+    --color-pen-deep: #2c4270;
+    --color-script: #e6e1d3;
+    --color-script-body: #c6c0b0;
+    --color-script-faint: #8f8878;
+    --color-script-dim: #7d7669;
+
+    --color-note: #332e1a;
+    --color-note-edge: #4d461f;
+    --color-note-label: #d9b23e;
+
+    --color-crayon-red: #e06452;
+    --color-crayon-green: #74b97f;
+
+    --color-nb-coral: #c96b52;
+    --color-nb-coral-ink: #e0937c;
+    --color-nb-gold: #c49c42;
+    --color-nb-gold-ink: #d9b969;
+    --color-nb-violet: #6f72a8;
+    --color-nb-violet-ink: #a2a5d6;
+    --color-nb-green: #5e9160;
+    --color-nb-green-ink: #8fc494;
+    --color-nb-pink: #ad5d87;
+    --color-nb-pink-ink: #d491b6;
+  }
+}
+
+@keyframes penbob {
+  0%,
+  100% {
+    transform: rotate(-18deg) translateY(0);
+  }
+  50% {
+    transform: rotate(-18deg) translateY(-3px);
   }
 }
 
@@ -151,6 +239,52 @@ body {
    — add a `text-*` utility (e.g. `text-brand`) to override it (utilities layer
    wins over components). */
 @layer components {
+  /* ---- Notebook component classes (frontend redesign) ---- */
+  /* The ruled paper sheet. Structure (margin lines, punch holes, padding) lives
+     in the Sheet component; this carries the visual chrome. The 33px/34px rule
+     rhythm is a design constant of the notebook language, matched to its type
+     leading — change both together or the "writing sits on the lines" illusion
+     breaks. */
+  .sheet {
+    background-color: var(--color-paper);
+    background-image: repeating-linear-gradient(
+      var(--color-paper) 0 33px,
+      var(--color-rule) 33px 34px
+    );
+    border-radius: 3px 8px 8px 3px;
+    box-shadow:
+      0 2px 3px rgba(0, 0, 0, 0.09),
+      0 18px 40px rgba(0, 0, 0, 0.16);
+  }
+  /* Handwritten uppercase kicker (the notebook analog of .eyebrow). Pen-blue by
+     default; override with a text utility (e.g. text-note-label). */
+  .nb-kicker {
+    @apply font-script text-[13px] uppercase tracking-[1.5px] text-pen;
+  }
+  /* Primary "inked" button: handwriting, pen fill, pressed-ink under-shadow.
+     The uneven radius is the doodle look's default; vary per instance inline. */
+  .btn-ink {
+    @apply inline-block cursor-pointer font-hand font-bold text-white;
+    background: var(--color-pen);
+    border-radius: 10px 13px 9px 12px;
+    box-shadow: 0 4px 0 var(--color-pen-deep);
+  }
+  .btn-ink:hover {
+    transform: translateY(1px);
+  }
+  /* Secondary outlined doodle button. */
+  .btn-doodle {
+    @apply inline-block cursor-pointer border-2 border-pen text-center font-hand font-bold text-pen;
+    border-radius: 9px 11px 8px 10px;
+  }
+  .btn-doodle:hover {
+    background: color-mix(in srgb, var(--color-pen) 8%, transparent);
+  }
+  /* The landing scratchpad's bobbing pencil. */
+  .pencil-bob {
+    animation: penbob 2.4s ease-in-out infinite;
+  }
+
   .eyebrow {
     @apply font-mono text-2xs font-semibold tracking-[1.5px] text-muted;
   }

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
+import { IBM_Plex_Sans, IBM_Plex_Mono, Caveat, Kalam } from "next/font/google";
 import "./globals.css";
 
 // IBM Plex is the app-wide brand font. next/font exposes the families as CSS
@@ -17,6 +17,21 @@ const plexMono = IBM_Plex_Mono({
   weight: ["400", "500", "600"],
 });
 
+// Notebook UI handwriting pair (frontend redesign): Caveat for display/headings
+// ("hand"), Kalam for running text ("script"). globals.css maps them to the
+// `font-hand` / `font-script` utilities.
+const caveat = Caveat({
+  variable: "--font-caveat",
+  subsets: ["latin"],
+  weight: ["500", "600", "700"],
+});
+
+const kalam = Kalam({
+  variable: "--font-kalam",
+  subsets: ["latin"],
+  weight: ["300", "400", "700"],
+});
+
 export const metadata: Metadata = {
   title: "Adaptive Learning Path",
   description: "Personalized, AI-curated learning paths.",
@@ -30,7 +45,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${plexSans.variable} ${plexMono.variable} h-full antialiased`}
+      className={`${plexSans.variable} ${plexMono.variable} ${caveat.variable} ${kalam.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
