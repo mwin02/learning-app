@@ -66,13 +66,24 @@ export function BookmarkTab({
       : 'translate-x-0 shadow-[-2px_3px_8px_rgba(0,0,0,.14)]'
   }`;
 
-  return href ? (
-    <Link href={href} className={`${className} no-underline`} style={{ background: bg }} aria-current={active ? 'true' : undefined}>
+  if (href) {
+    return (
+      <Link href={href} className={`${className} no-underline`} style={{ background: bg }} aria-current={active ? 'true' : undefined}>
+        {body}
+      </Link>
+    );
+  }
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className={`${className} cursor-pointer border-0`} style={{ background: bg }} aria-pressed={active}>
+        {body}
+      </button>
+    );
+  }
+  // Neither href nor onClick: an inert slot (e.g. a course still building).
+  return (
+    <div className={`${className} opacity-75`} style={{ background: bg }}>
       {body}
-    </Link>
-  ) : (
-    <button type="button" onClick={onClick} className={`${className} cursor-pointer border-0`} style={{ background: bg }} aria-pressed={active}>
-      {body}
-    </button>
+    </div>
   );
 }
