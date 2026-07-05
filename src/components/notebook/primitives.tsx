@@ -18,6 +18,17 @@ export function ProgressDoodle({
   );
 }
 
+// The crayon-red "N% done" readout, right-aligned in sheet headers (program
+// home, course home, lesson view — each shows its own scope's pct).
+export function PctDone({ pct }: { pct: number }) {
+  return (
+    <div className="text-right leading-none">
+      <div className="-rotate-[4deg] font-hand text-[30px] font-bold text-crayon-red">{pct}%</div>
+      <div className="mt-0.5 font-script text-2xs text-script-faint">done</div>
+    </div>
+  );
+}
+
 // The hand-drawn progress ring: an SVG arc for the real pct (the source mock
 // faked it with rotated borders), tilted a touch so it reads as sketched.
 export function RingDoodle({

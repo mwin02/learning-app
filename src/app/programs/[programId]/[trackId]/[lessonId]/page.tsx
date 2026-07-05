@@ -1,13 +1,14 @@
-// Frontend redesign Block 1: the program-scoped lesson pane. Renders inside
-// the [trackId] shell (shared CourseSidebar + CourseProvider); this route only
-// produces the main column. getProgramTrackAccess is cache()'d — deduped with
-// the layout's check in the same request.
+// Frontend redesign Block 1, reskinned in Block 5: the program-scoped lesson
+// pane. The [trackId] layout gated access and bridged the shell's progress
+// into the CourseContext; this route renders the notebook sheet.
+// getProgramTrackAccess is cache()'d — deduped with the layout's check.
 
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { getProgramTrackAccess } from '@/lib/auth/program-track-access';
 import { buildLessonViewModel } from '@/lib/lesson-view-model';
-import { LessonView } from '@/app/learn/_components/LessonView';
+import { Sheet } from '@/components/notebook/Sheet';
+import { NotebookLessonView } from '@/app/programs/_components/NotebookLessonView';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,12 +37,9 @@ export default async function ProgramLessonPage({
   const model = buildLessonViewModel(access.track, lessonId);
   if (!model) notFound();
 
-  // Interim (until the Block-5 lesson re-skin): the shell's Desk sets the
-  // handwriting font; LessonView is still the old design system, so pin it
-  // back to sans here.
   return (
-    <div className="font-sans text-ink">
-      <LessonView model={model} />
-    </div>
+    <Sheet>
+      <NotebookLessonView model={model} />
+    </Sheet>
   );
 }
