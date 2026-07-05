@@ -9,7 +9,6 @@ import { formatMinutes } from '@/lib/program-view';
 import type { CourseProgress } from '@/lib/program-progress';
 import { accentFor, romanize } from '@/components/notebook/accents';
 import { TocEntry } from '@/components/notebook/TocEntry';
-import { NotebookBrand } from '@/components/notebook/NotebookBrand';
 import { PROGRAM_STATE_LABEL, TRACK_STATE_LABEL, trackBuildState } from './program-ui';
 
 function titleCase(slug: string): string {
@@ -76,10 +75,9 @@ export function NotebookProgramHome({
 
   return (
     <>
-      {/* sheet header */}
-      <div className="mb-5 flex h-[60px] items-end gap-3.5">
-        <NotebookBrand href="/programs" />
-        <div className="flex-1" />
+      {/* sheet header — the brand now lives in the app-wide top nav; this row
+          keeps the program's overall progress readout, aligned right. */}
+      <div className="mb-5 flex h-[44px] items-end justify-end">
         <div className="text-right leading-none">
           <div className="-rotate-[4deg] font-hand text-[30px] font-bold text-crayon-red">{pct}%</div>
           <div className="mt-0.5 font-script text-2xs text-script-faint">done</div>

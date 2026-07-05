@@ -6,11 +6,11 @@ import { BRAND } from '@/lib/brand';
 
 export function NotebookBrand({ href = '/' }: { href?: string }) {
   return (
-    <Link href={href} className="flex items-center gap-[9px] no-underline">
-      <div className="flex h-[34px] w-[34px] -rotate-6 items-center justify-center rounded-[50%_50%_50%_6px] border-[2.5px] border-pen">
-        <span className="font-hand text-[22px] font-bold text-pen">{BRAND.charAt(0)}</span>
+    <Link href={href} className="flex items-center gap-[10px] no-underline">
+      <div className="flex h-[42px] w-[42px] -rotate-6 items-center justify-center rounded-[50%_50%_50%_6px] border-[3px] border-pen">
+        <span className="font-hand text-[27px] font-bold text-pen">{BRAND.charAt(0)}</span>
       </div>
-      <span className="font-hand text-[28px] font-bold text-script">{BRAND}</span>
+      <span className="font-hand text-[34px] font-bold text-script">{BRAND}</span>
     </Link>
   );
 }

@@ -9,7 +9,6 @@ import { prisma } from '@/lib/db';
 import { getViewer } from '@/lib/auth/viewer';
 import { BRAND } from '@/lib/brand';
 import { Desk, Sheet } from '@/components/notebook/Sheet';
-import { NotebookBrand } from '@/components/notebook/NotebookBrand';
 import { GoalScratchpad } from './_components/GoalScratchpad';
 
 export const dynamic = 'force-dynamic';
@@ -47,25 +46,8 @@ export default async function Home({
     : null;
 
   return (
-    <Desk>
+    <Desk maxWidth={1040}>
       <Sheet>
-        {/* header */}
-        <div className="mb-[26px] flex h-[60px] items-end gap-3.5">
-          <NotebookBrand />
-          <div className="flex-1" />
-          {viewer.userId ? (
-            <form method="post" action="/auth/signout">
-              <button type="submit" className="btn-doodle -rotate-1 px-4 py-[3px] text-[22px]">
-                Sign out
-              </button>
-            </form>
-          ) : (
-            <Link href="/signin" className="btn-doodle -rotate-1 px-4 py-[3px] text-[22px] no-underline">
-              Sign in
-            </Link>
-          )}
-        </div>
-
         {auth_error && (
           <p className="mb-4 max-w-[440px] rounded border border-note-edge bg-note px-3.5 py-2 font-script text-sm text-crayon-red">
             Sign-in didn’t work — please try again.

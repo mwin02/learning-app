@@ -47,7 +47,7 @@ export default async function MyProgramsPage() {
   );
 
   return (
-    <div className="min-h-screen bg-surface px-6 py-10 text-ink">
+    <div className="min-h-[calc(100vh-var(--nav-h))] bg-surface px-6 py-10 text-ink">
       {anyBuilding && <AutoRefresh />}
       <main className="mx-auto max-w-2xl">
         <div className="mb-6 flex items-baseline justify-between">

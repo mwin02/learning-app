@@ -8,7 +8,6 @@ import { redirect } from 'next/navigation';
 import { getViewer } from '@/lib/auth/viewer';
 import { safeNextPath } from '../auth/safe-next';
 import { Desk, Sheet } from '@/components/notebook/Sheet';
-import { NotebookBrand } from '@/components/notebook/NotebookBrand';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,10 +28,6 @@ export default async function SignInPage({
   return (
     <Desk maxWidth={720}>
       <Sheet className="min-h-[640px]">
-        <div className="mb-[22px] flex h-14 items-center">
-          <NotebookBrand />
-        </div>
-
         <div className="nb-kicker">welcome back —</div>
         <h1 className="mb-1.5 mt-1 font-hand text-[52px] font-bold leading-[0.95] text-script">
           Sign in to your{' '}

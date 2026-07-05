@@ -30,7 +30,7 @@ const isCurrent = (l: TabLesson) => Boolean(l.current) || l.state === 'current';
 
 export function BookmarkRail({ children }: { children: React.ReactNode }) {
   return (
-    <div className="sticky top-[26px] z-0 flex w-[220px] flex-none flex-col gap-[13px] pt-[118px]">
+    <div className="sticky top-[26px] z-0 flex w-[268px] flex-none flex-col gap-[13px] pt-[118px]">
       {children}
     </div>
   );
@@ -46,14 +46,17 @@ function LessonRow({ lesson }: { lesson: TabLesson }) {
     <>
       <span className="w-3.5 flex-none text-center">{mark}</span>
       <span
-        className={current ? 'flex-1 rounded-[2px] px-1 font-bold text-script' : 'flex-1'}
-        style={current ? { background: 'rgba(255,224,102,.9)' } : undefined}
+        className={current ? 'flex-1 rounded-[2px] px-1 font-bold' : 'flex-1'}
+        // The highlighter is a fixed yellow swipe, so its ink must be a fixed
+        // dark too — `text-script` flips to near-white in dark mode and vanishes
+        // on the yellow. Keep dark ink regardless of theme.
+        style={current ? { background: 'rgba(255,224,102,.9)', color: '#22303f' } : undefined}
       >
         {lesson.title}
       </span>
     </>
   );
-  const rowClass = 'flex items-center gap-1.5 font-script text-[11.5px] leading-[1.2]';
+  const rowClass = 'flex items-center gap-1.5 font-script text-[13.5px] leading-[1.25]';
   return lesson.href ? (
     <Link
       href={lesson.href}
@@ -85,9 +88,9 @@ function SectionGroup({ section }: { section: TabSection }) {
         type="button"
         onClick={() => setManualOpen(!open)}
         aria-expanded={open}
-        className="flex w-full cursor-pointer items-center gap-1.5 border-0 bg-transparent p-0 text-left font-script text-[11px] text-white"
+        className="flex w-full cursor-pointer items-center gap-1.5 border-0 bg-transparent p-0 text-left font-script text-[12.5px] text-white"
       >
-        <span className="w-3.5 flex-none text-center text-[9px]">{open ? '▾' : '▸'}</span>
+        <span className="w-3.5 flex-none text-center text-[10px]">{open ? '▾' : '▸'}</span>
         <span className="flex-1 truncate font-bold uppercase tracking-[0.5px] opacity-85">
           {section.title}
         </span>
@@ -138,16 +141,16 @@ export function BookmarkTab({
 
   const headerText = (
     <>
-      <div className="font-script text-[10px] uppercase tracking-[1px] opacity-75">{kicker}</div>
-      <div className="mt-px font-hand text-[20px] font-bold leading-[1.05]">{label}</div>
-      {meta && <div className="mt-0.5 font-script text-[11px] opacity-80">{meta}</div>}
+      <div className="font-script text-[11.5px] uppercase tracking-[1px] opacity-75">{kicker}</div>
+      <div className="mt-px font-hand text-[24px] font-bold leading-[1.05]">{label}</div>
+      {meta && <div className="mt-0.5 font-script text-[12.5px] opacity-80">{meta}</div>}
     </>
   );
 
-  const className = `relative -mr-4 block w-full rounded-[11px_4px_4px_11px] py-[11px] pl-[15px] pr-[22px] text-left text-white transition-transform duration-[130ms] hover:translate-x-0 ${
+  const className = `relative -mr-4 block w-full rounded-[11px_4px_4px_11px] py-[11px] pl-[15px] pr-[22px] text-left text-white transition-all duration-[130ms] ${
     active
-      ? '-translate-x-3.5 shadow-[-4px_5px_12px_rgba(0,0,0,.22)]'
-      : 'translate-x-0 shadow-[-2px_3px_8px_rgba(0,0,0,.14)]'
+      ? '-ml-5 translate-x-0 shadow-[-6px_6px_15px_rgba(0,0,0,.28)]'
+      : 'translate-x-0 shadow-[-2px_3px_8px_rgba(0,0,0,.14)] hover:-translate-x-2 hover:shadow-[-5px_5px_13px_rgba(0,0,0,.22)] hover:brightness-[1.06]'
   }`;
 
   // Tabs with expandable content (or a collapse control) render as a container

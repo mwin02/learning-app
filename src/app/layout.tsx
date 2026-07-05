@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { IBM_Plex_Sans, IBM_Plex_Mono, Caveat, Kalam } from "next/font/google";
 import "./globals.css";
+import { TopNav } from "@/components/notebook/TopNav";
 
 // IBM Plex is the app-wide brand font. next/font exposes the families as CSS
 // variables; globals.css wires them into Tailwind's --font-sans / --font-mono
@@ -47,7 +48,11 @@ export default function RootLayout({
       lang="en"
       className={`${plexSans.variable} ${plexMono.variable} ${caveat.variable} ${kalam.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        {/* One consistent, auth-aware nav on every page. */}
+        <TopNav />
+        {children}
+      </body>
     </html>
   );
 }

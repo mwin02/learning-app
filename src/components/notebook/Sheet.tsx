@@ -39,9 +39,9 @@ export function Desk({
 }) {
   return (
     <div
-      className="min-h-screen bg-desk px-[22px] pb-[60px] pt-[26px] font-script text-script-body"
+      className="min-h-[calc(100vh-var(--nav-h))] bg-desk px-[22px] pb-[60px] pt-[26px] font-script text-script-body"
       style={{
-        backgroundImage: 'radial-gradient(rgba(0,0,0,0.04) 1px, transparent 1px)',
+        backgroundImage: 'radial-gradient(var(--desk-dot) 1px, transparent 1px)',
         backgroundSize: '5px 5px',
       }}
     >
