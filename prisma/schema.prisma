@@ -717,6 +717,12 @@ model CourseRequest {
   timeframeWeeks Int?
   hoursPerWeek   Int?
   targetMastery  Difficulty?
+  // Decomposer-agent plan: free-text frontier-concept requests ("reinforcement
+  // learning") the worker executes via addFrontierConcept once the Path is
+  // spine_ready, before buildTrack. On CourseRequest (not ProgramPath) so the
+  // hook serves ANY request source; capped by MAX_FRONTIER_PER_TOPIC in the
+  // worker. Empty for every request until the decompose-agent populates it.
+  frontierConcepts String[]           @default([])
   status         CourseRequestStatus @default(queued)
   // Set when status→running (worker claim); the basis for stale-claim reclaim by
   // age (a worker that died mid-run), which the g-3 worker acts on each tick.

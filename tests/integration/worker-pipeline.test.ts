@@ -12,6 +12,7 @@ import { PathStatus, TrackStatus, CourseRequestStatus } from '@prisma/client';
 import type { CourseRequest } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { processCourseRequest } from '@/lib/services/course-worker';
+import { MAX_FRONTIER_PER_TOPIC } from '@/lib/config';
 import type { EnsurePathMapResult } from '@/lib/agents/map/ensure-path-map';
 import type { RemediateResult } from '@/lib/agents/track/remediate-path';
 import type { BuildTrackResult } from '@/lib/agents/track/build-track';
@@ -28,13 +29,17 @@ async function cleanup() {
 }
 
 // Seed a `running` CourseRequest — the state finishCourseRequest's guard requires.
-function seedRunning(suffix: string, over: Partial<{ programId: string }> = {}): Promise<CourseRequest> {
+function seedRunning(
+  suffix: string,
+  over: Partial<{ programId: string; frontierConcepts: string[] }> = {},
+): Promise<CourseRequest> {
   return prisma.courseRequest.create({
     data: {
       topic: `${MARK}${suffix}`,
       status: CourseRequestStatus.running,
       claimedAt: new Date(),
       programId: over.programId ?? null,
+      frontierConcepts: over.frontierConcepts ?? [],
     },
   });
 }
@@ -165,6 +170,82 @@ describeDb('course-worker pipeline branches', () => {
     // The request was already fulfilled; the hook failure must not change that.
     expect(outcome).toBe('fulfilled');
     expect((await getReq(cr.id)).status).toBe(CourseRequestStatus.fulfilled);
+  });
+
+  it('executes each recorded frontier request against the map Path, before build', async () => {
+    const trackId = await makeTrack('frontier');
+    const cr = await seedRunning('frontier', { frontierConcepts: ['reinforcement learning', 'gradient boosting'] });
+    const calls: Array<{ pathId: string; request: string }> = [];
+    let builtAfterFrontier = false;
+    const outcome = await processCourseRequest(cr, {
+      ensureMap: ensureMapStub(PathStatus.spine_ready),
+      backfillBanks: async () => bankResult(),
+      addFrontier: async (args) => {
+        calls.push(args);
+        return { outcome: 'created', conceptSlug: args.request.replace(/\s+/g, '-'), resourced: true };
+      },
+      build: async () => {
+        builtAfterFrontier = calls.length === 2;
+        return buildResult(trackId);
+      },
+    });
+    expect(outcome).toBe('fulfilled');
+    expect(calls).toEqual([
+      { pathId: `${MARK}path`, request: 'reinforcement learning' },
+      { pathId: `${MARK}path`, request: 'gradient boosting' },
+    ]);
+    // The build snapshots the map's concepts, so frontier must land first.
+    expect(builtAfterFrontier).toBe(true);
+  });
+
+  it('a throwing frontier request is non-fatal and does not skip the rest', async () => {
+    const trackId = await makeTrack('frontierfail');
+    const cr = await seedRunning('frontierfail', { frontierConcepts: ['bad one', 'good one'] });
+    const seen: string[] = [];
+    const outcome = await processCourseRequest(cr, {
+      ensureMap: ensureMapStub(PathStatus.spine_ready),
+      backfillBanks: async () => bankResult(),
+      addFrontier: async ({ request }) => {
+        seen.push(request);
+        if (request === 'bad one') throw new Error('frontier boom');
+        return { outcome: 'exists', conceptSlug: 'good-one' };
+      },
+      build: async () => buildResult(trackId),
+    });
+    expect(outcome).toBe('fulfilled');
+    expect(seen).toEqual(['bad one', 'good one']);
+    expect((await getReq(cr.id)).status).toBe(CourseRequestStatus.fulfilled);
+  });
+
+  it('caps frontier execution at MAX_FRONTIER_PER_TOPIC and skips it entirely when empty', async () => {
+    const trackId = await makeTrack('frontiercap');
+    const overCap = Array.from({ length: MAX_FRONTIER_PER_TOPIC + 1 }, (_, i) => `concept ${i}`);
+    const cr = await seedRunning('frontiercap', { frontierConcepts: overCap });
+    let calls = 0;
+    const addFrontier = async () => {
+      calls += 1;
+      return { outcome: 'declined', reason: 'stub' } as const;
+    };
+    await processCourseRequest(cr, {
+      ensureMap: ensureMapStub(PathStatus.spine_ready),
+      backfillBanks: async () => bankResult(),
+      addFrontier,
+      build: async () => buildResult(trackId),
+    });
+    expect(calls).toBe(MAX_FRONTIER_PER_TOPIC);
+
+    // And the default (empty) column never invokes the hook at all.
+    const trackId2 = await makeTrack('frontiernone');
+    const cr2 = await seedRunning('frontiernone');
+    calls = 0;
+    const outcome = await processCourseRequest(cr2, {
+      ensureMap: ensureMapStub(PathStatus.spine_ready),
+      backfillBanks: async () => bankResult(),
+      addFrontier,
+      build: async () => buildResult(trackId2),
+    });
+    expect(outcome).toBe('fulfilled');
+    expect(calls).toBe(0);
   });
 
   it('a throwing concept-bank backfill is non-fatal', async () => {
