@@ -10,7 +10,7 @@ import { useRouter } from 'next/navigation';
 const inputCls =
   'w-full rounded-control border border-line bg-surface px-3 py-2 text-sm text-ink';
 
-export function NewProgramForm() {
+export function NewProgramForm({ defaultGoal }: { defaultGoal?: string }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,6 +57,7 @@ export function NewProgramForm() {
           required
           maxLength={2000}
           rows={3}
+          defaultValue={defaultGoal}
           placeholder="e.g. Be ready for first-year CS: comfortable with Python and calculus"
           className={inputCls}
         />
