@@ -1,105 +1,82 @@
-// Phase 3e: "My programs" — the signed-in home. Barebones integration-test
-// surface (the designed dashboard comes with the frontend pass): every Program
-// the viewer is enrolled in, newest first, with live build status (auto-refresh
-// while anything is still planning/building). Creators see their own goal as a
-// subtitle; enrolled non-creators only ever see the generated title.
+// Phase 3e, reskinned in frontend-redesign Block 6: "My programs" — the
+// signed-in home as a notebook dashboard. Every Program the viewer is enrolled
+// in (newest first) as a table-of-contents chapter with real program-wide
+// progress + next-up; inert rows while builds are in flight (auto-refresh
+// keeps them live). Creators see their own goal in the meta line; enrolled
+// non-creators only ever see the generated title.
 
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { prisma } from '@/lib/db';
 import { getViewer } from '@/lib/auth/viewer';
+import { loadProgramCourseProgress } from '@/lib/program-progress';
+import { Desk, Sheet } from '@/components/notebook/Sheet';
 import { AutoRefresh } from './_components/AutoRefresh';
+import { NotebookMyPrograms, type DashboardProgram } from './_components/NotebookMyPrograms';
 
 export const dynamic = 'force-dynamic';
-
-const STATUS_LABEL: Record<string, string> = {
-  planning: 'Planning…',
-  building: 'Building…',
-  ready: 'Ready',
-  partial: 'Ready (partial)',
-  failed: 'Failed',
-};
 
 export default async function MyProgramsPage() {
   const viewer = await getViewer();
   if (!viewer.userId) redirect('/signin?next=%2Fprograms');
 
-  const enrollments = await prisma.enrolledProgram.findMany({
-    where: { userId: viewer.userId },
-    orderBy: { enrolledAt: 'desc' },
-    select: {
-      program: {
-        select: {
-          id: true,
-          title: true,
-          description: true,
-          goal: true,
-          status: true,
-          userId: true,
-          createdAt: true,
-          programPaths: { select: { trackId: true } },
+  const [user, enrollments] = await Promise.all([
+    prisma.user.findUnique({ where: { id: viewer.userId }, select: { name: true } }),
+    prisma.enrolledProgram.findMany({
+      where: { userId: viewer.userId },
+      orderBy: { enrolledAt: 'desc' },
+      select: {
+        program: {
+          select: {
+            id: true,
+            title: true,
+            goal: true,
+            status: true,
+            userId: true,
+            programPaths: {
+              orderBy: { orderInProgram: 'asc' },
+              select: { trackId: true },
+            },
+          },
         },
       },
-    },
-  });
-  const anyBuilding = enrollments.some((e) =>
-    ['planning', 'building'].includes(e.program.status)
+    }),
+  ]);
+
+  // One progress read across every built track of every program, grouped back
+  // per program below (lesson done/total + the first incomplete lesson).
+  const allBuiltIds = enrollments.flatMap(({ program }) =>
+    program.programPaths.flatMap((s) => (s.trackId ? [s.trackId] : []))
   );
+  const progress = await loadProgramCourseProgress(viewer.userId, allBuiltIds);
+
+  const programs: DashboardProgram[] = enrollments.map(({ program: p }) => {
+    const isCreator = p.userId === viewer.userId;
+    const builtIds = p.programPaths.flatMap((s) => (s.trackId ? [s.trackId] : []));
+    const perTrack = builtIds.map((id) => progress.get(id)).filter((cp) => cp != null);
+    // Next-up = the first incomplete lesson in plan order across the program.
+    const nextUp = perTrack.find((cp) => cp.nextUp)?.nextUp?.title ?? null;
+    return {
+      id: p.id,
+      title: p.title ?? (isCreator ? p.goal : 'Learning program'),
+      goalNote: isCreator && p.title ? p.goal : null,
+      status: p.status,
+      courseCount: p.programPaths.length,
+      builtCount: builtIds.length,
+      doneLessons: perTrack.reduce((s, cp) => s + cp.doneCount, 0),
+      totalLessons: perTrack.reduce((s, cp) => s + cp.totalCount, 0),
+      nextUp,
+    };
+  });
+
+  const anyBuilding = programs.some((p) => ['planning', 'building'].includes(p.status));
+  const firstName = user?.name?.trim().split(/\s+/)[0] ?? null;
 
   return (
-    <div className="min-h-[calc(100vh-var(--nav-h))] bg-surface px-6 py-10 text-ink">
+    <Desk maxWidth={900}>
       {anyBuilding && <AutoRefresh />}
-      <main className="mx-auto max-w-2xl">
-        <div className="mb-6 flex items-baseline justify-between">
-          <h1 className="text-2xl font-bold tracking-[-0.5px]">My programs</h1>
-          <Link href="/programs/new" className="text-sm font-semibold text-brand underline">
-            + New program
-          </Link>
-        </div>
-
-        {enrollments.length === 0 ? (
-          <div className="card p-6">
-            <p className="text-body">
-              Nothing here yet.{' '}
-              <Link href="/programs/new" className="text-brand underline">
-                Create your first program
-              </Link>
-              .
-            </p>
-          </div>
-        ) : (
-          <ul className="flex flex-col gap-3">
-            {enrollments.map(({ program: p }) => {
-              const isCreator = p.userId === viewer.userId;
-              const built = p.programPaths.filter((s) => s.trackId).length;
-              return (
-                <li key={p.id} className="card p-5">
-                  <Link href={`/programs/${p.id}`} className="block">
-                    <div className="mb-1 flex items-baseline justify-between gap-4">
-                      <span className="font-semibold">
-                        {p.title ?? (isCreator ? p.goal : 'Learning program')}
-                      </span>
-                      <span className="meta-xs shrink-0">
-                        {STATUS_LABEL[p.status] ?? p.status}
-                      </span>
-                    </div>
-                    {isCreator && p.title && <div className="meta-xs mb-1">{p.goal}</div>}
-                    <div className="meta-xs">
-                      {built}/{p.programPaths.length} tracks built ·{' '}
-                      {p.createdAt.toISOString().slice(0, 10)}
-                    </div>
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-        <p className="meta-xs mt-8">
-          <Link href="/" className="underline">
-            ← Home
-          </Link>
-        </p>
-      </main>
-    </div>
+      <Sheet>
+        <NotebookMyPrograms firstName={firstName} programs={programs} />
+      </Sheet>
+    </Desk>
   );
 }
