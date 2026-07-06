@@ -211,13 +211,64 @@ describe('decomposeProgramAgent', () => {
     expect(result.description).toBe('A learning program covering calculus.');
   });
 
-  it('throws when the loop ends with no proposals (caller records Program.failed)', async () => {
+  it('throws when BOTH attempts end with no proposals (caller records Program.failed)', async () => {
+    // Two textTurns: the zero-proposal outcome triggers the one-shot retry, so the
+    // throw only surfaces after the second degenerate attempt.
     await expect(
       decomposeProgramAgent(input, {
-        model: scripted([textTurn('I cannot help with that.')]),
+        model: scripted([textTurn('I cannot help with that.'), textTurn('Still no.')]),
         getPathMap: async () => ({ exists: false }),
         listTopics: async () => [],
       }),
     ).rejects.toThrow(/proposed no topics/);
+  });
+
+  it('retries once after a mid-loop model throw and succeeds on the second attempt', async () => {
+    const good = [
+      toolTurn([{ name: 'propose_course', input: proposal({}) }]),
+      toolTurn([{ name: 'finalize', input: { title: 'T', description: 'D' } }]),
+      textTurn(),
+    ];
+    let call = 0;
+    const model: ResolvedModel = {
+      model: new MockLanguageModelV3({
+        doGenerate: async () => {
+          if (call === 0) {
+            call++;
+            throw new Error('vertex 500'); // attempt 1 dies on its first turn
+          }
+          return good[call++ - 1];
+        },
+      }),
+      modelId: 'mock',
+      temperature: 0,
+      maxOutputTokens: 4096,
+    };
+
+    const result = await decomposeProgramAgent(input, {
+      model,
+      getPathMap: async () => ({ exists: false }),
+      listTopics: async () => [],
+    });
+    expect(result.title).toBe('T');
+    expect(result.topics.map((t) => t.topic)).toEqual(['calculus']);
+  });
+
+  it('retries a zero-proposal first attempt with a fresh draft', async () => {
+    // Attempt 1 consumes one textTurn (no proposals → throw → retry); attempt 2 runs
+    // the full happy path. A stale draft would double-count topics; fresh state means
+    // exactly one.
+    const result = await decomposeProgramAgent(input, {
+      model: scripted([
+        textTurn('nothing proposed'),
+        toolTurn([{ name: 'propose_course', input: proposal({}) }]),
+        toolTurn([{ name: 'finalize', input: { title: 'T2', description: 'D2' } }]),
+        textTurn(),
+      ]),
+      getPathMap: async () => ({ exists: false }),
+      listTopics: async () => [],
+    });
+    expect(result.title).toBe('T2');
+    expect(result.topics.length).toBe(1);
   });
 });

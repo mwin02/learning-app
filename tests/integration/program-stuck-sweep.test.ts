@@ -38,6 +38,7 @@ const stubPlan =
       priorityTier: i === 0 ? ('core' as const) : ('nice_to_have' as const),
       weight: 1,
       rationale: `why ${key}`,
+      frontierConcepts: [],
     })),
     droppedByGate: [],
     droppedByBudget: [],

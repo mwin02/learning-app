@@ -90,153 +90,176 @@ export async function decomposeProgramAgent(
   const existingTopics = await (opts.listTopics ?? listLibraryTopics)();
   const librarySet = new Set(existingTopics);
 
-  // --- server-side draft the tools mutate ----------------------------------
-  // Keyed by normalized label so a re-propose REVISES rather than duplicates; the
-  // values' insertion order is the proposal order Stage 2's dedup fold preserves.
-  const draft = new Map<string, DecomposedTopic>();
-  let framing: { title: string; description: string } | null = null;
-  let toolCalls = 0;
-
-  const tools = {
-    get_path_map: tool({
-      description:
-        "Read one topic's existing concept map: its status and every concept (slug, title, spine|frontier membership). Returns { exists: false } for a topic with no map yet (it gets built after enqueue). Use it to check what a library topic already covers before proposing it — especially before requesting frontierConcepts, so you don't request a concept the map already teaches. Read-only.",
-      inputSchema: z.object({ topic: z.string().min(1).describe('The topic slug, e.g. "linear-algebra".') }),
-      execute: async ({ topic }) => {
-        toolCalls++;
-        const view = await getPathMap(topic.trim());
-        console.log('[decompose-agent] get_path_map', {
-          topic,
-          exists: view.exists,
-          concepts: view.exists ? view.concepts.length : 0,
-        });
-        return view;
-      },
-    }),
-    propose_course: tool({
-      description: `Propose ONE single-topic course of the program (call once per topic, at most ${MAX_PROGRAM_TOPICS} total). Re-proposing the same topic replaces the earlier proposal. frontierConcepts: up to ${MAX_FRONTIER_PER_TOPIC} OPTIONAL free-text enrichment-concept requests (short phrases like "reinforcement learning") for specializations the GOAL needs but the topic's standard curriculum / existing map does not cover — most topics need none; excess entries are dropped.`,
-      inputSchema: z.object({
-        topic: z.string().min(1),
-        weight: z.number().positive(),
-        priorityTier: z.enum(['core', 'nice_to_have']),
-        phaseLabel: z.string().min(1),
-        orderHint: z.number().int(),
-        rationale: z.string().min(1),
-        frontierConcepts: z.array(z.string().min(1)).default([]),
-      }),
-      execute: async ({ topic, weight, priorityTier, phaseLabel, orderHint, rationale, frontierConcepts }) => {
-        toolCalls++;
-        const label = topic.trim();
-        const key = label.toLowerCase();
-        if (!draft.has(key) && draft.size >= MAX_PROGRAM_TOPICS) {
-          return {
-            ok: false,
-            error: `Already at the ${MAX_PROGRAM_TOPICS}-topic maximum. Re-propose an existing topic to revise it, or finalize.`,
-          };
-        }
-        const frontier = [...new Set(frontierConcepts.map((s) => s.trim()).filter((s) => s.length > 0))];
-        const dropped = frontier.length - Math.min(frontier.length, MAX_FRONTIER_PER_TOPIC);
-        draft.set(key, {
-          topic: label,
-          weight,
-          priorityTier,
-          phaseLabel,
-          orderHint,
-          rationale,
-          frontierConcepts: frontier.slice(0, MAX_FRONTIER_PER_TOPIC),
-        });
-        console.log('[decompose-agent] propose_course', {
-          topic: label,
-          inLibrary: librarySet.has(label),
-          frontier: frontier.slice(0, MAX_FRONTIER_PER_TOPIC),
-          dropped,
-        });
-        return {
-          ok: true,
-          proposed: draft.size,
-          remaining: MAX_PROGRAM_TOPICS - draft.size,
-          ...(dropped > 0
-            ? { note: `frontierConcepts capped at ${MAX_FRONTIER_PER_TOPIC}; dropped the last ${dropped}.` }
-            : {}),
-        };
-      },
-    }),
-    finalize: tool({
-      description:
-        'Call once every course is proposed: supply the program-wide title and description (both PUBLIC — subject matter only, never personal details from the goal/background). Fails if no course has been proposed yet.',
-      inputSchema: z.object({
-        title: z.string().min(1).max(120),
-        description: z.string().min(1).max(600),
-      }),
-      execute: async ({ title, description }) => {
-        toolCalls++;
-        if (draft.size === 0) {
-          return { ok: false, error: 'No courses proposed yet — propose_course at least one topic first.' };
-        }
-        framing = { title, description };
-        console.log('[decompose-agent] finalize', { title, topics: draft.size });
-        return { ok: true, message: 'Decomposition finalized. You are done — stop here.' };
-      },
-    }),
-  };
-
-  const result = await generateText({
-    model,
-    temperature,
-    maxOutputTokens,
-    tools,
-    stopWhen: stepCountIs(DECOMPOSE_AGENT_MAX_STEPS),
-    system: systemPrompt(MAX_PROGRAM_TOPICS),
-    prompt: buildAgentPrompt(input, existingTopics),
-  });
-
-  const topics = [...draft.values()];
-  if (topics.length === 0) {
-    // Mirrors decomposeProgram's contract: a decomposition that yields nothing is a
-    // thrown error the caller (enqueueProgram) records as Program.failed.
-    throw new Error(
-      `decompose agent proposed no topics (finishReason=${result.finishReason}, steps=${result.steps?.length})`,
-    );
-  }
-
-  // Finalize-miss fallback (step cap hit, or the model stopped early): synthesize the
-  // public title/description from the topics actually proposed — one cheap structured
-  // call, only the rare miss pays for it. On a second failure, degrade to a neutral
-  // topic-list framing (topic names are subject-only, so it is safe to show publicly;
-  // the GOAL text must never leak here).
-  let fr = framing as { title: string; description: string } | null;
-  if (!fr) {
-    console.warn('[decompose-agent] loop ended without finalize; synthesizing framing', {
-      topics: topics.map((t) => t.topic),
-    });
+  // Retried once, mirroring decomposeProgram's 2-attempt shape: the plan pass is the
+  // synchronous, user-visible half, so a transient Vertex fault on ANY turn of the
+  // loop — or a degenerate zero-proposal run — should not sink the Program on the
+  // first roll. In-loop tool-call flakiness needs no retry (the SDK feeds schema
+  // errors back to the model, which self-corrects); this covers the two paths that
+  // THROW: a generateText infra failure and the proposed-no-topics outcome. Each
+  // attempt gets a fresh draft (runAttempt closes over its own state).
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      fr = await generateFallbackFraming(topics.map((t) => t.topic), opts.fallbackModel);
+      return await runAttempt();
     } catch (err) {
-      console.warn('[decompose-agent] fallback framing failed; using topic-list framing', err);
-      const names = topics.map((t) => t.topic).join(', ');
-      fr = {
-        title: `Learning program: ${names}`.slice(0, 120),
-        description: `A learning program covering ${names}.`.slice(0, 600),
-      };
+      lastErr = err;
+      console.warn('[decompose-agent] attempt failed', {
+        attempt,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
+  throw lastErr;
 
-  console.log('[decompose-agent] decomposed', {
-    modelId,
-    goalLen: input.goal.length,
-    groundedOn: existingTopics.length,
-    proposed: topics.length,
-    proposedTopics: topics.map((t) => t.topic),
-    frontierRequests: topics.reduce((n, t) => n + t.frontierConcepts.length, 0),
-    title: fr.title,
-    finalized: framing !== null,
-    toolCalls,
-    steps: result.steps?.length,
-    usage: result.usage,
-    finishReason: result.finishReason,
-  });
+  async function runAttempt(): Promise<AgentDecomposition> {
+    // --- server-side draft the tools mutate ----------------------------------
+    // Keyed by normalized label so a re-propose REVISES rather than duplicates; the
+    // values' insertion order is the proposal order Stage 2's dedup fold preserves.
+    const draft = new Map<string, DecomposedTopic>();
+    let framing: { title: string; description: string } | null = null;
+    let toolCalls = 0;
 
-  return { title: fr.title, description: fr.description, topics };
+    const tools = {
+      get_path_map: tool({
+        description:
+          "Read one topic's existing concept map: its status and every concept (slug, title, spine|frontier membership). Returns { exists: false } for a topic with no map yet (it gets built after enqueue). Use it to check what a library topic already covers before proposing it — especially before requesting frontierConcepts, so you don't request a concept the map already teaches. Read-only.",
+        inputSchema: z.object({ topic: z.string().min(1).describe('The topic slug, e.g. "linear-algebra".') }),
+        execute: async ({ topic }) => {
+          toolCalls++;
+          const view = await getPathMap(topic.trim());
+          console.log('[decompose-agent] get_path_map', {
+            topic,
+            exists: view.exists,
+            concepts: view.exists ? view.concepts.length : 0,
+          });
+          return view;
+        },
+      }),
+      propose_course: tool({
+        description: `Propose ONE single-topic course of the program (call once per topic, at most ${MAX_PROGRAM_TOPICS} total). Re-proposing the same topic replaces the earlier proposal. frontierConcepts: up to ${MAX_FRONTIER_PER_TOPIC} OPTIONAL free-text enrichment-concept requests (short phrases like "reinforcement learning") for specializations the GOAL needs but the topic's standard curriculum / existing map does not cover — most topics need none; excess entries are dropped.`,
+        inputSchema: z.object({
+          topic: z.string().min(1),
+          weight: z.number().positive(),
+          priorityTier: z.enum(['core', 'nice_to_have']),
+          phaseLabel: z.string().min(1),
+          orderHint: z.number().int(),
+          rationale: z.string().min(1),
+          frontierConcepts: z.array(z.string().min(1)).default([]),
+        }),
+        execute: async ({ topic, weight, priorityTier, phaseLabel, orderHint, rationale, frontierConcepts }) => {
+          toolCalls++;
+          const label = topic.trim();
+          const key = label.toLowerCase();
+          if (!draft.has(key) && draft.size >= MAX_PROGRAM_TOPICS) {
+            return {
+              ok: false,
+              error: `Already at the ${MAX_PROGRAM_TOPICS}-topic maximum. Re-propose an existing topic to revise it, or finalize.`,
+            };
+          }
+          const frontier = [...new Set(frontierConcepts.map((s) => s.trim()).filter((s) => s.length > 0))];
+          const dropped = frontier.length - Math.min(frontier.length, MAX_FRONTIER_PER_TOPIC);
+          draft.set(key, {
+            topic: label,
+            weight,
+            priorityTier,
+            phaseLabel,
+            orderHint,
+            rationale,
+            frontierConcepts: frontier.slice(0, MAX_FRONTIER_PER_TOPIC),
+          });
+          console.log('[decompose-agent] propose_course', {
+            topic: label,
+            inLibrary: librarySet.has(label),
+            frontier: frontier.slice(0, MAX_FRONTIER_PER_TOPIC),
+            dropped,
+          });
+          return {
+            ok: true,
+            proposed: draft.size,
+            remaining: MAX_PROGRAM_TOPICS - draft.size,
+            ...(dropped > 0
+              ? { note: `frontierConcepts capped at ${MAX_FRONTIER_PER_TOPIC}; dropped the last ${dropped}.` }
+              : {}),
+          };
+        },
+      }),
+      finalize: tool({
+        description:
+          'Call once every course is proposed: supply the program-wide title and description (both PUBLIC — subject matter only, never personal details from the goal/background). Fails if no course has been proposed yet.',
+        inputSchema: z.object({
+          title: z.string().min(1).max(120),
+          description: z.string().min(1).max(600),
+        }),
+        execute: async ({ title, description }) => {
+          toolCalls++;
+          if (draft.size === 0) {
+            return { ok: false, error: 'No courses proposed yet — propose_course at least one topic first.' };
+          }
+          framing = { title, description };
+          console.log('[decompose-agent] finalize', { title, topics: draft.size });
+          return { ok: true, message: 'Decomposition finalized. You are done — stop here.' };
+        },
+      }),
+    };
+
+    const result = await generateText({
+      model,
+      temperature,
+      maxOutputTokens,
+      tools,
+      stopWhen: stepCountIs(DECOMPOSE_AGENT_MAX_STEPS),
+      system: systemPrompt(MAX_PROGRAM_TOPICS),
+      prompt: buildAgentPrompt(input, existingTopics),
+    });
+
+    const topics = [...draft.values()];
+    if (topics.length === 0) {
+      // Mirrors decomposeProgram's contract: a decomposition that yields nothing is a
+      // thrown error the caller (enqueueProgram) records as Program.failed.
+      throw new Error(
+        `decompose agent proposed no topics (finishReason=${result.finishReason}, steps=${result.steps?.length})`,
+      );
+    }
+
+    // Finalize-miss fallback (step cap hit, or the model stopped early): synthesize the
+    // public title/description from the topics actually proposed — one cheap structured
+    // call, only the rare miss pays for it. On a second failure, degrade to a neutral
+    // topic-list framing (topic names are subject-only, so it is safe to show publicly;
+    // the GOAL text must never leak here).
+    let fr = framing as { title: string; description: string } | null;
+    if (!fr) {
+      console.warn('[decompose-agent] loop ended without finalize; synthesizing framing', {
+        topics: topics.map((t) => t.topic),
+      });
+      try {
+        fr = await generateFallbackFraming(topics.map((t) => t.topic), opts.fallbackModel);
+      } catch (err) {
+        console.warn('[decompose-agent] fallback framing failed; using topic-list framing', err);
+        const names = topics.map((t) => t.topic).join(', ');
+        fr = {
+          title: `Learning program: ${names}`.slice(0, 120),
+          description: `A learning program covering ${names}.`.slice(0, 600),
+        };
+      }
+    }
+
+    console.log('[decompose-agent] decomposed', {
+      modelId,
+      goalLen: input.goal.length,
+      groundedOn: existingTopics.length,
+      proposed: topics.length,
+      proposedTopics: topics.map((t) => t.topic),
+      frontierRequests: topics.reduce((n, t) => n + t.frontierConcepts.length, 0),
+      title: fr.title,
+      finalized: framing !== null,
+      toolCalls,
+      steps: result.steps?.length,
+      usage: result.usage,
+      finishReason: result.finishReason,
+    });
+
+    return { title: fr.title, description: fr.description, topics };
+  }
 }
 
 // Safety net for a finalize-miss: write the public program framing from the proposed

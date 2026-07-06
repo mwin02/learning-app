@@ -34,6 +34,7 @@ const stubPlan =
         priorityTier: 'core' as const,
         weight: 1,
         rationale: 'why',
+        frontierConcepts: [],
       },
     ],
     droppedByGate: [],

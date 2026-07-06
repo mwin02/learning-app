@@ -36,6 +36,7 @@ const proposed = (over: Partial<ProposedTopic>): ProposedTopic => ({
   phaseLabel: 'P1',
   orderHint: 1,
   rationale: 'r',
+  frontierConcepts: [],
   ...over,
 });
 // Phase 3c: decompose returns { title, description, topics } — wrap topic
@@ -276,5 +277,65 @@ describe('planProgram — F7 scoped-topic reconciliation', () => {
     expect(cal.key).toBe('calculus');
     expect(cal.weight).toBe(8);
     expect(cal.priorityTier).toBe(PriorityTier.core);
+  });
+});
+
+describe('planProgram — frontierConcepts thread through and union on collapse (decomposer Block 3)', () => {
+  it('carries a proposal\'s frontierConcepts through gate/reconcile/budget to the allocated topic', async () => {
+    const plan = await planProgram(
+      { goal: 'g', totalHoursPerWeek: 12, totalWeeks: 10 },
+      {
+        decompose: async () => decomp([
+          proposed({ topic: 'machine learning', weight: 3, frontierConcepts: ['reinforcement learning'] }),
+          proposed({ topic: 'python', weight: 2, orderHint: 2 }),
+        ]),
+        gate: stubGate,
+        listLibrary: async () => [],
+      },
+    );
+    const ml = plan.topics.find((t) => t.key === 'machine-learning');
+    expect(ml?.frontierConcepts).toEqual(['reinforcement learning']);
+    expect(plan.topics.find((t) => t.key === 'python')?.frontierConcepts).toEqual([]);
+  });
+
+  it('Stage-2 canonical collapse UNIONS frontier lists, winner\'s first, re-capped at MAX_FRONTIER_PER_TOPIC', async () => {
+    const plan = await planProgram(
+      { goal: 'g', totalHoursPerWeek: 12, totalWeeks: 10 },
+      {
+        decompose: async () => decomp([
+          // Loser (weight 2): two requests of its own, one shared with the winner.
+          proposed({ topic: 'machine learning', weight: 2, orderHint: 1, frontierConcepts: ['transformers', 'reinforcement learning'] }),
+          // Winner (weight 8): its list must lead the union.
+          proposed({ topic: 'Machine Learning', weight: 8, orderHint: 2, frontierConcepts: ['reinforcement learning'] }),
+        ]),
+        gate: stubGate,
+        listLibrary: async () => [],
+      },
+    );
+    expect(plan.topics.length).toBe(1);
+    // Union = winner's ['reinforcement learning'] + loser's new ['transformers', ...],
+    // deduped, then sliced to the per-topic cap (2).
+    expect(plan.topics[0].frontierConcepts).toEqual(['reinforcement learning', 'transformers']);
+  });
+
+  it('Stage-2.5 reconcile collapse unions too (ambiguity #5: at the reconciled map, not only the first dedup)', async () => {
+    const stubReconcile = async (canonical: string): Promise<string | null> =>
+      canonical === 'calculus-for-machine-learning' ? 'calculus' : null;
+    const plan = await planProgram(
+      { goal: 'g', totalHoursPerWeek: 12, totalWeeks: 10 },
+      {
+        decompose: async () => decomp([
+          proposed({ topic: 'calculus', weight: 8, orderHint: 1, frontierConcepts: ['tensor calculus'] }),
+          // Distinct canonical at Stage 2; remapped onto 'calculus' at Stage 2.5.
+          proposed({ topic: 'calculus for machine learning', weight: 2, orderHint: 2, frontierConcepts: ['matrix calculus'] }),
+        ]),
+        gate: stubGate,
+        listLibrary: async () => ['calculus'],
+        reconcile: stubReconcile,
+      },
+    );
+    expect(plan.topics.length).toBe(1);
+    expect(plan.topics[0].key).toBe('calculus');
+    expect(plan.topics[0].frontierConcepts).toEqual(['tensor calculus', 'matrix calculus']);
   });
 });
