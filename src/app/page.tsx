@@ -1,14 +1,16 @@
 // Notebook landing (Block A of the frontend redesign). Anonymous: the "what do
 // you want to learn?" sheet — goal scratchpad, example chips, how-it-works —
-// with the build CTA routing into sign-in. Signed in: a compact welcome-back
-// sheet (My programs / Create / sign out), keeping every affordance the 3e
-// barebones landing had; the designed dashboard replaces most of this later.
+// with the build CTA routing into sign-in. Signed in (UI Block 8): a dashboard
+// sheet — continue card for the last program worked on, plus the same goal
+// scratchpad as the new-program entry point (the create button it replaces).
 
 import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { getViewer } from '@/lib/auth/viewer';
 import { BRAND } from '@/lib/brand';
+import { loadContinueCard } from '@/lib/continue-card';
 import { Desk, Sheet } from '@/components/notebook/Sheet';
+import { ContinueCard } from './_components/ContinueCard';
 import { GoalScratchpad } from './_components/GoalScratchpad';
 
 export const dynamic = 'force-dynamic';
@@ -38,12 +40,15 @@ export default async function Home({
   searchParams: Promise<{ auth_error?: string }>;
 }) {
   const [{ auth_error }, viewer] = await Promise.all([searchParams, getViewer()]);
-  const user = viewer.userId
-    ? await prisma.user.findUnique({
-        where: { id: viewer.userId },
-        select: { email: true, name: true },
-      })
-    : null;
+  const [user, card] = viewer.userId
+    ? await Promise.all([
+        prisma.user.findUnique({
+          where: { id: viewer.userId },
+          select: { email: true, name: true },
+        }),
+        loadContinueCard(viewer.userId),
+      ])
+    : [null, null];
 
   return (
     <Desk maxWidth={1040}>
@@ -55,7 +60,7 @@ export default async function Home({
         )}
 
         {viewer.userId ? (
-          /* ---- signed in: welcome back ---- */
+          /* ---- signed in: dashboard ---- */
           <>
             <div className="nb-kicker">welcome back —</div>
             <h1 className="mb-2 mt-1.5 font-hand text-[52px] font-bold leading-[0.95] text-script">
@@ -63,14 +68,21 @@ export default async function Home({
               {viewer.isAdmin ? ' (admin)' : ''}
             </h1>
             <p className="mb-[26px] max-w-[560px] text-lg leading-[34px]">
-              Flip back to your programs, or start a new chapter.
+              {card
+                ? 'Pick up where you left off, or scribble a new goal below.'
+                : 'Scribble a goal below and we’ll build your program.'}
             </p>
-            <div className="flex flex-wrap items-center gap-4">
-              <Link href="/programs" className="btn-ink -rotate-[0.8deg] px-[26px] py-[9px] text-[26px] no-underline">
-                My programs →
-              </Link>
-              <Link href="/programs/new" className="btn-doodle px-5 py-2 text-[22px] no-underline">
-                + Create a program
+
+            {card && <ContinueCard card={card} />}
+
+            <div className="mb-3 font-hand text-3xl font-bold text-script">
+              Start something new
+            </div>
+            <GoalScratchpad signedIn />
+
+            <div className="-mt-4 flex flex-wrap items-center gap-4">
+              <Link href="/programs" className="font-script text-sm text-script-faint underline">
+                flip to all my programs →
               </Link>
               {viewer.isAdmin && (
                 <Link href="/playground" className="font-script text-sm text-script-faint underline">

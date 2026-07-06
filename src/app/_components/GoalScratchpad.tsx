@@ -1,9 +1,10 @@
 'use client';
 
-// Notebook landing (Block A): the "write your goal" prompt — a lined textarea
-// with a bobbing pencil, example chips that fill it, and the build CTA. Static
-// for now: the CTA routes into sign-in with next=/programs/new; carrying the
-// typed goal through OAuth into the create form is a later wired enhancement.
+// Notebook landing (Block A, goal carry-through added in UI Block 8): the
+// "write your goal" prompt — a lined textarea with a bobbing pencil, example
+// chips that fill it, and the build CTA. The typed goal rides along as
+// /programs/new?goal=… so the create form prefills; anonymous visitors route
+// through sign-in first with that same target as the post-auth `next`.
 
 import { useState } from 'react';
 
@@ -13,8 +14,13 @@ const EXAMPLES = [
   { text: 'Calculus from scratch', rot: '-0.6deg', seed: 'I want to build strong intuition for calculus from scratch.' },
 ];
 
-export function GoalScratchpad() {
+export function GoalScratchpad({ signedIn = false }: { signedIn?: boolean }) {
   const [goal, setGoal] = useState('');
+
+  const target = goal.trim()
+    ? `/programs/new?goal=${encodeURIComponent(goal.trim())}`
+    : '/programs/new';
+  const href = signedIn ? target : `/auth/login?next=${encodeURIComponent(target)}`;
 
   return (
     <>
@@ -51,13 +57,12 @@ export function GoalScratchpad() {
       </div>
 
       <div className="mb-11 flex items-center gap-4">
-        <a
-          href="/auth/login?next=%2Fprograms%2Fnew"
-          className="btn-ink -rotate-[0.8deg] px-[26px] py-[9px] text-[26px] no-underline"
-        >
+        <a href={href} className="btn-ink -rotate-[0.8deg] px-[26px] py-[9px] text-[26px] no-underline">
           Build my program →
         </a>
-        <span className="font-script text-sm text-script-faint">free · no card needed</span>
+        {!signedIn && (
+          <span className="font-script text-sm text-script-faint">free · no card needed</span>
+        )}
       </div>
     </>
   );
