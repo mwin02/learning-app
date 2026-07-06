@@ -16,9 +16,9 @@ export function SignInToEnrollLink() {
   return (
     <Link
       href={`/signin?next=${encodeURIComponent(pathname)}`}
-      className="inline-block rounded-button bg-brand px-6 py-2.5 font-semibold text-white"
+      className="btn-ink block px-4 py-1.5 text-[22px] no-underline"
     >
-      Sign in to enroll — free
+      Sign in to enroll →
     </Link>
   );
 }
@@ -40,12 +40,12 @@ export function EnrollButton({ programId }: { programId: string }) {
         type="button"
         onClick={enroll}
         disabled={state === 'busy'}
-        className="rounded-button bg-brand px-6 py-2.5 font-semibold text-white disabled:opacity-50"
+        className="btn-ink w-full px-4 py-1.5 text-[24px] disabled:opacity-50"
       >
-        {state === 'busy' ? 'Enrolling…' : 'Enroll — free'}
+        {state === 'busy' ? 'Enrolling…' : 'Enroll now'}
       </button>
       {state === 'error' && (
-        <p className="meta-xs mt-3 text-red-600">Could not enroll. Try again.</p>
+        <p className="mt-2 font-script text-xs text-crayon-red">Could not enroll — try again.</p>
       )}
     </div>
   );
