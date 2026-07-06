@@ -10,6 +10,7 @@ import { getViewer } from '@/lib/auth/viewer';
 import { BRAND } from '@/lib/brand';
 import { loadContinueCard } from '@/lib/continue-card';
 import { Desk, Sheet } from '@/components/notebook/Sheet';
+import { ActivityHeatmap } from './_components/ActivityHeatmap';
 import { ContinueCard } from './_components/ContinueCard';
 import { GoalScratchpad } from './_components/GoalScratchpad';
 
@@ -40,15 +41,22 @@ export default async function Home({
   searchParams: Promise<{ auth_error?: string }>;
 }) {
   const [{ auth_error }, viewer] = await Promise.all([searchParams, getViewer()]);
-  const [user, card] = viewer.userId
+  // Heatmap window: 26 full weeks + the current partial one is ≤189 local days;
+  // 191 UTC days over-fetches a hair so timezone shift can't clip the oldest cell.
+  const heatSince = new Date(Date.now() - 191 * 24 * 60 * 60 * 1000);
+  const [user, card, heatRows] = viewer.userId
     ? await Promise.all([
         prisma.user.findUnique({
           where: { id: viewer.userId },
           select: { email: true, name: true },
         }),
         loadContinueCard(viewer.userId),
+        prisma.progress.findMany({
+          where: { userId: viewer.userId, completedAt: { gte: heatSince } },
+          select: { completedAt: true },
+        }),
       ])
-    : [null, null];
+    : [null, null, []];
 
   return (
     <Desk maxWidth={1040}>
@@ -80,7 +88,10 @@ export default async function Home({
             </div>
             <GoalScratchpad signedIn />
 
-            <div className="-mt-4 flex flex-wrap items-center gap-4">
+            <div className="mb-3 font-hand text-3xl font-bold text-script">My study log</div>
+            <ActivityHeatmap completions={heatRows.map((r) => r.completedAt.getTime())} />
+
+            <div className="mt-8 flex flex-wrap items-center gap-4">
               <Link href="/programs" className="font-script text-sm text-script-faint underline">
                 flip to all my programs →
               </Link>
