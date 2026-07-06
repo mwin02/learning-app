@@ -13,6 +13,7 @@ import { Output, generateText } from 'ai';
 import { z } from 'zod';
 import { getModel } from '@/lib/ai/models';
 import type { OnTrace } from '@/lib/agents/agent-trace';
+import { loadAssembledMap, writePathReview } from '@/lib/agents/map/path-review';
 import {
   detectHollowConcepts,
   detectDuplicationCandidates,
@@ -35,6 +36,21 @@ const ReviewSchema = z.object({
     )
     .default([]),
 });
+
+// Compose the whole freeze-boundary review: load the assembled map, review it, and
+// persist the findings to the PathReview worklist. Shared by the remediation freeze
+// hook (remediate-path.ts) and the manual driver (scripts/review-map.ts). The write
+// is idempotent (replaces open rows, preserves resolved decisions). Returns the
+// findings + how many were written so a caller/CLI can report them.
+export async function reviewAndPersistMap(
+  pathId: string,
+  onTrace: OnTrace = () => {},
+): Promise<{ findings: MapReviewFinding[]; written: number }> {
+  const map = await loadAssembledMap(pathId);
+  const findings = await reviewMap(map, onTrace);
+  const { written } = await writePathReview(pathId, findings);
+  return { findings, written };
+}
 
 // Review the final assembled map, returning findings to persist. Combines the LLM
 // critic (duplication / granularity) with the deterministic hollow pass. Fail-open.
