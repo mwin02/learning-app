@@ -11,13 +11,7 @@ import { accentFor, romanize } from '@/components/notebook/accents';
 import { PctDone } from '@/components/notebook/primitives';
 import { TocEntry } from '@/components/notebook/TocEntry';
 import { PROGRAM_STATE_LABEL, TRACK_STATE_LABEL, trackBuildState } from './program-ui';
-
-function titleCase(slug: string): string {
-  return slug
-    .split('-')
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(' ');
-}
+import { titleCase, pctComplete } from '@/lib/format';
 
 function Stat({ value, label, color }: { value: string; label: string; color?: string }) {
   return (
@@ -72,7 +66,7 @@ export function NotebookProgramHome({
     (sum, t) => sum + (t.trackId ? (progress.get(t.trackId)?.doneCount ?? 0) : 0),
     0
   );
-  const pct = program.totalLessons > 0 ? Math.round((doneLessons / program.totalLessons) * 100) : 0;
+  const pct = pctComplete(doneLessons, program.totalLessons);
 
   return (
     <>
@@ -89,7 +83,7 @@ export function NotebookProgramHome({
         goal-driven program · {PROGRAM_STATE_LABEL[program.status].toLowerCase()}
       </div>
       <h1 className="mb-2.5 mt-1.5 font-hand text-[52px] font-bold leading-[0.95] text-script">
-        <span style={{ background: 'linear-gradient(transparent 62%, rgba(255,224,102,.72) 62%)' }}>
+        <span style={{ background: 'linear-gradient(transparent 62%, rgb(var(--nb-highlighter) / .72) 62%)' }}>
           {program.goal}
         </span>
       </h1>

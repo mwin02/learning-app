@@ -28,7 +28,7 @@ function HighlightedTitle() {
       What do you
       <br />
       want to{' '}
-      <span style={{ background: 'linear-gradient(transparent 60%, rgba(255,224,102,.75) 60%)' }}>
+      <span style={{ background: 'linear-gradient(transparent 60%, rgb(var(--nb-highlighter) / .75) 60%)' }}>
         learn?
       </span>
     </h1>

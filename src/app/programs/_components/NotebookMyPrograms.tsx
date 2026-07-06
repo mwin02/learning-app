@@ -10,6 +10,7 @@ import Link from 'next/link';
 import { accentFor, romanize } from '@/components/notebook/accents';
 import { TocEntry } from '@/components/notebook/TocEntry';
 import { PROGRAM_STATE_LABEL } from './program-ui';
+import { pctComplete } from '@/lib/format';
 
 export type DashboardProgram = {
   id: string;
@@ -73,14 +74,14 @@ export function NotebookMyPrograms({
 }) {
   const doneLessons = programs.reduce((s, p) => s + p.doneLessons, 0);
   const totalLessons = programs.reduce((s, p) => s + p.totalLessons, 0);
-  const pct = totalLessons > 0 ? Math.round((doneLessons / totalLessons) * 100) : 0;
+  const pct = pctComplete(doneLessons, totalLessons);
 
   return (
     <>
       <div className="nb-kicker pt-2">welcome back{firstName ? `, ${firstName}` : ''}</div>
       <h1 className="mb-1.5 mt-1 font-hand text-[56px] font-bold leading-[0.92] text-script">
         My{' '}
-        <span style={{ background: 'linear-gradient(transparent 60%, rgba(255,224,102,.72) 60%)' }}>
+        <span style={{ background: 'linear-gradient(transparent 60%, rgb(var(--nb-highlighter) / .72) 60%)' }}>
           Table of Contents
         </span>
       </h1>

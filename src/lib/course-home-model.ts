@@ -14,6 +14,7 @@
 
 import type { TrackView, TrackLessonView } from '@/lib/track-view';
 import { formatDuration } from '@/lib/format-duration';
+import { pctComplete } from '@/lib/format';
 
 export type LessonStatus = 'done' | 'current' | 'todo';
 export type LessonTypeKind = 'video' | 'embed' | 'link';
@@ -140,7 +141,7 @@ export function buildCourseHomeModel(track: TrackView, completed: Set<string>): 
       countLabel: `${total} lesson${total === 1 ? '' : 's'}`,
       durLabel: `~${formatDuration(sectionMinutes)}`,
       status,
-      barPct: total > 0 ? Math.round((sectionDone / total) * 100) : 0,
+      barPct: pctComplete(sectionDone, total),
       lessons: lessons.map((l) => ({
         id: l.id,
         orderInTrack: l.orderInTrack,
@@ -194,7 +195,7 @@ export function buildCourseHomeModel(track: TrackView, completed: Set<string>): 
     level,
     totalLessons,
     doneCount,
-    progressPct: totalLessons > 0 ? Math.round((doneCount / totalLessons) * 100) : 0,
+    progressPct: pctComplete(doneCount, totalLessons),
     timeRemainingLabel: remainingMinutes > 0 ? `≈${formatDuration(remainingMinutes)}` : '0m',
     totalTimeLabel: formatDuration(track.totalMinutes),
     sectionCount: track.sections.length,

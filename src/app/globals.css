@@ -19,6 +19,14 @@
      block flips it to a faint light dot so the grid stays visible on the near-
      black dark desk (black-on-black reads as flat otherwise). */
   --desk-dot: rgba(0, 0, 0, 0.04);
+
+  /* The notebook highlighter: a fixed yellow marker swipe. Space-separated RGB
+     channels so callers compose their own alpha — rgb(var(--nb-highlighter) / .72).
+     Deliberately NOT overridden in the dark block: a highlighter reads yellow in
+     either theme, and its ink stays dark (text-script would flip to near-white
+     and vanish on the yellow — see BookmarkTab). */
+  --nb-highlighter: 255 224 102;
+  --nb-highlighter-ink: #22303f;
 }
 
 /* ===== Design tokens (the central palette) =====
@@ -274,6 +282,11 @@ body {
      default; override with a text utility (e.g. text-note-label). */
   .nb-kicker {
     @apply font-script text-[13px] uppercase tracking-[1.5px] text-pen;
+  }
+  /* Faint highlighter wash on hover — the notebook analog of a row hover tint.
+     Uses the theme-fixed highlighter yellow at low alpha. */
+  .nb-hl-hover:hover {
+    background-color: rgb(var(--nb-highlighter) / 0.14);
   }
   /* Primary "inked" button: handwriting, pen fill, pressed-ink under-shadow.
      The uneven radius is the doodle look's default; vary per instance inline. */

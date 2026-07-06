@@ -14,15 +14,9 @@ import { loadProgramCourseProgress, type CourseProgress } from '@/lib/program-pr
 import { Desk, Sheet } from '@/components/notebook/Sheet';
 import { StickyNote, ChapterChip } from '@/components/notebook/primitives';
 import { accentFor, romanize } from '@/components/notebook/accents';
-import { trackBuildState } from './program-ui';
+import { trackBuildState, readyTrackIds, groupLessonsBySection } from './program-ui';
 import { EnrollButton, SignInToEnrollLink } from './EnrollButton';
-
-function titleCase(slug: string): string {
-  return slug
-    .split('-')
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(' ');
-}
+import { titleCase } from '@/lib/format';
 
 // Doodle-bordered fact chip; alternating corner radii like the mock's.
 function Chip({ label, flip }: { label: string; flip: boolean }) {
@@ -91,18 +85,8 @@ function CourseBox({
   }
 
   // Group lessons under sections like the rail does; SetNull leftovers get an
-  // "Other" group; a flat (un-sectioned) course lists lessons directly.
-  let groups: { id: string; title: string; lessons: { id: string; title: string }[] }[] | null =
-    null;
-  if (skeleton.sections.length > 0) {
-    groups = skeleton.sections.map((s) => ({
-      id: s.id,
-      title: s.title,
-      lessons: skeleton.lessons.filter((l) => l.sectionId === s.id),
-    }));
-    const loose = skeleton.lessons.filter((l) => l.sectionId === null);
-    if (loose.length > 0) groups.push({ id: '__loose', title: 'Other', lessons: loose });
-  }
+  // "Other" group; a flat (un-sectioned) course lists lessons directly (null).
+  const groups = groupLessonsBySection(skeleton.lessons, skeleton.sections);
 
   return (
     <details className="group/course mb-2.5 rounded-[3px] border border-note-edge bg-card px-3.5 shadow-[0_3px_8px_rgba(0,0,0,.07)]">
@@ -162,17 +146,14 @@ export async function EnrollPrompt({
   // Lesson/section skeletons for the built courses (titles only — no viewer,
   // no progress). Lesson titles are generated content, same public-preview
   // class as course titles.
-  const readyTrackIds = ordered.flatMap((t) =>
-    t.trackId && trackBuildState(t) === 'ready' ? [t.trackId] : []
-  );
-  const skeletons = await loadProgramCourseProgress(null, readyTrackIds);
+  const skeletons = await loadProgramCourseProgress(null, readyTrackIds(program));
 
   return (
     <Desk maxWidth={980}>
       <Sheet>
         <div className="nb-kicker pt-2">goal-driven program · free to join</div>
         <h1 className="mb-2.5 mt-1.5 font-hand text-[52px] font-bold leading-[0.95] text-script">
-          <span style={{ background: 'linear-gradient(transparent 64%, rgba(255,224,102,.72) 64%)' }}>
+          <span style={{ background: 'linear-gradient(transparent 64%, rgb(var(--nb-highlighter) / .72) 64%)' }}>
             {program.goal}
           </span>
         </h1>

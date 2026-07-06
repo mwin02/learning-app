@@ -4,6 +4,7 @@
 
 import type { Accent } from './accents';
 import { ChapterChip, ProgressDoodle } from './primitives';
+import { pctComplete } from '@/lib/format';
 
 export function SectionRow({
   n,
@@ -20,7 +21,7 @@ export function SectionRow({
   done: number;
   total: number;
 }) {
-  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  const pct = pctComplete(done, total);
   const status = done >= total && total > 0 ? 'completed ✓' : done === 0 ? 'not started' : 'in progress';
 
   return (
