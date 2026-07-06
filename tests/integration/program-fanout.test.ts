@@ -19,6 +19,10 @@ async function cleanup() {
   await prisma.path.deleteMany({ where: { topic: { startsWith: MARK } } });
 }
 
+// Frontier list the stub plan puts on its FIRST topic (Block 4: fan-out must
+// persist it onto the child CourseRequest; later topics stay []).
+const FRONTIER = ['reinforcement learning', 'transformers'];
+
 // Build a stub plan for the given canonical topic keys.
 const stubPlan =
   (keys: string[]): ((i: unknown) => Promise<ProgramPlan>) =>
@@ -32,7 +36,7 @@ const stubPlan =
       priorityTier: i === 0 ? ('core' as const) : ('nice_to_have' as const),
       weight: 1,
       rationale: `why ${key}`,
-      frontierConcepts: [],
+      frontierConcepts: i === 0 ? FRONTIER : [],
     })),
     droppedByGate: [],
     droppedByBudget: [],
@@ -88,6 +92,9 @@ describeDb('program fan-out + assembly', () => {
       ),
     ).toBe(true);
     expect(reqs[0].goal).toBe(`why ${reqs[0].topic}`); // child goal = per-topic rationale
+    // Block 4: the plan's frontier requests land on the child request (worker input).
+    expect(reqs[0].frontierConcepts).toEqual(FRONTIER); // reqs sorted by topic: [0]=alpha, the plan's first topic
+    expect(reqs[1].frontierConcepts).toEqual([]);
 
     // maybeAssembleProgram is a no-op while a sibling is non-terminal.
     await maybeAssembleProgram(enq.programId);
