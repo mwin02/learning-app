@@ -1,18 +1,16 @@
-// Phase 2.75e (learn UI), rebuilt in frontend-redesign Block 2: the program
-// overview as a notebook — the Desk, the bookmark rail (Overview tab active,
-// one accent tab per course with real progress fractions), and the sheet with
+// Phase 2.75e (learn UI), rebuilt in frontend-redesign Blocks 2–3: the program
+// overview sheet. The layout owns the persistent shell (Desk + rail + progress
+// provider); this route renders only the main column — the notebook Sheet with
 // the plan as a table of contents. Unenrolled viewers (anonymous included)
-// still get the EnrollPrompt from the layout; going through getProgramAccess
-// keeps this page from ever rendering a less-sanitized view than it decided.
+// get the EnrollPrompt from the layout; going through getProgramAccess keeps
+// this page from ever rendering a less-sanitized view than it decided.
 
 import { notFound } from 'next/navigation';
 import { getProgramAccess } from '@/lib/auth/program-access';
 import { getViewer } from '@/lib/auth/viewer';
 import { loadProgramCourseProgress } from '@/lib/program-progress';
-import { Desk, Sheet } from '@/components/notebook/Sheet';
-import { BookmarkRail, BookmarkTab } from '@/components/notebook/BookmarkTab';
-import { accentFor } from '@/components/notebook/accents';
-import { NotebookProgramHome, romanize } from '../_components/NotebookProgramHome';
+import { Sheet } from '@/components/notebook/Sheet';
+import { NotebookProgramHome } from '../_components/NotebookProgramHome';
 import { trackBuildState } from '../_components/program-ui';
 
 export const dynamic = 'force-dynamic';
@@ -28,41 +26,15 @@ export default async function ProgramHomePage({
   if (!access.enrolled) return null; // the layout renders the EnrollPrompt instead
 
   const program = access.view;
-  const ordered = program.phases.flatMap((ph) => ph.tracks);
-  const builtTrackIds = ordered.flatMap((t) =>
-    t.trackId && trackBuildState(t) === 'ready' ? [t.trackId] : []
-  );
+  const builtTrackIds = program.phases
+    .flatMap((ph) => ph.tracks)
+    .flatMap((t) => (t.trackId && trackBuildState(t) === 'ready' ? [t.trackId] : []));
+  // cache()-free but cheap; re-runs per navigation so the ToC counts stay fresh.
   const progress = await loadProgramCourseProgress(viewer.userId, builtTrackIds);
 
   return (
-    <Desk maxWidth={1120}>
-      <BookmarkRail>
-        <BookmarkTab
-          kicker="Program"
-          label="Overview"
-          meta={`${program.builtCount}/${program.trackCount} ready`}
-          bg="var(--color-nb-slate)"
-          active
-          href={`/programs/${program.id}`}
-        />
-        {ordered.map((track, i) => {
-          const ready = track.trackId && trackBuildState(track) === 'ready';
-          const cp = track.trackId ? progress.get(track.trackId) : undefined;
-          return (
-            <BookmarkTab
-              key={track.topic}
-              kicker={`Course ${romanize(i)}${cp ? ` · ${cp.doneCount}/${cp.totalCount}` : ''}`}
-              label={track.title ?? track.topic}
-              meta={ready ? `${track.lessonCount} lessons` : 'building…'}
-              bg={accentFor(i).bg}
-              href={ready ? `/programs/${program.id}/${track.trackId}` : undefined}
-            />
-          );
-        })}
-      </BookmarkRail>
-      <Sheet>
-        <NotebookProgramHome program={program} progress={progress} />
-      </Sheet>
-    </Desk>
+    <Sheet>
+      <NotebookProgramHome program={program} progress={progress} />
+    </Sheet>
   );
 }

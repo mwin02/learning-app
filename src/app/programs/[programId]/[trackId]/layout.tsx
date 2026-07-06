@@ -1,20 +1,13 @@
-// Frontend redesign Block 1: the program-scoped course-player shell — the
-// /learn/[trackId] layout re-homed under its program so navigation between a
-// program's courses stays inside one URL subtree (the Block-2 accordion builds
-// on this). Renders inside the program layout (which owns the top nav and the
-// enrolled/login gate for its own subtree), but runs its own access check:
-// getProgramTrackAccess also enforces plan membership and track readiness.
-//
-// Progress is still the per-track CourseProvider (program-wide provider is
-// Block 3); basePath makes every player link resolve under this route.
+// Frontend redesign Block 1, slimmed in Block 3: the program-scoped course
+// player segment. The program layout above owns all chrome (Desk, rail,
+// progress provider); this layout only runs the track-level access check and
+// bridges the shell's program-wide progress into the player's CourseContext,
+// so CourseHome / LessonView run unchanged and their toggles move the rail.
 
 import type { Metadata } from 'next';
 import { notFound, redirect } from 'next/navigation';
 import { getProgramTrackAccess } from '@/lib/auth/program-track-access';
-import { getViewer } from '@/lib/auth/viewer';
-import { CourseProvider } from '@/app/learn/_components/course-context';
-import { CourseSidebar } from '@/app/learn/_components/CourseSidebar';
-import { ProgramTopNav } from '@/app/programs/_components/ProgramTopNav';
+import { CourseContextBridge } from '@/app/programs/_components/CourseContextBridge';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,31 +31,17 @@ export default async function ProgramTrackLayout({
 }) {
   const { programId, trackId } = await params;
   const access = await getProgramTrackAccess(programId, trackId);
-  // Unenrolled (anonymous included): the program page shows the enroll prompt —
-  // the intuitive landing for a shared course/lesson link.
+  // Unenrolled (anonymous included): the program layout shows the enroll
+  // prompt before children render, so this redirect is defense-in-depth.
   if (access.kind === 'unenrolled') redirect(`/programs/${programId}`);
   if (access.kind !== 'ok') notFound();
 
-  const viewer = await getViewer();
-
   return (
-    <div className="min-h-screen bg-surface text-ink">
-      <CourseProvider
-        track={access.track}
-        signedIn={viewer.userId !== null}
-        basePath={`/programs/${programId}/${trackId}`}
-      >
-        {/* Block 2: the program layout dropped its chrome (the notebook home owns
-            its own), so the not-yet-converted player carries the old top nav. */}
-        <ProgramTopNav
-          builtCount={access.program.view.builtCount}
-          trackCount={access.program.view.trackCount}
-        />
-        <div className="flex items-start">
-          <CourseSidebar />
-          <main className="min-h-[calc(100vh-var(--nav-h))] flex-1 min-w-0">{children}</main>
-        </div>
-      </CourseProvider>
-    </div>
+    <CourseContextBridge track={access.track} basePath={`/programs/${programId}/${trackId}`}>
+      {/* The shell's Desk sets the handwriting font; the player pages are
+          still the old design system, so pin them back to sans until their
+          notebook re-skins land. */}
+      <div className="font-sans text-ink">{children}</div>
+    </CourseContextBridge>
   );
 }

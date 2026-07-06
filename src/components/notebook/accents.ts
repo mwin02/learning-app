@@ -15,3 +15,9 @@ export const NB_ACCENTS: Accent[] = NAMES.map((n) => ({
 export function accentFor(index: number): Accent {
   return NB_ACCENTS[index % NB_ACCENTS.length];
 }
+
+// Chapter numerals for course chips/tabs (the notebook counts in roman).
+const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
+export function romanize(index: number): string {
+  return ROMAN[index] ?? String(index + 1);
+}

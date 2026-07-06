@@ -7,13 +7,10 @@
 import type { ProgramView, ProgramTrackView } from '@/lib/program-view';
 import { formatMinutes } from '@/lib/program-view';
 import type { CourseProgress } from '@/lib/program-progress';
-import { accentFor } from '@/components/notebook/accents';
+import { accentFor, romanize } from '@/components/notebook/accents';
 import { TocEntry } from '@/components/notebook/TocEntry';
 import { NotebookBrand } from '@/components/notebook/NotebookBrand';
 import { PROGRAM_STATE_LABEL, TRACK_STATE_LABEL, trackBuildState } from './program-ui';
-
-const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
-export const romanize = (i: number) => ROMAN[i] ?? String(i + 1);
 
 function titleCase(slug: string): string {
   return slug
