@@ -36,5 +36,12 @@ export default async function ProgramLessonPage({
   const model = buildLessonViewModel(access.track, lessonId);
   if (!model) notFound();
 
-  return <LessonView model={model} />;
+  // Interim (until the Block-5 lesson re-skin): the shell's Desk sets the
+  // handwriting font; LessonView is still the old design system, so pin it
+  // back to sans here.
+  return (
+    <div className="font-sans text-ink">
+      <LessonView model={model} />
+    </div>
+  );
 }

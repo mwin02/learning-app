@@ -18,6 +18,47 @@ export function ProgressDoodle({
   );
 }
 
+// The hand-drawn progress ring: an SVG arc for the real pct (the source mock
+// faked it with rotated borders), tilted a touch so it reads as sketched.
+export function RingDoodle({
+  pct,
+  ink,
+  size = 66,
+  children,
+  className = '',
+}: {
+  pct: number;
+  ink: string; // arc color (CSS color)
+  size?: number;
+  children?: React.ReactNode; // centered label (e.g. the pct, hand-written)
+  className?: string;
+}) {
+  const clamped = Math.min(100, Math.max(0, pct));
+  const r = (size - 4) / 2; // 3px stroke + breathing room
+  const c = 2 * Math.PI * r;
+  return (
+    <div
+      className={`relative flex flex-none -rotate-6 items-center justify-center ${className}`}
+      style={{ width: size, height: size }}
+    >
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="absolute inset-0 -rotate-90" aria-hidden>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--color-rule)" strokeWidth={3} />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke={ink}
+          strokeWidth={3}
+          strokeLinecap="round"
+          strokeDasharray={`${(clamped / 100) * c} ${c}`}
+        />
+      </svg>
+      <span className="rotate-6">{children}</span>
+    </div>
+  );
+}
+
 export function ChapterChip({
   label,
   bg,

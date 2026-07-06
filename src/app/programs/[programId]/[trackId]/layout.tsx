@@ -38,10 +38,7 @@ export default async function ProgramTrackLayout({
 
   return (
     <CourseContextBridge track={access.track} basePath={`/programs/${programId}/${trackId}`}>
-      {/* The shell's Desk sets the handwriting font; the player pages are
-          still the old design system, so pin them back to sans until their
-          notebook re-skins land. */}
-      <div className="font-sans text-ink">{children}</div>
+      {children}
     </CourseContextBridge>
   );
 }
