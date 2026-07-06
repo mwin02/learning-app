@@ -461,6 +461,24 @@ export const DECOMPOSE_AGENT_MAX_STEPS = 16;
 // worker's execution loop (excess entries are logged + skipped, never fatal).
 export const MAX_FRONTIER_PER_TOPIC = 2;
 
+// Pre-Freeze Map Review (Block 1): the whole-map critic at the freeze boundary.
+//
+// MAP_HOLLOW_COVERAGE: a spine concept whose chosen `teaches` primary sits below
+// this coverageScore is flagged `hollow` — a papered-over hole covered only by a
+// weak resource. A `primaryRelaxed` concept is ALWAYS hollow (remediation already
+// admitted it couldn't clear the floor). Start at 0.6 — just above the
+// MAP_SPINE_MIN_PRIMARY_COVERAGE (0.5) readiness floor, so it catches the primaries
+// that barely qualified (e.g. an aggregate-functions concept at exactly 0.6 is on
+// the line). Deterministic, not an LLM call. Tune once observed on real Paths.
+export const MAP_HOLLOW_COVERAGE = 0.6;
+// MAP_DUP_CANDIDATE_SIMILARITY: the pure title/scope similarity (normalized-token
+// Jaccard) at or above which two concepts are sent to the critic as a duplication
+// CANDIDATE pair. Deliberately permissive (a low bar) — this only decides what the
+// critic looks at; the LLM makes the precision call on whether it's a real
+// duplicate. Too high and a genuine dup (sql-views vs database-views, sharing only
+// the "view" stem) is never even considered.
+export const MAP_DUP_CANDIDATE_SIMILARITY = 0.3;
+
 // Phase 2.75b: the per-topic floor for the deterministic hours/week split — every
 // surviving topic gets at least this many hours/week so no topic rounds to zero and
 // silently vanishes from the plan. When Σ floors exceeds the program's
