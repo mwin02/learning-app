@@ -138,7 +138,7 @@ export function ProgramShell({
 
   return (
     <ProgramProgressContext.Provider value={value}>
-      <Desk maxWidth={1220}>
+      <Desk maxWidth={1440}>
         <BookmarkRail>
           <BookmarkTab
             kicker="Program"

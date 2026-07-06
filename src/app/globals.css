@@ -7,7 +7,7 @@
   /* Layout constants (referenced via arbitrary utilities, e.g. top-[var(--nav-h)]).
      --nav-h is load-bearing: the sticky sidebar/main heights derive from it via
      calc(100vh - var(--nav-h)), so the whole shell stays aligned from one edit. */
-  --nav-h: 62px;
+  --nav-h: 72px;
   --space-section: 26px; /* vertical rhythm between main-column cards */
 
   /* Theme-dependent decoratives that can't be a single color token: the card
@@ -15,6 +15,10 @@
      (not @theme) so the dark block below can override them. */
   --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04);
   --gradient-thumb: linear-gradient(135deg, #eef2fb, #e1e8f6);
+  /* The Desk's dotted-grid texture color. Dark ink on the light desk; the dark
+     block flips it to a faint light dot so the grid stays visible on the near-
+     black dark desk (black-on-black reads as flat otherwise). */
+  --desk-dot: rgba(0, 0, 0, 0.04);
 }
 
 /* ===== Design tokens (the central palette) =====
@@ -155,6 +159,7 @@
 
     --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
     --gradient-thumb: linear-gradient(135deg, #1b2436, #161d2b);
+    --desk-dot: rgba(255, 255, 255, 0.05);
 
     --color-brand: #5d87ef;
     --color-brand-dark: #5079e3;
