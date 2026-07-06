@@ -13,7 +13,7 @@ import { useParams } from 'next/navigation';
 import { useCourse } from '@/app/learn/_components/course-context';
 import { ContinueCard } from '@/components/notebook/ContinueCard';
 import { SectionRow } from '@/components/notebook/SectionRow';
-import { RingDoodle } from '@/components/notebook/primitives';
+import { PctDone, RingDoodle } from '@/components/notebook/primitives';
 import { accentFor } from '@/components/notebook/accents';
 
 function encouragement(pct: number): string {
@@ -31,12 +31,7 @@ export function NotebookCourseHome() {
       {/* sheet header — course-scoped progress readout, aligned right (the
           brand lives in the app-wide top nav). */}
       <div className="mb-5 flex h-[44px] items-end justify-end">
-        <div className="text-right leading-none">
-          <div className="-rotate-[4deg] font-hand text-[30px] font-bold text-crayon-red">
-            {model.progressPct}%
-          </div>
-          <div className="mt-0.5 font-script text-2xs text-script-faint">done</div>
-        </div>
+        <PctDone pct={model.progressPct} />
       </div>
 
       <div className="mb-1.5 font-script text-xs text-script-dim">

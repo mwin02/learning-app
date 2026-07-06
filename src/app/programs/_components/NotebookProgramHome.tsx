@@ -8,6 +8,7 @@ import type { ProgramView, ProgramTrackView } from '@/lib/program-view';
 import { formatMinutes } from '@/lib/program-view';
 import type { CourseProgress } from '@/lib/program-progress';
 import { accentFor, romanize } from '@/components/notebook/accents';
+import { PctDone } from '@/components/notebook/primitives';
 import { TocEntry } from '@/components/notebook/TocEntry';
 import { PROGRAM_STATE_LABEL, TRACK_STATE_LABEL, trackBuildState } from './program-ui';
 
@@ -78,10 +79,7 @@ export function NotebookProgramHome({
       {/* sheet header — the brand now lives in the app-wide top nav; this row
           keeps the program's overall progress readout, aligned right. */}
       <div className="mb-5 flex h-[44px] items-end justify-end">
-        <div className="text-right leading-none">
-          <div className="-rotate-[4deg] font-hand text-[30px] font-bold text-crayon-red">{pct}%</div>
-          <div className="mt-0.5 font-script text-2xs text-script-faint">done</div>
-        </div>
+        <PctDone pct={pct} />
       </div>
 
       <div className="mb-1.5 font-script text-xs text-script-dim">My Programs &nbsp;→&nbsp; {program.goal}</div>
