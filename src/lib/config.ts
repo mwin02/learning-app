@@ -445,6 +445,14 @@ export const MAX_PROGRAM_TOPICS = 6;
 // check — acceptable (off-by-one on a free cap, not a security boundary).
 export const FREE_PROGRAMS_PER_MONTH = 3;
 
+// Decomposer-agent plan (Block 2): hard ceiling on model turns in the decompose
+// agent's tool loop (mirrors TRACK_COMPOSER_MAX_STEPS). One step = one model turn,
+// which may issue several tool calls. The happy path is short — a get_path_map per
+// existing topic + propose_course per topic + finalize, and the model batches
+// calls — so ~MAX_PROGRAM_TOPICS×2 + slack. The finalize-miss fallback synthesizes
+// title/description from the draft when the cap is hit.
+export const DECOMPOSE_AGENT_MAX_STEPS = 16;
+
 // Decomposer-agent plan: per-topic cap on frontier-concept requests
 // (CourseRequest.frontierConcepts). Each request the worker executes is one
 // addFrontierConcept call — potentially a web-sourcing ladder (30–60s, the

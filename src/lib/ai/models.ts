@@ -27,6 +27,7 @@ type AgentName =
   | 'validityAgent'
   | 'topicGate'
   | 'programPlanner'
+  | 'programDecomposer'
   | 'health';
 
 type ModelConfig = {
@@ -264,6 +265,20 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // occasionally capped mid-JSON → a `No object generated: could not parse` throw
     // that sank the whole plan pass (seen once in the 2.75 full e2e). 16k leaves ample
     // headroom for thinking + ~6 topics with rationales, matching mapSpineReviewer.
+    modelId: 'gemini-2.5-flash',
+    temperature: 0.2,
+    maxOutputTokens: 16384,
+  },
+  programDecomposer: {
+    // Decomposer-agent plan (Block 2): the tool-using Stage-1 decomposition agent —
+    // same job as programPlanner (goal → ≤N gated single-topic tracks) but driving a
+    // tool loop (get_path_map / propose_course / finalize) instead of one
+    // generateObject call, and additionally deciding per-topic frontier-concept
+    // requests. Starts on programPlanner's tier per the plan's ambiguity #6 default
+    // (Flash; the reasoning is still judgment over a short goal, now spread across
+    // steps) — bump only if tool-loop quality is weak in the Block 5 live run.
+    // Same 16k budget: per-step output is small (tool args), but Flash 2.5 spends
+    // output tokens on internal thinking first.
     modelId: 'gemini-2.5-flash',
     temperature: 0.2,
     maxOutputTokens: 16384,
