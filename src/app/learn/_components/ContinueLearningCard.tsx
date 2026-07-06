@@ -7,10 +7,10 @@ import { CheckIcon, PlayIcon } from './icons';
 import type { ContinueLesson } from '@/lib/course-home-model';
 
 export function ContinueLearningCard({
-  trackId,
+  basePath,
   lesson,
 }: {
-  trackId: string;
+  basePath: string;
   lesson: ContinueLesson | null;
 }) {
   if (!lesson) {
@@ -43,7 +43,7 @@ export function ContinueLearningCard({
         <div className="meta">{lesson.meta}</div>
       </div>
       <Link
-        href={`/learn/${trackId}/${lesson.id}`}
+        href={`${basePath}/${lesson.id}`}
         className="rounded-button bg-brand px-5 py-[11px] text-sm font-semibold text-white shadow-[0_1px_2px_rgba(63,106,216,0.3)] hover:bg-brand-dark"
       >
         Resume →

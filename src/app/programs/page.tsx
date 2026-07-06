@@ -22,7 +22,7 @@ const STATUS_LABEL: Record<string, string> = {
 
 export default async function MyProgramsPage() {
   const viewer = await getViewer();
-  if (!viewer.userId) redirect('/auth/login?next=%2Fprograms');
+  if (!viewer.userId) redirect('/signin?next=%2Fprograms');
 
   const enrollments = await prisma.enrolledProgram.findMany({
     where: { userId: viewer.userId },

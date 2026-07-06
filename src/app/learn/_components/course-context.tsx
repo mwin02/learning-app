@@ -13,6 +13,10 @@ import { createProgressStore } from '@/lib/progress-store';
 
 type CourseContextValue = {
   model: CourseHomeModel;
+  // Where this course player is mounted (`/learn/<trackId>` or
+  // `/programs/<programId>/<trackId>`). Components build every lesson href off
+  // this instead of hardcoding /learn, so the player renders under both shells.
+  basePath: string;
   isComplete: (lessonId: string) => boolean;
   toggleComplete: (lessonId: string) => void;
 };
@@ -22,12 +26,14 @@ const CourseContext = createContext<CourseContextValue | null>(null);
 export function CourseProvider({
   track,
   signedIn,
+  basePath,
   children,
 }: {
   track: TrackView;
   // From the server layout (it knows the viewer): true only for a real session
   // with a userId — the dev bypass's userId-less viewer stays on localStorage.
   signedIn: boolean;
+  basePath: string;
   children: React.ReactNode;
 }) {
   // The persistence backend (DB when signed in, localStorage otherwise) behind a
@@ -66,10 +72,11 @@ export function CourseProvider({
   const value = useMemo<CourseContextValue>(
     () => ({
       model,
+      basePath,
       isComplete: (lessonId: string) => completed.has(lessonId),
       toggleComplete,
     }),
-    [model, completed, toggleComplete],
+    [model, basePath, completed, toggleComplete],
   );
 
   return <CourseContext.Provider value={value}>{children}</CourseContext.Provider>;

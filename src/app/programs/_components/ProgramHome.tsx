@@ -31,7 +31,7 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub: st
   );
 }
 
-function TrackCard({ track }: { track: ProgramTrackView }) {
+function TrackCard({ programId, track }: { programId: string; track: ProgramTrackView }) {
   const state = trackBuildState(track);
   const built = track.trackId && state === 'ready';
   return (
@@ -62,7 +62,7 @@ function TrackCard({ track }: { track: ProgramTrackView }) {
               {track.lessonCount} lessons · {formatMinutes(track.totalMinutes)}
             </span>
             <Link
-              href={`/learn/${track.trackId}`}
+              href={`/programs/${programId}/${track.trackId}`}
               className="ml-auto rounded-button bg-brand px-3.5 py-1.5 text-sm font-medium text-white hover:opacity-90"
             >
               Start course →
@@ -128,7 +128,7 @@ export function ProgramHome({ program }: { program: ProgramView }) {
             </div>
             <div className="flex flex-col gap-[14px]">
               {phase.tracks.map((track) => (
-                <TrackCard key={track.topic} track={track} />
+                <TrackCard key={track.topic} programId={program.id} track={track} />
               ))}
             </div>
           </section>

@@ -10,7 +10,13 @@ import type { ProgramView } from '@/lib/program-view';
 import { formatMinutes } from '@/lib/program-view';
 import { PROGRAM_STATE_LABEL, TRACK_STATE_LABEL, trackBuildState } from './program-ui';
 
-function TrackRow({ track }: { track: ProgramView['phases'][number]['tracks'][number] }) {
+function TrackRow({
+  programId,
+  track,
+}: {
+  programId: string;
+  track: ProgramView['phases'][number]['tracks'][number];
+}) {
   const state = trackBuildState(track);
   const dot =
     state === 'ready' ? 'bg-success' : state === 'failed' ? 'bg-faint' : 'bg-brand';
@@ -36,7 +42,7 @@ function TrackRow({ track }: { track: ProgramView['phases'][number]['tracks'][nu
   // Only a built track is navigable; an unbuilt slot is a static row.
   return track.trackId && state === 'ready' ? (
     <Link
-      href={`/learn/${track.trackId}`}
+      href={`/programs/${programId}/${track.trackId}`}
       className="mx-2.5 my-px flex items-start gap-[11px] rounded-control px-3.5 py-2 hover:bg-fill"
     >
       {inner}
@@ -74,7 +80,7 @@ export function ProgramSidebar({ program }: { program: ProgramView }) {
           </div>
           <div className="pb-1">
             {phase.tracks.map((track) => (
-              <TrackRow key={track.topic} track={track} />
+              <TrackRow key={track.topic} programId={program.id} track={track} />
             ))}
           </div>
         </div>

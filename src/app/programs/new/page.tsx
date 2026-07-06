@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
 
 export default async function NewProgramPage() {
   const viewer = await getViewer();
-  if (!viewer.userId) redirect('/auth/login?next=%2Fprograms%2Fnew');
+  if (!viewer.userId) redirect('/signin?next=%2Fprograms%2Fnew');
   return (
     <div className="flex min-h-screen items-center justify-center bg-surface px-6 text-ink">
       <main className="card w-full max-w-lg p-8">

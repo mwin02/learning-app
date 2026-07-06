@@ -18,7 +18,7 @@ function titleCase(slug: string): string {
 }
 
 export function CourseHome() {
-  const { model } = useCourse();
+  const { model, basePath } = useCourse();
   return (
     <div className="px-10 pb-[60px] pt-[34px]">
       <div className="mx-auto max-w-[860px]">
@@ -32,7 +32,7 @@ export function CourseHome() {
           <p className="mb-[var(--space-section)] max-w-[660px] text-md leading-[1.6] text-body">{model.summary}</p>
         )}
 
-        <ContinueLearningCard trackId={model.trackId} lesson={model.continueLesson} />
+        <ContinueLearningCard basePath={basePath} lesson={model.continueLesson} />
 
         <StatCards
           progressPct={model.progressPct}
