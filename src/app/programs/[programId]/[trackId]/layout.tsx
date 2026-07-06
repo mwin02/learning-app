@@ -14,6 +14,7 @@ import { getProgramTrackAccess } from '@/lib/auth/program-track-access';
 import { getViewer } from '@/lib/auth/viewer';
 import { CourseProvider } from '@/app/learn/_components/course-context';
 import { CourseSidebar } from '@/app/learn/_components/CourseSidebar';
+import { ProgramTopNav } from '@/app/programs/_components/ProgramTopNav';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,15 +46,23 @@ export default async function ProgramTrackLayout({
   const viewer = await getViewer();
 
   return (
-    <CourseProvider
-      track={access.track}
-      signedIn={viewer.userId !== null}
-      basePath={`/programs/${programId}/${trackId}`}
-    >
-      <div className="flex items-start">
-        <CourseSidebar />
-        <main className="min-h-[calc(100vh-var(--nav-h))] flex-1 min-w-0">{children}</main>
-      </div>
-    </CourseProvider>
+    <div className="min-h-screen bg-surface text-ink">
+      <CourseProvider
+        track={access.track}
+        signedIn={viewer.userId !== null}
+        basePath={`/programs/${programId}/${trackId}`}
+      >
+        {/* Block 2: the program layout dropped its chrome (the notebook home owns
+            its own), so the not-yet-converted player carries the old top nav. */}
+        <ProgramTopNav
+          builtCount={access.program.view.builtCount}
+          trackCount={access.program.view.trackCount}
+        />
+        <div className="flex items-start">
+          <CourseSidebar />
+          <main className="min-h-[calc(100vh-var(--nav-h))] flex-1 min-w-0">{children}</main>
+        </div>
+      </CourseProvider>
+    </div>
   );
 }

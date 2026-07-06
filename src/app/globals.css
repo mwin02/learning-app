@@ -61,8 +61,14 @@
    The paper-notebook design language: desk backdrop, ruled paper sheet, red
    margin, pen-blue ink, sticky notes, and the five course accent colors the
    dashboard/tabs cycle through. Lives alongside the legacy tokens above until
-   every surface migrates; new UI should use these. */
-@theme {
+   every surface migrates; new UI should use these.
+   ⚠️ `@theme static` (not plain @theme): several of these — the accent/ink
+   pairs, nb-slate — are consumed ONLY via inline `style` var() references in
+   TSX (data-driven course colors), which Tailwind's scanner can't see. Plain
+   @theme tree-shakes such tokens from the light palette (the dark overrides
+   below always ship, being plain CSS) — the "works in dark, invisible in
+   light" bug. `static` forces emission of every variable in this block. */
+@theme static {
   --color-desk: #c9c3b2; /* backdrop behind the sheet */
   --color-paper: #fcfaf1; /* the sheet itself */
   --color-rule: #bcd0e0; /* horizontal ruled lines */
@@ -96,6 +102,8 @@
   --color-nb-green-ink: #2f5c34;
   --color-nb-pink: #c56b9a;
   --color-nb-pink-ink: #7c3b60;
+  /* The neutral "Overview" bookmark tab (not part of the course cycle). */
+  --color-nb-slate: #4a5a6a;
 }
 
 /* ===== Radius scale =====
@@ -214,6 +222,7 @@
     --color-nb-green-ink: #8fc494;
     --color-nb-pink: #ad5d87;
     --color-nb-pink-ink: #d491b6;
+    --color-nb-slate: #3d4a57;
   }
 }
 

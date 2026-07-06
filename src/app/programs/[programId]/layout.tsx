@@ -16,7 +16,6 @@ import { notFound } from 'next/navigation';
 import { getViewer } from '@/lib/auth/viewer';
 import { EnrollPrompt } from '../_components/EnrollPrompt';
 import { getProgramAccess } from '@/lib/auth/program-access';
-import { ProgramTopNav } from '../_components/ProgramTopNav';
 import { AutoRefresh } from '../_components/AutoRefresh';
 
 export const dynamic = 'force-dynamic';
@@ -52,15 +51,13 @@ export default async function ProgramLayout({
 
   const program = access.view;
   return (
-    <div className="min-h-screen bg-surface text-ink">
+    <>
       {/* Phase 3e: live build status — re-render the (force-dynamic) hub while in flight. */}
       {(program.status === 'planning' || program.status === 'building') && <AutoRefresh />}
-      <ProgramTopNav builtCount={program.builtCount} trackCount={program.trackCount} />
-      {/* Block 1 (frontend redesign): the left column moved down a level — the
-          program home renders the ProgramSidebar, the [trackId] player renders
-          the CourseSidebar — so each subtree owns its sidebar until the Block-2
-          accordion unifies them back here. */}
+      {/* Block 2 (frontend redesign): no shared chrome here — the notebook
+          program home brings its own Desk/rail/Sheet; the (not yet converted)
+          [trackId] player brings the old ProgramTopNav + CourseSidebar. */}
       {children}
-    </div>
+    </>
   );
 }
