@@ -5,7 +5,10 @@
 // lists + completed ids for the live accordion rail). Server-side and
 // read-only: marking complete still happens through the per-track progress API.
 
+import { cache } from 'react';
 import { prisma } from '@/lib/db';
+import { getProgramAccess } from '@/lib/auth/program-access';
+import { readyTrackIds } from '@/app/programs/_components/program-ui';
 
 export type CourseLesson = { id: string; title: string; sectionId: string | null };
 export type CourseSection = { id: string; title: string };
@@ -23,6 +26,23 @@ export type CourseProgress = {
   // or has no lessons).
   nextUp: CourseLesson | null;
 };
+
+// Request-scoped progress read for a whole program, keyed on (userId, programId)
+// — both primitives, so the overview layout and page share ONE fetch instead of
+// each running the query (cache() dedupes on argument identity; passing arrays
+// would not). Resolves the ready track set from the already-cache()'d access
+// view. Callers needing a bespoke track set (enroll preview with a null viewer,
+// the home dashboard spanning programs) still call loadProgramCourseProgress.
+export const getProgramProgress = cache(
+  async (
+    userId: string | null,
+    programId: string
+  ): Promise<Map<string, CourseProgress>> => {
+    const access = await getProgramAccess(programId);
+    if (!access) return new Map();
+    return loadProgramCourseProgress(userId, readyTrackIds(access.view));
+  }
+);
 
 export async function loadProgramCourseProgress(
   userId: string | null,

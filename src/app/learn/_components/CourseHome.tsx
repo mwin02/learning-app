@@ -9,13 +9,7 @@ import { ContinueLearningCard } from './ContinueLearningCard';
 import { StatCards } from './StatCards';
 import { KeyConcepts } from './KeyConcepts';
 import { CourseContentBreakdown } from './CourseContentBreakdown';
-
-function titleCase(slug: string): string {
-  return slug
-    .split('-')
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(' ');
-}
+import { titleCase } from '@/lib/format';
 
 export function CourseHome() {
   const { model, basePath } = useCourse();

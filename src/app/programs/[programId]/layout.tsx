@@ -20,7 +20,7 @@ import { EnrollPrompt } from '../_components/EnrollPrompt';
 import { getProgramAccess } from '@/lib/auth/program-access';
 import { AutoRefresh } from '../_components/AutoRefresh';
 import { ProgramShell, type RailCourse } from '../_components/ProgramShell';
-import { loadProgramCourseProgress } from '@/lib/program-progress';
+import { getProgramProgress } from '@/lib/program-progress';
 import { trackBuildState } from '../_components/program-ui';
 
 export const dynamic = 'force-dynamic';
@@ -59,10 +59,8 @@ export default async function ProgramLayout({
   // Rail data: every plan slot in program order, with lesson skeletons +
   // the viewer's completed ids for the built ones (seeds the live provider).
   const ordered = program.phases.flatMap((ph) => ph.tracks);
-  const readyTrackIds = ordered.flatMap((t) =>
-    t.trackId && trackBuildState(t) === 'ready' ? [t.trackId] : []
-  );
-  const progress = await loadProgramCourseProgress(viewer.userId, readyTrackIds);
+  // Shared, request-scoped with the overview page's ToC read (same programId).
+  const progress = await getProgramProgress(viewer.userId, programId);
   const courses: RailCourse[] = ordered.map((t) => {
     const ready = Boolean(t.trackId && trackBuildState(t) === 'ready');
     const cp = ready ? progress.get(t.trackId!) : undefined;

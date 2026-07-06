@@ -7,6 +7,7 @@
 import Link from 'next/link';
 import type { Accent } from './accents';
 import { ChapterChip, ProgressDoodle } from './primitives';
+import { pctComplete } from '@/lib/format';
 
 export function TocEntry({
   chapter,
@@ -29,13 +30,13 @@ export function TocEntry({
   href: string;
   edge?: string; // right-edge label after the dotted leader, e.g. "3/4 built"
 }) {
-  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  const pct = pctComplete(done, total);
   const complete = total > 0 && done >= total;
 
   return (
     <Link
       href={href}
-      className="flex items-start gap-4 border-b border-dashed border-rule py-3.5 no-underline hover:bg-[rgba(255,224,102,.14)]"
+      className="nb-hl-hover flex items-start gap-4 border-b border-dashed border-rule py-3.5 no-underline"
     >
       <ChapterChip label={chapter} bg={accent.bg} className="mt-0.5" />
 

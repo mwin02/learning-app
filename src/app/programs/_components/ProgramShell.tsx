@@ -10,7 +10,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { createProgressStore } from '@/lib/progress-store';
+import { createProgressStore, type ProgressStore } from '@/lib/progress-store';
 import { Desk } from '@/components/notebook/Sheet';
 import {
   BookmarkRail,
@@ -19,6 +19,7 @@ import {
   type TabSection,
 } from '@/components/notebook/BookmarkTab';
 import { accentFor, romanize } from '@/components/notebook/accents';
+import { groupLessonsBySection } from './program-ui';
 
 // One rail entry per plan slot, in program order. Unready slots have trackId
 // null (or a non-ready track) and render inert.
@@ -59,25 +60,32 @@ export function ProgramShell({
   children: React.ReactNode;
 }) {
   // One persistence store per built track (DB-backed when signed in, else the
-  // dev bypass's localStorage). State initializer keeps the map stable across
-  // re-renders even though `courses` is a fresh array from the server each time.
-  const [stores] = useState(
-    () =>
-      new Map(
-        courses.flatMap((c) =>
-          c.trackId && c.ready ? [[c.trackId, createProgressStore(c.trackId, signedIn)] as const] : []
-        )
-      )
-  );
+  // dev bypass's localStorage). Held in a stable map across re-renders; the
+  // effect below reconciles it against `courses`, which arrives fresh from the
+  // server on each render.
+  const [stores] = useState(() => new Map<string, ProgressStore>());
 
   const [completed, setCompleted] = useState<Set<string>>(() => new Set(initialCompleted));
 
-  // Signed-in state is server-seeded (authoritative). The userId-less dev
-  // bypass persists to per-track localStorage instead — merge those on mount.
+  // Ensure a store exists for every ready track. AutoRefresh flips a track
+  // building→ready mid-session without remounting this shell, so a course that
+  // finished after mount would otherwise have no store — its toggles would flip
+  // in memory but never persist (stores.get → undefined). Runs on mount (seeds
+  // the initial tracks) and whenever a refresh reveals a newly-built course; for
+  // the signed-out dev bypass, newly added stores get their localStorage set
+  // merged in (signed-in state is server-seeded and authoritative).
   useEffect(() => {
-    if (signedIn) return;
+    const added: ProgressStore[] = [];
+    for (const c of courses) {
+      if (c.trackId && c.ready && !stores.has(c.trackId)) {
+        const store = createProgressStore(c.trackId, signedIn);
+        stores.set(c.trackId, store);
+        added.push(store);
+      }
+    }
+    if (signedIn || added.length === 0) return;
     let active = true;
-    Promise.all([...stores.values()].map((s) => s.load())).then((sets) => {
+    Promise.all(added.map((s) => s.load())).then((sets) => {
       if (!active) return;
       setCompleted((prev) => {
         const next = new Set(prev);
@@ -88,7 +96,7 @@ export function ProgramShell({
     return () => {
       active = false;
     };
-  }, [signedIn, stores]);
+  }, [courses, stores, signedIn]);
 
   const toggle = useCallback(
     (trackId: string, lessonId: string) => {
@@ -162,21 +170,18 @@ export function ProgramShell({
               current: l.id === activeLessonId,
               href: `${base}/${l.id}`,
             });
-            // Sectioned course → grouped; leftovers (SetNull ungrouped lessons)
-            // get an "Other" group; a flat course renders a plain lesson list.
+            // Sectioned course → grouped (with an "Other" group for SetNull
+            // ungrouped leftovers); a flat course renders a plain lesson list.
             let sections: TabSection[] | undefined;
             let lessons: TabLesson[] | undefined;
             if (course.ready) {
-              if (course.sections.length > 0) {
-                sections = course.sections.map((s) => ({
-                  id: s.id,
-                  title: s.title,
-                  lessons: course.lessons.filter((l) => l.sectionId === s.id).map(toLesson),
+              const grouped = groupLessonsBySection(course.lessons, course.sections);
+              if (grouped) {
+                sections = grouped.map((g) => ({
+                  id: g.id,
+                  title: g.title,
+                  lessons: g.lessons.map(toLesson),
                 }));
-                const loose = course.lessons.filter((l) => l.sectionId === null);
-                if (loose.length > 0) {
-                  sections.push({ id: '__loose', title: 'Other', lessons: loose.map(toLesson) });
-                }
               } else {
                 lessons = course.lessons.map(toLesson);
               }

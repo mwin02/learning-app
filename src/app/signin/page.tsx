@@ -31,7 +31,7 @@ export default async function SignInPage({
         <div className="nb-kicker">welcome back —</div>
         <h1 className="mb-1.5 mt-1 font-hand text-[52px] font-bold leading-[0.95] text-script">
           Sign in to your{' '}
-          <span style={{ background: 'linear-gradient(transparent 62%, rgba(255,224,102,.75) 62%)' }}>
+          <span style={{ background: 'linear-gradient(transparent 62%, rgb(var(--nb-highlighter) / .75) 62%)' }}>
             notebook
           </span>
         </h1>

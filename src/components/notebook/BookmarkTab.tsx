@@ -49,8 +49,12 @@ function LessonRow({ lesson }: { lesson: TabLesson }) {
         className={current ? 'flex-1 rounded-[2px] px-1 font-bold' : 'flex-1'}
         // The highlighter is a fixed yellow swipe, so its ink must be a fixed
         // dark too — `text-script` flips to near-white in dark mode and vanishes
-        // on the yellow. Keep dark ink regardless of theme.
-        style={current ? { background: 'rgba(255,224,102,.9)', color: '#22303f' } : undefined}
+        // on the yellow. The tokens are theme-fixed (not in the dark block).
+        style={
+          current
+            ? { background: 'rgb(var(--nb-highlighter) / .9)', color: 'var(--nb-highlighter-ink)' }
+            : undefined
+        }
       >
         {lesson.title}
       </span>
@@ -74,12 +78,13 @@ function LessonRow({ lesson }: { lesson: TabLesson }) {
 }
 
 // One collapsible section group inside an expanded tab. Open state is derived:
-// the section holding the current lesson is always open; a manual toggle
-// overrides the default (closed) for the rest.
+// the section defaults open when it holds the current lesson, closed otherwise —
+// but a manual toggle wins, so the current section can still be collapsed (a
+// bare `hasCurrent ||` pinned it open and made its chevron a no-op).
 function SectionGroup({ section }: { section: TabSection }) {
   const hasCurrent = section.lessons.some(isCurrent);
   const [manualOpen, setManualOpen] = useState<boolean | null>(null);
-  const open = hasCurrent || (manualOpen ?? false);
+  const open = manualOpen ?? hasCurrent;
   const done = section.lessons.filter((l) => l.state === 'done').length;
 
   return (

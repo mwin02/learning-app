@@ -8,10 +8,9 @@
 import { notFound } from 'next/navigation';
 import { getProgramAccess } from '@/lib/auth/program-access';
 import { getViewer } from '@/lib/auth/viewer';
-import { loadProgramCourseProgress } from '@/lib/program-progress';
+import { getProgramProgress } from '@/lib/program-progress';
 import { Sheet } from '@/components/notebook/Sheet';
 import { NotebookProgramHome } from '../_components/NotebookProgramHome';
-import { trackBuildState } from '../_components/program-ui';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,11 +25,9 @@ export default async function ProgramHomePage({
   if (!access.enrolled) return null; // the layout renders the EnrollPrompt instead
 
   const program = access.view;
-  const builtTrackIds = program.phases
-    .flatMap((ph) => ph.tracks)
-    .flatMap((t) => (t.trackId && trackBuildState(t) === 'ready' ? [t.trackId] : []));
-  // cache()-free but cheap; re-runs per navigation so the ToC counts stay fresh.
-  const progress = await loadProgramCourseProgress(viewer.userId, builtTrackIds);
+  // Shared, request-scoped with the layout's rail read (same programId) — one
+  // fetch serves both. See getProgramProgress.
+  const progress = await getProgramProgress(viewer.userId, programId);
 
   return (
     <Sheet>

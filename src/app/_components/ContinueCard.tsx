@@ -6,6 +6,7 @@
 import Link from 'next/link';
 import { accentFor } from '@/components/notebook/accents';
 import { ProgressDoodle } from '@/components/notebook/primitives';
+import { pctComplete } from '@/lib/format';
 
 export type ContinueCardData = {
   programId: string;
@@ -19,7 +20,7 @@ export type ContinueCardData = {
 
 export function ContinueCard({ card }: { card: ContinueCardData }) {
   const accent = accentFor(0);
-  const pct = card.total > 0 ? Math.round((card.done / card.total) * 100) : 0;
+  const pct = pctComplete(card.done, card.total);
   const complete = card.total > 0 && card.done >= card.total;
 
   return (
