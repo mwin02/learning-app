@@ -21,6 +21,8 @@ import { ensurePathMap } from '@/lib/agents/map/ensure-path-map';
 import { remediatePath } from '@/lib/agents/track/remediate-path';
 import { buildTrack } from '@/lib/agents/track/build-track';
 import { backfillConceptBanks } from '@/lib/agents/content/generate-concept-bank';
+import { addFrontierConcept } from '@/lib/agents/track/add-frontier-concept';
+import { MAX_FRONTIER_PER_TOPIC } from '@/lib/config';
 import { reclaimStaleRemediationJobs } from '@/lib/agents/track/remediation-job';
 import {
   claimNextQueued,
@@ -32,7 +34,7 @@ import { maybeAssembleProgram, sweepStuckPrograms } from '@/lib/services/program
 export type ProcessOutcome = 'fulfilled' | 'failed';
 
 // Injectable pipeline stages (same `opts` pattern as enqueueProgram's `plan`): the
-// four expensive/LLM-backed steps default to the real implementations, so production
+// expensive/LLM-backed steps default to the real implementations, so production
 // callers pass nothing, while tests stub them to exercise the branch logic without an
 // LLM. finishCourseRequest stays real (the DB write the tests assert against).
 export type PipelineStages = {
@@ -40,6 +42,7 @@ export type PipelineStages = {
   remediate?: typeof remediatePath;
   build?: typeof buildTrack;
   backfillBanks?: typeof backfillConceptBanks;
+  addFrontier?: typeof addFrontierConcept;
 };
 
 // processCourseRequest adds one more seam over the pipeline: the post-fulfill Program
@@ -81,6 +84,7 @@ async function processRequestPipeline(cr: CourseRequest, opts: PipelineStages = 
   const remediate = opts.remediate ?? remediatePath;
   const build = opts.build ?? buildTrack;
   const backfillBanks = opts.backfillBanks ?? backfillConceptBanks;
+  const addFrontier = opts.addFrontier ?? addFrontierConcept;
 
   console.log('[course-worker] processing', { id: cr.id, topic: cr.topic });
   try {
@@ -131,6 +135,35 @@ async function processRequestPipeline(cr: CourseRequest, opts: PipelineStages = 
         pathId: map.pathId,
         err,
       });
+    }
+
+    // Best-effort: execute the request's recorded frontier-concept requests (the
+    // decompose-agent decides them as data; this is the one execution point). Must
+    // run BEFORE buildTrack — the composer snapshots the map's concepts at build
+    // time, so a frontier concept added later would miss this learner's Track.
+    // Sequential (each may web-source, 30–60s) and per-request non-fatal: one bad
+    // request skips to the next, and no frontier failure ever fails the Track.
+    if (cr.frontierConcepts.length > 0) {
+      if (cr.frontierConcepts.length > MAX_FRONTIER_PER_TOPIC) {
+        console.warn('[course-worker] frontier requests over cap, truncating', {
+          id: cr.id,
+          requested: cr.frontierConcepts.length,
+          cap: MAX_FRONTIER_PER_TOPIC,
+        });
+      }
+      for (const request of cr.frontierConcepts.slice(0, MAX_FRONTIER_PER_TOPIC)) {
+        try {
+          const res = await addFrontier({ pathId: map.pathId, request });
+          console.log('[course-worker] frontier request', { id: cr.id, pathId: map.pathId, request, ...res });
+        } catch (err) {
+          console.warn('[course-worker] frontier request failed (non-fatal)', {
+            id: cr.id,
+            pathId: map.pathId,
+            request,
+            err,
+          });
+        }
+      }
     }
 
     const track = await build({

@@ -445,6 +445,14 @@ export const MAX_PROGRAM_TOPICS = 6;
 // check — acceptable (off-by-one on a free cap, not a security boundary).
 export const FREE_PROGRAMS_PER_MONTH = 3;
 
+// Decomposer-agent plan: per-topic cap on frontier-concept requests
+// (CourseRequest.frontierConcepts). Each request the worker executes is one
+// addFrontierConcept call — potentially a web-sourcing ladder (30–60s, the
+// app's expensive operation) — so this is a real budget lever, not hygiene.
+// Enforced in the agent's propose_course tool (Block 2) AND defensively in the
+// worker's execution loop (excess entries are logged + skipped, never fatal).
+export const MAX_FRONTIER_PER_TOPIC = 2;
+
 // Phase 2.75b: the per-topic floor for the deterministic hours/week split — every
 // surviving topic gets at least this many hours/week so no topic rounds to zero and
 // silently vanishes from the plan. When Σ floors exceeds the program's
