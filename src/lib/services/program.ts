@@ -92,6 +92,9 @@ export async function enqueueProgram(
             goal: t.rationale,
             hoursPerWeek: t.hoursPerWeek,
             timeframeWeeks: t.timeframeWeeks,
+            // Frontier requests the decompose-agent recorded for this topic; the
+            // worker executes them (addFrontierConcept) before buildTrack.
+            frontierConcepts: t.frontierConcepts,
             // targetMastery left null (composer defaults beginner) for v1.
           },
         });
