@@ -15,6 +15,7 @@ const T = (key: string, over: Partial<ProgramTopicInput> = {}): ProgramTopicInpu
   phaseLabel: 'Phase 1',
   orderHint: 1,
   rationale: `why ${key}`,
+  frontierConcepts: [],
   ...over,
 });
 const sum = (ns: number[]) => ns.reduce((a, b) => a + b, 0);

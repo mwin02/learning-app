@@ -42,6 +42,10 @@ export type ProgramTopicInput = {
   // One-sentence "why this topic for this goal" — becomes the child request's `goal`
   // (drives intent inference) and the ProgramPath display rationale.
   rationale: string;
+  // Decomposer-agent plan (Block 3): the agent's frontier-concept requests for this
+  // topic, threaded through untouched (the allocator never reads them) to land on the
+  // fanned-out CourseRequest, whose worker hook executes them.
+  frontierConcepts: string[];
 };
 
 export type AllocatedProgramTopic = {
@@ -55,6 +59,7 @@ export type AllocatedProgramTopic = {
   priorityTier: PriorityTier;
   weight: number;
   rationale: string;
+  frontierConcepts: string[];
 };
 
 export type DroppedProgramTopic = {
@@ -144,6 +149,7 @@ export function allocateProgramBudget(
     priorityTier: t.priorityTier,
     weight: t.weight,
     rationale: t.rationale,
+    frontierConcepts: t.frontierConcepts,
   }));
 
   return { topics: allocated, dropped };

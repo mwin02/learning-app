@@ -5,10 +5,12 @@
 // alias-mint aside); persistence is enqueueProgram's job.
 //
 // Three stages:
-//   1. decomposeProgram — one Gemini call: goal → ≤N single-topic learning topics,
-//      each with an importance/gap WEIGHT, priority tier, phase label, cross-topic
-//      order hint, and a one-sentence rationale. The anti-list is a PROMPT CONSTRAINT
-//      (excluded topics never enter the list), not a downstream filter.
+//   1. decomposeProgramAgent (decompose-agent.ts) — the tool-using decomposition:
+//      goal → ≤N single-topic learning topics, each with an importance/gap WEIGHT,
+//      priority tier, phase label, cross-topic order hint, a one-sentence rationale,
+//      and per-topic frontier-concept requests. The anti-list is a PROMPT CONSTRAINT
+//      (excluded topics never enter the list), not a downstream filter. The one-shot
+//      decomposeProgram below is kept as the injectable rollback.
 //   2. gate + dedup — each proposed topic must pass the existing validateTopic gate
 //      (canonical slug + domain check); out-of-domain topics are dropped here, and
 //      two labels that canonicalize to the same slug collapse to one (higher weight
@@ -26,7 +28,8 @@ import { getModel } from '@/lib/ai/models';
 import { validateTopic, type TopicGateResult } from '@/lib/agents/topic-gate';
 import { listCanonicals, repointCanonical } from '@/lib/agents/topic-registry';
 import { TOPIC_SLUGS } from '@/types/resource';
-import { MAX_PROGRAM_TOPICS } from '@/lib/config';
+import { MAX_PROGRAM_TOPICS, MAX_FRONTIER_PER_TOPIC } from '@/lib/config';
+import { decomposeProgramAgent } from '@/lib/agents/program/decompose-agent';
 import {
   allocateProgramBudget,
   type AllocatedProgramTopic,
@@ -51,6 +54,12 @@ const ProposedTopicSchema = z.object({
   phaseLabel: z.string().min(1),
   orderHint: z.number().int(),
   rationale: z.string().min(1),
+  // Decomposer-agent plan (Block 3): per-topic frontier-concept requests, threaded
+  // untouched through gate/reconcile/budget to the fanned-out CourseRequest. The
+  // agent's propose_course tool sanitizes + caps these; the one-shot decomposeProgram
+  // path never sets them (defaulted — Gemini routinely omits defaulted fields, which
+  // is exactly right here).
+  frontierConcepts: z.array(z.string()).default([]),
 });
 // Phase 3c: the decomposition also names the Program. title/description are the
 // SHAREABLE display surface (Program.title/description) — rendered to non-creators,
@@ -282,6 +291,11 @@ export async function reconcileScopedTopic(
 // the higher-weight proposal's fields (a core tier wins a weight tie), but NEVER
 // downgrade the tier — the merged slot is core if EITHER label was core (else a
 // higher-scoring nice_to_have would silently demote a core need to budget-droppable).
+// Frontier requests are UNIONED (winner's first, deduped) rather than winner-takes-all —
+// both proposals' enrichment needs are real — then re-capped at MAX_FRONTIER_PER_TOPIC
+// so a merge can't smuggle a topic past the per-topic sourcing budget. Used by BOTH the
+// Stage-2 dedup fold and the Stage-2.5 reconciled fold, so a canonical collapse at
+// either stage unions (the plan's ambiguity #5).
 function mergeTopics(existing: ProgramTopicInput, candidate: ProgramTopicInput): ProgramTopicInput {
   const candidateWins =
     candidate.weight > existing.weight ||
@@ -289,11 +303,15 @@ function mergeTopics(existing: ProgramTopicInput, candidate: ProgramTopicInput):
       candidate.priorityTier === PriorityTier.core &&
       existing.priorityTier === PriorityTier.nice_to_have);
   const winner = candidateWins ? candidate : existing;
+  const loser = candidateWins ? existing : candidate;
   const priorityTier =
     candidate.priorityTier === PriorityTier.core || existing.priorityTier === PriorityTier.core
       ? PriorityTier.core
       : PriorityTier.nice_to_have;
-  return { ...winner, priorityTier };
+  const frontierConcepts = [
+    ...new Set([...winner.frontierConcepts, ...loser.frontierConcepts]),
+  ].slice(0, MAX_FRONTIER_PER_TOPIC);
+  return { ...winner, priorityTier, frontierConcepts };
 }
 
 // The full plan pass. `decompose` / `gate` / `reconcile` / `listLibrary` are injectable
@@ -308,7 +326,11 @@ export async function planProgram(
     listLibrary?: () => Promise<string[]>;
   } = {},
 ): Promise<ProgramPlan> {
-  const decompose = opts.decompose ?? ((i: ProgramPlanInput) => decomposeProgram(i));
+  // Stage-1 default is the tool-using decompose-agent (decomposer plan Block 3); the
+  // seam stays injectable so fixtures (and any rollback) can pass decomposeProgram or
+  // a stub. The agent's output is a ProgramDecomposition whose topics also carry
+  // frontierConcepts, which the stages below thread through to the allocator.
+  const decompose = opts.decompose ?? ((i: ProgramPlanInput) => decomposeProgramAgent(i));
   const gate = opts.gate ?? ((t: string) => validateTopic(t));
   const reconcile = opts.reconcile ?? ((c: string, lib: string[]) => reconcileScopedTopic(c, lib));
   const listLibrary = opts.listLibrary ?? listLibraryTopics;
@@ -358,6 +380,7 @@ export async function planProgram(
       phaseLabel: p.phaseLabel,
       orderHint: p.orderHint,
       rationale: p.rationale,
+      frontierConcepts: p.frontierConcepts,
     };
     const existing = bySlug.get(verdict.canonical);
     bySlug.set(verdict.canonical, existing ? mergeTopics(existing, candidate) : candidate);
