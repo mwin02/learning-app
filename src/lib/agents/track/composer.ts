@@ -29,6 +29,7 @@ import { Output, generateText } from 'ai';
 import { z } from 'zod';
 import { ConceptMembership, ConceptResourceRole, Difficulty, TrackIntent } from '@prisma/client';
 import { getModel } from '@/lib/ai/models';
+import { recordUsage } from '@/lib/log';
 import { TIME_WEIGHTS, type TimeWeight, type DepthTier } from '@/lib/agents/track/allocate';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 
@@ -217,6 +218,7 @@ export async function composeTrack(args: {
 
   const raw = result.experimental_output;
   // TODO(observability): fold into the structured logger when it lands.
+  recordUsage('track.composer', result.usage);
   console.log('[track-composer]', {
     topic,
     modelId,

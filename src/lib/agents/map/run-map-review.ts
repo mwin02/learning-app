@@ -12,6 +12,7 @@
 import { Output, generateText } from 'ai';
 import { z } from 'zod';
 import { getModel } from '@/lib/ai/models';
+import { recordUsage } from '@/lib/log';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 import { loadAssembledMap, writePathReview } from '@/lib/agents/map/path-review';
 import {
@@ -114,6 +115,7 @@ async function callCritic(
   });
   const validSlugs = new Set(map.concepts.map((c) => c.slug));
   const findings = normalizeLlmFindings(result.experimental_output.findings, validSlugs);
+  recordUsage('map.review-critic', result.usage);
   console.log('[map-review-critic]', {
     topic: map.topic,
     modelId,

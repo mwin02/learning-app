@@ -15,6 +15,7 @@
 import { ZodError } from 'zod';
 import { generateProgramInputSchema } from '@/lib/api/generate-program-schema';
 import { withAuth } from '@/lib/api/with-auth';
+import { log, logError, runWithTrace } from '@/lib/log';
 import { enqueueProgram } from '@/lib/services/program';
 import {
   findRecentDuplicate,
@@ -37,7 +38,11 @@ function errorResponse(status: number, code: ErrorCode, error: string, details?:
   return Response.json(body, { status });
 }
 
-export const POST = withAuth(async (req, session) => {
+// H3 (audit 9.4): the whole handler runs inside a trace — every log line down
+// the plan pass carries this traceId, and recordUsage calls anywhere in the
+// call graph accumulate into the snapshot enqueueProgram persists as
+// Program.planUsage.
+export const POST = withAuth(async (req, session) => runWithTrace(crypto.randomUUID(), async () => {
   let raw: unknown;
   try {
     raw = await req.json();
@@ -67,7 +72,7 @@ export const POST = withAuth(async (req, session) => {
     // when the user is at a limit, not a confusing 429 for work that already exists.
     const duplicate = await findRecentDuplicate(session.userId, inputHash);
     if (duplicate) {
-      console.log('[generate-program] deduplicated', {
+      log('generate-program.deduplicated', {
         programId: duplicate.id,
         userId: session.userId,
       });
@@ -110,7 +115,7 @@ export const POST = withAuth(async (req, session) => {
   try {
     result = await enqueueProgram({ ...input, userId: session.userId, inputHash });
   } catch (err) {
-    console.error('[generate-program] unexpected enqueue failure', err);
+    logError('generate-program.enqueue-threw', { err });
     return errorResponse(500, 'INTERNAL', 'Internal error.');
   }
 
@@ -120,7 +125,7 @@ export const POST = withAuth(async (req, session) => {
       // client's. Mirror generate-path: generic 500, never echo the raw exception
       // (result.error) which can carry internal detail. The failed Program is still
       // persisted and its id returned so the failure is inspectable.
-      console.error('[generate-program] plan/fan-out failed', {
+      logError('generate-program.plan-failed', {
         programId: result.programId,
         userId: session.userId,
       });
@@ -135,7 +140,7 @@ export const POST = withAuth(async (req, session) => {
     });
   }
 
-  console.log('[generate-program] enqueued', {
+  log('generate-program.enqueued', {
     programId: result.programId,
     topicCount: result.topicCount,
     userId: session.userId,
@@ -144,4 +149,4 @@ export const POST = withAuth(async (req, session) => {
     { programId: result.programId, status: result.status, topicCount: result.topicCount },
     { status: 202 },
   );
-});
+}));

@@ -25,6 +25,7 @@ import { generateText, generateObject, tool, stepCountIs } from 'ai';
 import { z } from 'zod';
 import type { PathStatus, ConceptMembership } from '@prisma/client';
 import { getModel, type ResolvedModel } from '@/lib/ai/models';
+import { log, logWarn, recordUsage } from '@/lib/log';
 import { listCanonicals } from '@/lib/agents/topic-registry';
 import { TOPIC_SLUGS } from '@/types/resource';
 import {
@@ -103,7 +104,7 @@ export async function decomposeProgramAgent(
       return await runAttempt();
     } catch (err) {
       lastErr = err;
-      console.warn('[decompose-agent] attempt failed', {
+      logWarn('decompose-agent.attempt-failed', {
         attempt,
         error: err instanceof Error ? err.message : String(err),
       });
@@ -127,7 +128,7 @@ export async function decomposeProgramAgent(
         execute: async ({ topic }) => {
           toolCalls++;
           const view = await getPathMap(topic.trim());
-          console.log('[decompose-agent] get_path_map', {
+          log('decompose-agent.get-path-map', {
             topic,
             exists: view.exists,
             concepts: view.exists ? view.concepts.length : 0,
@@ -167,7 +168,7 @@ export async function decomposeProgramAgent(
             rationale,
             frontierConcepts: frontier.slice(0, MAX_FRONTIER_PER_TOPIC),
           });
-          console.log('[decompose-agent] propose_course', {
+          log('decompose-agent.propose-course', {
             topic: label,
             inLibrary: librarySet.has(label),
             frontier: frontier.slice(0, MAX_FRONTIER_PER_TOPIC),
@@ -196,7 +197,7 @@ export async function decomposeProgramAgent(
             return { ok: false, error: 'No courses proposed yet — propose_course at least one topic first.' };
           }
           framing = { title, description };
-          console.log('[decompose-agent] finalize', { title, topics: draft.size });
+          log('decompose-agent.finalize', { title, topics: draft.size });
           return { ok: true, message: 'Decomposition finalized. You are done — stop here.' };
         },
       }),
@@ -211,6 +212,8 @@ export async function decomposeProgramAgent(
       system: systemPrompt(MAX_PROGRAM_TOPICS),
       prompt: buildAgentPrompt(input, existingTopics),
     });
+    // totalUsage sums every step of the tool loop (usage is the final step only).
+    recordUsage('plan.decompose-agent', result.totalUsage);
 
     const topics = [...draft.values()];
     if (topics.length === 0) {
@@ -228,13 +231,13 @@ export async function decomposeProgramAgent(
     // the GOAL text must never leak here).
     let fr = framing as { title: string; description: string } | null;
     if (!fr) {
-      console.warn('[decompose-agent] loop ended without finalize; synthesizing framing', {
+      logWarn('decompose-agent.finalize-missed', {
         topics: topics.map((t) => t.topic),
       });
       try {
         fr = await generateFallbackFraming(topics.map((t) => t.topic), opts.fallbackModel);
       } catch (err) {
-        console.warn('[decompose-agent] fallback framing failed; using topic-list framing', err);
+        logWarn('decompose-agent.fallback-framing-failed', { err });
         const names = topics.map((t) => t.topic).join(', ');
         fr = {
           title: `Learning program: ${names}`.slice(0, 120),
@@ -243,7 +246,7 @@ export async function decomposeProgramAgent(
       }
     }
 
-    console.log('[decompose-agent] decomposed', {
+    log('decompose-agent.decomposed', {
       modelId,
       goalLen: input.goal.length,
       groundedOn: existingTopics.length,
@@ -254,7 +257,7 @@ export async function decomposeProgramAgent(
       finalized: framing !== null,
       toolCalls,
       steps: result.steps?.length,
-      usage: result.usage,
+      usage: result.totalUsage,
       finishReason: result.finishReason,
     });
 
@@ -282,6 +285,7 @@ async function generateFallbackFraming(
       'Write the public display framing for a multi-topic learning program: a short neutral title (≤ 60 chars, subject-focused) and a 1–2 sentence description of what it covers and who it suits. You are given ONLY the topic names — do not invent audience details.',
     prompt: `Program topics: ${topicNames.join(', ')}`,
   });
+  recordUsage('plan.fallback-framing', result.usage);
   return result.object;
 }
 

@@ -24,6 +24,7 @@
 import { generateObject } from 'ai';
 import { z } from 'zod';
 import { getModel } from '@/lib/ai/models';
+import { recordUsage } from '@/lib/log';
 import { TOPIC_SLUGS } from '@/types/resource';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 import {
@@ -112,6 +113,7 @@ const defaultClassify: TopicClassifier = async (normalized, canonicals) => {
     }
   }
   if (!result) throw lastErr;
+  recordUsage('topic-gate', result.usage);
   console.log('[topic-gate] call', { topic: normalized, usage: result.usage, verdict: result.object });
   return result.object;
 };

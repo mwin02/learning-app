@@ -24,6 +24,7 @@ import { z } from 'zod';
 import { ConceptMembership, Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { getModel } from '@/lib/ai/models';
+import { recordUsage } from '@/lib/log';
 import { findCycle } from '@/lib/agents/map/cycle';
 import { attachCandidates } from '@/lib/agents/map/attach-candidates';
 import { recomputeReadiness } from '@/lib/agents/map/recompute-readiness';
@@ -224,6 +225,7 @@ async function authorSplit(args: {
   });
 
   const out = result.experimental_output;
+  recordUsage('track.split-author', result.usage);
   console.log('[split-author]', {
     concept: concept.slug,
     modelId,

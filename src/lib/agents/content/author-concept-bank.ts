@@ -22,6 +22,7 @@ import { Output, generateText } from 'ai';
 import { z } from 'zod';
 import { ExerciseKind } from '@prisma/client';
 import { getModel } from '@/lib/ai/models';
+import { recordUsage } from '@/lib/log';
 import { CONCEPT_BANK_TARGET_QUESTIONS } from '@/lib/config';
 import { mcqHasOptions } from '@/lib/agents/content/mcq-options';
 import type { OnTrace } from '@/lib/agents/agent-trace';
@@ -102,6 +103,7 @@ export async function authorConceptBank(args: {
     }));
 
   const dropped = raw.questions.length - questions.length;
+  recordUsage('content.concept-bank', result.usage);
   console.log('[content-author-concept-bank]', {
     topic,
     conceptSlug,

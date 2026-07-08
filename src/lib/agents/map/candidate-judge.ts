@@ -17,6 +17,7 @@ import { Output, generateText } from 'ai';
 import { z } from 'zod';
 import { ConceptResourceRole } from '@prisma/client';
 import { getModel } from '@/lib/ai/models';
+import { recordUsage } from '@/lib/log';
 import type { SearchResult } from '@/lib/agents/tools/search-resources';
 
 export type JudgedCandidate = {
@@ -77,6 +78,7 @@ export async function judgeCandidates(args: {
   });
 
   // TODO(observability): fold into the structured logger when it lands.
+  recordUsage('map.candidate-judge', result.usage);
   console.log('[map-candidate-judge]', {
     concept: conceptSlug,
     modelId,

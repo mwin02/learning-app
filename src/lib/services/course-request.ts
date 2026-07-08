@@ -10,9 +10,10 @@
 // RemediationJob active-per-path index), so concurrent requests for the same
 // building topic serialize there, not here.
 
-import { CourseRequestStatus, Difficulty, type CourseRequest } from '@prisma/client';
+import { CourseRequestStatus, Difficulty, Prisma, type CourseRequest } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { COURSE_REQUEST_STALE_MS } from '@/lib/config';
+import { logWarn, type UsageSnapshot } from '@/lib/log';
 
 export type EnqueueInput = {
   topic: string;
@@ -65,9 +66,11 @@ export async function claimNextQueued(): Promise<CourseRequest | null> {
   return prisma.courseRequest.findUniqueOrThrow({ where: { id: rows[0].id } });
 }
 
+// buildUsage: H3 (audit 9.4) — the job trace's accumulated token usage, written
+// alongside the terminal state. Null/absent = not measured.
 export type FinishInput =
-  | { status: 'fulfilled'; trackId: string }
-  | { status: 'failed'; error: string };
+  | { status: 'fulfilled'; trackId: string; buildUsage?: UsageSnapshot | null }
+  | { status: 'failed'; error: string; buildUsage?: UsageSnapshot | null };
 
 // Move a RUNNING request to a terminal state. Guarded on status='running' (hence
 // updateMany, not update — `update` can't filter on status): a concurrent
@@ -78,15 +81,16 @@ export async function finishCourseRequest(
   id: string,
   input: FinishInput,
 ): Promise<{ finished: boolean }> {
+  const buildUsage = input.buildUsage ?? Prisma.JsonNull;
   const { count } = await prisma.courseRequest.updateMany({
     where: { id, status: CourseRequestStatus.running },
     data:
       input.status === 'fulfilled'
-        ? { status: CourseRequestStatus.fulfilled, trackId: input.trackId }
-        : { status: CourseRequestStatus.failed, error: input.error },
+        ? { status: CourseRequestStatus.fulfilled, trackId: input.trackId, buildUsage }
+        : { status: CourseRequestStatus.failed, error: input.error, buildUsage },
   });
   if (count === 0) {
-    console.warn('[course-request] finish no-op; request no longer running (reclaimed?)', {
+    logWarn('course-request.finish-noop', {
       id,
       attemptedStatus: input.status,
     });
@@ -109,7 +113,7 @@ export async function reclaimStale(olderThanMs: number = COURSE_REQUEST_STALE_MS
     data: { status: CourseRequestStatus.queued, claimedAt: null },
   });
   if (count > 0) {
-    console.warn('[course-request] reclaimed stale running requests → queued', { count, cutoff });
+    logWarn('course-request.reclaimed-stale', { count, cutoff });
   }
   return count;
 }

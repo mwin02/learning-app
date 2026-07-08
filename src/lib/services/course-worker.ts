@@ -23,6 +23,7 @@ import { buildTrack } from '@/lib/agents/track/build-track';
 import { backfillConceptBanks } from '@/lib/agents/content/generate-concept-bank';
 import { addFrontierConcept } from '@/lib/agents/track/add-frontier-concept';
 import { MAX_FRONTIER_PER_TOPIC } from '@/lib/config';
+import { log, logError, logWarn, runWithTrace, traceUsageSnapshot } from '@/lib/log';
 import { reclaimStaleRemediationJobs } from '@/lib/agents/track/remediation-job';
 import {
   claimNextQueued,
@@ -66,14 +67,20 @@ export async function reclaimStaleClaims(): Promise<{ courseRequests: number; re
 // was the last sibling to reach a terminal state, at which point it finalizes the
 // Program. Non-fatal: a hook failure must never fail an already-recorded request.
 export async function processCourseRequest(cr: CourseRequest, opts: ProcessOpts = {}): Promise<ProcessOutcome> {
-  const outcome = await processRequestPipeline(cr, opts);
-  if (cr.programId) {
-    const assembleProgram = opts.assembleProgram ?? maybeAssembleProgram;
-    await assembleProgram(cr.programId).catch((err) =>
-      console.error('[course-worker] assembleProgram failed (non-fatal)', { programId: cr.programId, err }),
-    );
-  }
-  return outcome;
+  // H3 (audit 9.4): the whole job runs inside a trace keyed by the request id —
+  // every log line below (and in the agents underneath) carries traceId=cr.id,
+  // and recordUsage calls anywhere in the pipeline accumulate into the snapshot
+  // finishCourseRequest persists as CourseRequest.buildUsage.
+  return runWithTrace(cr.id, async () => {
+    const outcome = await processRequestPipeline(cr, opts);
+    if (cr.programId) {
+      const assembleProgram = opts.assembleProgram ?? maybeAssembleProgram;
+      await assembleProgram(cr.programId).catch((err) =>
+        logError('course-worker.assemble-failed', { programId: cr.programId, err }),
+      );
+    }
+    return outcome;
+  });
 }
 
 // The per-topic build pipeline: ensurePathMap → remediate → buildTrack → finish.
@@ -86,18 +93,18 @@ async function processRequestPipeline(cr: CourseRequest, opts: PipelineStages = 
   const backfillBanks = opts.backfillBanks ?? backfillConceptBanks;
   const addFrontier = opts.addFrontier ?? addFrontierConcept;
 
-  console.log('[course-worker] processing', { id: cr.id, topic: cr.topic });
+  log('course-worker.processing', { id: cr.id, topic: cr.topic });
   try {
     const map = await ensureMap({ topic: cr.topic });
     let status = map.status;
-    console.log('[course-worker] map ready', { id: cr.id, pathId: map.pathId, status, reclaimed: map.reclaimed });
+    log('course-worker.map-ready', { id: cr.id, pathId: map.pathId, status, reclaimed: map.reclaimed });
 
     // A `building` map (thin/novel topic, or a reclaimed rebuild that hit holes)
     // gets one remediation pass: source gaps / split conflations, then relax or
     // escalate the leftovers. remediatePath single-flights via RemediationJob.
     if (status === PathStatus.building) {
       const rem = await remediate(map.pathId);
-      console.log('[course-worker] remediation', { id: cr.id, outcome: rem.outcome, status: rem.status, escalated: rem.escalatedConceptSlugs });
+      log('course-worker.remediation', { id: cr.id, outcome: rem.outcome, status: rem.status, escalated: rem.escalatedConceptSlugs });
       if (rem.outcome === 'busy') {
         // Under single-worker concurrency this is an anomaly (stale jobs are
         // reclaimed by age before we get here). Fail with a retryable diagnostic
@@ -105,6 +112,7 @@ async function processRequestPipeline(cr: CourseRequest, opts: PipelineStages = 
         await finishCourseRequest(cr.id, {
           status: 'failed',
           error: 'remediation busy — another job holds this Path (likely a concurrency anomaly)',
+          buildUsage: traceUsageSnapshot(),
         });
         return 'failed';
       }
@@ -117,6 +125,7 @@ async function processRequestPipeline(cr: CourseRequest, opts: PipelineStages = 
       await finishCourseRequest(cr.id, {
         status: 'failed',
         error: `Path '${map.pathId}' did not reach spine_ready (status=${status}); spine holes left uncoverable`,
+        buildUsage: traceUsageSnapshot(),
       });
       return 'failed';
     }
@@ -128,9 +137,9 @@ async function processRequestPipeline(cr: CourseRequest, opts: PipelineStages = 
     // Track the learner is waiting on.
     try {
       const banks = await backfillBanks({ pathId: map.pathId });
-      console.log('[course-worker] concept banks', { id: cr.id, pathId: map.pathId, ...banks });
+      log('course-worker.concept-banks', { id: cr.id, pathId: map.pathId, ...banks });
     } catch (err) {
-      console.warn('[course-worker] concept bank backfill failed (non-fatal)', {
+      logWarn('course-worker.bank-backfill-failed', {
         id: cr.id,
         pathId: map.pathId,
         err,
@@ -145,7 +154,7 @@ async function processRequestPipeline(cr: CourseRequest, opts: PipelineStages = 
     // request skips to the next, and no frontier failure ever fails the Track.
     if (cr.frontierConcepts.length > 0) {
       if (cr.frontierConcepts.length > MAX_FRONTIER_PER_TOPIC) {
-        console.warn('[course-worker] frontier requests over cap, truncating', {
+        logWarn('course-worker.frontier-over-cap', {
           id: cr.id,
           requested: cr.frontierConcepts.length,
           cap: MAX_FRONTIER_PER_TOPIC,
@@ -154,9 +163,9 @@ async function processRequestPipeline(cr: CourseRequest, opts: PipelineStages = 
       for (const request of cr.frontierConcepts.slice(0, MAX_FRONTIER_PER_TOPIC)) {
         try {
           const res = await addFrontier({ pathId: map.pathId, request });
-          console.log('[course-worker] frontier request', { id: cr.id, pathId: map.pathId, request, ...res });
+          log('course-worker.frontier-request', { id: cr.id, pathId: map.pathId, request, ...res });
         } catch (err) {
-          console.warn('[course-worker] frontier request failed (non-fatal)', {
+          logWarn('course-worker.frontier-request-failed', {
             id: cr.id,
             pathId: map.pathId,
             request,
@@ -176,13 +185,23 @@ async function processRequestPipeline(cr: CourseRequest, opts: PipelineStages = 
     });
 
     await logBuiltTrack(cr, track.trackId);
-    await finishCourseRequest(cr.id, { status: 'fulfilled', trackId: track.trackId });
-    console.log('[course-worker] fulfilled', { id: cr.id, trackId: track.trackId, lessons: track.lessonCount });
+    const buildUsage = traceUsageSnapshot();
+    await finishCourseRequest(cr.id, { status: 'fulfilled', trackId: track.trackId, buildUsage });
+    log('course-worker.fulfilled', {
+      id: cr.id,
+      trackId: track.trackId,
+      lessons: track.lessonCount,
+      buildUsage: buildUsage?.totals,
+    });
     return 'fulfilled';
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error('[course-worker] failed', { id: cr.id, topic: cr.topic, error: message });
-    await finishCourseRequest(cr.id, { status: 'failed', error: message }).catch(() => {});
+    logError('course-worker.failed', { id: cr.id, topic: cr.topic, error: message });
+    await finishCourseRequest(cr.id, {
+      status: 'failed',
+      error: message,
+      buildUsage: traceUsageSnapshot(),
+    }).catch(() => {});
     return 'failed';
   }
 }
@@ -246,6 +265,6 @@ async function logBuiltTrack(cr: CourseRequest, trackId: string): Promise<void> 
     ].filter((s) => s !== '');
     console.log(lines.join('\n'));
   } catch (err) {
-    console.warn('[course-worker] logBuiltTrack failed (non-fatal)', { trackId, err });
+    logWarn('course-worker.log-built-track-failed', { trackId, err });
   }
 }

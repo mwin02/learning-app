@@ -18,6 +18,7 @@
 import { Output, generateText } from 'ai';
 import { z } from 'zod';
 import { getModel } from '@/lib/ai/models';
+import { recordUsage } from '@/lib/log';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 import type { AuthoredSpine } from '@/lib/agents/map/cycle';
 
@@ -114,6 +115,7 @@ export async function reviewSpine(args: ReviewSpineArgs): Promise<SpineReview> {
   };
 
   // TODO(observability): fold into the structured logger when it lands.
+  recordUsage('map.spine-review', result.usage);
   console.log('[map-spine-review]', {
     topic,
     modelId,
