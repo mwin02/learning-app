@@ -3,10 +3,12 @@
 //
 // loadAssembledMap builds the AssembledMap the pure critic reasons over (every
 // concept + its chosen primary, every edge). writePathReview persists the findings
-// IDEMPOTENTLY: it replaces the OPEN (resolved=false) rows for the Path and leaves
-// resolved rows untouched, so a backfill re-review (Block 2) never accumulates
-// duplicates and never clobbers an operator's decision (Block 3). No mutation of
-// the map or Path.status here — the review is detect-and-flag only.
+// IDEMPOTENTLY: it replaces the OPEN (resolved=false) rows for the Path, leaves
+// resolved rows untouched, AND suppresses any freshly-detected finding an operator
+// already resolved (same kind + concept set) — so a backfill re-review (Block 2)
+// never accumulates duplicates, never clobbers a decision, and never resurrects a
+// dismissed/kept finding as a new open row (Block 3). No mutation of the map or
+// Path.status here — the review is detect-and-flag only.
 
 import { Prisma, PathReviewResolution } from '@prisma/client';
 import { prisma } from '@/lib/db';
@@ -57,19 +59,37 @@ export async function loadAssembledMap(pathId: string): Promise<AssembledMap> {
   };
 }
 
+// A finding's stable identity — its kind + concept set, order-independent. Two
+// findings with the same key describe the same problem (matches dedupeFindings /
+// normalizeLlmFindings), so a resolved row suppresses a re-detected duplicate.
+function findingKey(f: { kind: MapReviewFinding['kind']; conceptSlugs: string[] }): string {
+  return `${f.kind}:${[...f.conceptSlugs].sort().join(',')}`;
+}
+
 // Persist the findings as the Path's OPEN worklist: drop the prior open rows and
 // insert the fresh set, in one transaction. Resolved rows survive (an operator's
-// decision is permanent); a Path with no findings simply ends with no open rows.
-// Returns the count written.
+// decision is permanent), AND a freshly-detected finding an operator already
+// resolved is suppressed — dismiss/keep don't mutate the map, so the detector
+// re-finds them every backfill; re-inserting would resurrect a decided finding as
+// a new open row. Returns the count actually written (post-suppression).
 export async function writePathReview(
   pathId: string,
   findings: MapReviewFinding[],
 ): Promise<{ written: number }> {
-  await prisma.$transaction(async (tx) => {
+  const written = await prisma.$transaction(async (tx) => {
     await tx.pathReview.deleteMany({ where: { pathId, resolved: false } });
-    if (findings.length > 0) {
+
+    // Findings the operator already decided (any resolution) — don't re-open them.
+    const resolved = await tx.pathReview.findMany({
+      where: { pathId, resolved: true },
+      select: { kind: true, conceptSlugs: true },
+    });
+    const decided = new Set(resolved.map(findingKey));
+    const toWrite = findings.filter((f) => !decided.has(findingKey(f)));
+
+    if (toWrite.length > 0) {
       await tx.pathReview.createMany({
-        data: findings.map((f) => ({
+        data: toWrite.map((f) => ({
           pathId,
           kind: f.kind,
           conceptSlugs: f.conceptSlugs,
@@ -77,8 +97,9 @@ export async function writePathReview(
         })),
       });
     }
+    return toWrite.length;
   });
-  return { written: findings.length };
+  return { written };
 }
 
 // The open (unresolved) findings, newest first — the operator worklist. Scoped to

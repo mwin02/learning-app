@@ -105,4 +105,26 @@ describeDb('loadAssembledMap + writePathReview', () => {
     expect(rows[0].resolved).toBe(true);
     expect(rows[0].resolution).toBe('dismissed');
   });
+
+  it('does NOT resurrect a resolved finding when a re-review re-detects it (same kind + concept set)', async () => {
+    // The prior test left exactly one resolved (dismissed) hollow finding on `beta`.
+    // A dismiss does not mutate the map, so the detector re-finds it every backfill —
+    // re-inserting it would resurrect a decided finding as a fresh open row.
+    const redetected: MapReviewFinding[] = [{ kind: 'hollow', conceptSlugs: ['beta'], message: 're-detected' }];
+    expect((await writePathReview(pathId, redetected)).written).toBe(0);
+
+    const rows = await prisma.pathReview.findMany({ where: { pathId } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].resolved).toBe(true); // still the resolved row, no new open one
+
+    // A genuinely new finding (different concept set) is still written.
+    const fresh: MapReviewFinding[] = [
+      { kind: 'hollow', conceptSlugs: ['beta'], message: 'still suppressed' },
+      { kind: 'duplication', conceptSlugs: ['alpha', 'beta'], message: 'new open finding' },
+    ];
+    expect((await writePathReview(pathId, fresh)).written).toBe(1);
+    const after = await prisma.pathReview.findMany({ where: { pathId, resolved: false } });
+    expect(after).toHaveLength(1);
+    expect(after[0].kind).toBe('duplication');
+  });
 });

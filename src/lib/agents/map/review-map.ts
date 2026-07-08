@@ -67,16 +67,23 @@ export type AssembledMap = {
 
 // ── hollow (deterministic) ──────────────────────────────────────────────────
 
-// A concept is `hollow` when it is "covered" for readiness but only weakly: either
-// remediation RELAXED the bar (accepted a sub-floor best-effort primary), or its
-// chosen primary sits below MAP_HOLLOW_COVERAGE. A concept with NO primary at all is
-// a spine hole (readiness's job), not a papered-over one — skip it.
+// A SPINE concept is `hollow` when it is "covered" for readiness but only weakly:
+// either remediation RELAXED the bar (accepted a sub-floor best-effort primary), or
+// its chosen primary sits below MAP_HOLLOW_COVERAGE. A concept with NO primary at all
+// is a spine hole (readiness's job), not a papered-over one — skip it.
+//
+// Scoped to spine: `hollow` is defined relative to spine readiness (recomputeReadiness
+// / hasQualifyingPrimary only consider spine concepts). Frontier concepts never gate a
+// Track and routinely carry weaker primaries by design, so flagging a low-coverage
+// frontier node as a "papered-over hole" is noise — the LLM critic still reviews them
+// for duplication / granularity.
 export function detectHollowConcepts(
   concepts: MapConcept[],
   threshold: number = MAP_HOLLOW_COVERAGE,
 ): MapReviewFinding[] {
   const findings: MapReviewFinding[] = [];
   for (const c of concepts) {
+    if (c.membership !== ConceptMembership.spine) continue;
     if (c.primaryRelaxed) {
       const detail = c.primary
         ? `("${c.primary.title}", coverage ${c.primary.coverageScore.toFixed(2)}, role ${c.primary.role})`
