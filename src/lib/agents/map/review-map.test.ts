@@ -90,6 +90,16 @@ describe('detectHollowConcepts', () => {
   it('does not flag a concept with no primary (that is a hole, not hollow)', () => {
     expect(detectHollowConcepts([concept({ slug: 'extra', membership: frontier })])).toEqual([]);
   });
+  it('does not flag a FRONTIER concept (hollow is spine-only; frontier never gates)', () => {
+    // Same low-coverage / relaxed primaries that WOULD flag a spine concept, but on
+    // a frontier node — supplementary, never part of readiness, so it's noise.
+    expect(
+      detectHollowConcepts([
+        concept({ slug: 'extra-low', membership: frontier, primary: { title: 'Y', role: teaches, coverageScore: 0.55 } }),
+        concept({ slug: 'extra-relaxed', membership: frontier, primaryRelaxed: true, primary: { title: 'X', role: uses, coverageScore: 0.4 } }),
+      ]),
+    ).toEqual([]);
+  });
   it('honors a custom threshold', () => {
     const c = [concept({ slug: 'aggregates', primary: { title: 'Y', role: teaches, coverageScore: 0.55 } })];
     expect(detectHollowConcepts(c, 0.5)).toEqual([]);

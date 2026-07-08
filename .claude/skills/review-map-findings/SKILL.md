@@ -26,8 +26,11 @@ findings across all Paths, then pick one).
 
 ## Preconditions (check first, stop if unmet)
 
-- Dev server on `http://localhost:3000` with `DEV_AUTH=1`. Probe:
-  `curl -s -o /dev/null -w "%{http_code}" "localhost:3000/api/playground/map-review?topic=sql"`
+- Dev server on `http://localhost:3000` with `DEV_AUTH=1`. Probe with NO query
+  param (a scope-free GET lists all open findings, so it's `200` for any DB state —
+  unlike `?topic=sql`, which also `404`s when no `sql` Path exists and can't tell
+  "unauthed" from "no such topic"):
+  `curl -s -o /dev/null -w "%{http_code}" "localhost:3000/api/playground/map-review"`
   → `200`. A `404` means `DEV_AUTH` is off (the admin route 404s when unauthed) — ask
   the user to start it with `DEV_AUTH=1`. If it `500`s, the running server predates a
   schema/client change — ask the user to restart it.
