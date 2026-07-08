@@ -54,8 +54,9 @@ const AuthorSchema = z.object({
 export async function addFrontierConcept(args: {
   pathId: string;
   request: string;
+  abortSignal?: AbortSignal; // H4: worker job-deadline signal
 }): Promise<AddFrontierResult> {
-  const { pathId, request } = args;
+  const { pathId, request, abortSignal } = args;
   const path = await prisma.path.findUnique({ where: { id: pathId }, select: { topic: true } });
   if (!path) throw new Error(`No Path '${pathId}'.`);
 
@@ -65,7 +66,7 @@ export async function addFrontierConcept(args: {
   });
   const bySlug = new Map(concepts.map((c) => [c.slug, c]));
 
-  const authored = await authorFrontier({ topic: path.topic, request, concepts });
+  const authored = await authorFrontier({ topic: path.topic, request, concepts, abortSignal });
   console.log('[frontier] authored', { pathId, request, decision: authored.decision });
 
   if (authored.decision === 'irrelevant') {
@@ -152,14 +153,16 @@ async function authorFrontier(args: {
   topic: string;
   request: string;
   concepts: { slug: string; title: string; membership: ConceptMembership }[];
+  abortSignal?: AbortSignal;
 }): Promise<z.infer<typeof AuthorSchema>> {
-  const { topic, request, concepts } = args;
+  const { topic, request, concepts, abortSignal } = args;
   const { model, temperature, maxOutputTokens, modelId } = getModel('mapSpineAuthor');
 
   const result = await generateText({
     model,
     temperature,
     maxOutputTokens,
+    abortSignal,
     output: Output.object({ schema: AuthorSchema }),
     system: SYSTEM_PROMPT,
     prompt: [

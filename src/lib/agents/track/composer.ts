@@ -165,6 +165,7 @@ export async function composeTrack(args: {
   // core to it without ever doing minute math.
   depthTier: DepthTier;
   onTrace?: OnTrace;
+  abortSignal?: AbortSignal; // H4: worker job-deadline signal
 }): Promise<ComposerResult> {
   const {
     topic,
@@ -175,6 +176,7 @@ export async function composeTrack(args: {
     budgetMinutes,
     depthTier,
     onTrace = () => {},
+    abortSignal,
   } = args;
 
   // Global handle ↔ candidate map for this call only. `r1, r2, …` across every
@@ -211,6 +213,7 @@ export async function composeTrack(args: {
     model,
     temperature,
     maxOutputTokens,
+    abortSignal,
     output: Output.object({ schema: CompositionSchema }),
     system: SYSTEM_PROMPT,
     prompt: buildPrompt({ topic, conceptViews, priorKnowledge, goal, targetMastery, budgetMinutes, depthTier }),

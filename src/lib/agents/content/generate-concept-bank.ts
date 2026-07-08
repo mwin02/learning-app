@@ -34,8 +34,9 @@ export type GenerateConceptBankResult = {
 export async function generateConceptBank(args: {
   conceptId: string;
   onTrace?: OnTrace;
+  abortSignal?: AbortSignal; // H4: worker job-deadline signal
 }): Promise<GenerateConceptBankResult> {
-  const { conceptId, onTrace = () => {} } = args;
+  const { conceptId, onTrace = () => {}, abortSignal } = args;
 
   const concept = await prisma.concept.findUnique({
     where: { id: conceptId },
@@ -73,6 +74,7 @@ export async function generateConceptBank(args: {
     isOnRamp: concept.isOnRamp,
     resources: concept.resources.map((r) => ({ title: r.resource.title, type: r.resource.type })),
     onTrace,
+    abortSignal,
   });
 
   if (questions.length === 0) {
@@ -124,8 +126,9 @@ export type BackfillConceptBanksResult = {
 export async function backfillConceptBanks(args: {
   pathId: string;
   onTrace?: OnTrace;
+  abortSignal?: AbortSignal; // H4: worker job-deadline signal
 }): Promise<BackfillConceptBanksResult> {
-  const { pathId, onTrace = () => {} } = args;
+  const { pathId, onTrace = () => {}, abortSignal } = args;
 
   // Only concepts with no questions — the idempotent + backfill filter. On-ramp
   // concepts are excluded by design (no bank for the broad orientation concept;
@@ -150,9 +153,10 @@ export async function backfillConceptBanks(args: {
   };
 
   for (let i = 0; i < concepts.length; i += CONCEPT_BANK_GEN_CONCURRENCY) {
+    abortSignal?.throwIfAborted();
     const chunk = concepts.slice(i, i + CONCEPT_BANK_GEN_CONCURRENCY);
     const settled = await Promise.allSettled(
-      chunk.map((c) => generateConceptBank({ conceptId: c.id, onTrace })),
+      chunk.map((c) => generateConceptBank({ conceptId: c.id, onTrace, abortSignal })),
     );
     settled.forEach((s, j) => {
       if (s.status === 'fulfilled') {

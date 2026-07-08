@@ -58,8 +58,9 @@ export async function sectionLessons(args: {
   targetMastery?: Difficulty | null;
   lessons: SectionerLesson[];
   onTrace?: OnTrace;
+  abortSignal?: AbortSignal; // H4: worker job-deadline signal
 }): Promise<SectionBoundary[]> {
-  const { trackTitle, trackSummary, intent, targetMastery, lessons, onTrace = () => {} } = args;
+  const { trackTitle, trackSummary, intent, targetMastery, lessons, onTrace = () => {}, abortSignal } = args;
 
   onTrace({
     kind: 'stage',
@@ -72,6 +73,7 @@ export async function sectionLessons(args: {
     model,
     temperature,
     maxOutputTokens,
+    abortSignal,
     output: Output.object({ schema: BoundariesSchema }),
     system: SYSTEM_PROMPT,
     prompt: buildPrompt({ trackTitle, trackSummary, intent, targetMastery, lessons }),

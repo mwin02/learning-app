@@ -77,8 +77,14 @@ export async function ensurePathMap(args: {
   topic: string;
   subject?: string;
   onTrace?: OnTrace;
+  // H4: the worker's per-job deadline signal. Checked between the expensive
+  // phases below; forwarding into the deep author/attach call sites is
+  // opportunistic (the worker's deadline race is the backstop). An abort mid-
+  // build leaves the Path `building` with 0 concepts — exactly the crashed-claim
+  // state isReclaimable() already recovers after PATH_BUILD_STALE_MS.
+  abortSignal?: AbortSignal;
 }): Promise<EnsurePathMapResult> {
-  const { topic, subject, onTrace = () => {} } = args;
+  const { topic, subject, onTrace = () => {}, abortSignal } = args;
 
   // --- tx1: claim ---------------------------------------------------------
   const claim = await prisma.$transaction(async (tx) => {
@@ -131,6 +137,7 @@ export async function ensurePathMap(args: {
   let holes: string[];
   let ready: boolean;
   try {
+    abortSignal?.throwIfAborted();
     const spine = await buildSpine({ topic, subject, onTrace });
     // Enforce "exactly one on-ramp" before attach + persist, so the on-ramp-aware
     // candidate sourcing (discriminating query + strict judge rubric) keys off a
@@ -154,6 +161,7 @@ export async function ensurePathMap(args: {
       }
     }
 
+    abortSignal?.throwIfAborted();
     const attachments = await attachCandidates({ topic, concepts, injected, onTrace });
     const readiness = computeReadiness(attachments);
     holes = readiness.holes;

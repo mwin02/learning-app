@@ -391,12 +391,28 @@ export const REMEDIATION_JOB_STALE_MS = 15 * 60 * 1000;
 // cold-topic spine build (author + review repairs + candidate attach).
 export const PATH_BUILD_STALE_MS = 10 * 60 * 1000;
 
+// H4 (audit 1.3): overall per-job deadline for one worker pipeline run. The
+// single-concurrency loop AWAITS the pipeline, so one hung upstream call (LLM,
+// fetch) would stall the ENTIRE queue — reclaimStale can requeue the row but
+// can't unstick the loop. processCourseRequest races the pipeline against this:
+// on expiry the request is failed with a diagnostic, the pipeline's AbortSignal
+// fires (stages stop at their next checkpoint / AI call), and the loop moves
+// on. 20 minutes: comfortably past a worst-case cold-topic build (spine author
+// + review + remediation web-sourcing + banks + compose); tighten once H3's
+// buildUsage/duration data says what real builds cost. MUST stay SHORTER than
+// COURSE_REQUEST_STALE_MS (below).
+export const COURSE_JOB_DEADLINE_MS = 20 * 60 * 1000;
+
 // Phase 2.5g-1: a CourseRequest left `running` longer than this is treated as a
 // dead worker's abandoned claim and reclaimed (→ `queued`) by the g-3 worker on
 // its next tick. Generous — a cold-topic run (spine author + review + remediation
 // web-sourcing) legitimately takes minutes; this is the "the worker process died"
-// threshold, not a per-stage timeout. 15 minutes.
-export const COURSE_REQUEST_STALE_MS = 15 * 60 * 1000;
+// threshold, not a per-stage timeout. 30 minutes — H4: raised from 15 so it stays
+// LONGER than COURSE_JOB_DEADLINE_MS with margin; if reclaim fired first, it
+// would requeue a row whose live-but-slow pipeline is still running (duplicate
+// build), and the two mechanisms would fight. Order is: deadline fails the job
+// in-process; stale-reclaim only catches a worker that DIED holding a claim.
+export const COURSE_REQUEST_STALE_MS = 30 * 60 * 1000;
 
 // Phase 2.5e (track sections): a built Track with FEWER than this many lessons is
 // not sectioned — it renders as a flat list. Chaptering a 2–3 lesson Track buys
