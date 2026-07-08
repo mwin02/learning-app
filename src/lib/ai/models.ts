@@ -14,6 +14,7 @@ type AgentName =
   | 'curriculumFallback'
   | 'mapSpineAuthor'
   | 'mapSpineReviewer'
+  | 'mapReviewer'
   | 'mapCandidateJudge'
   | 'onRampAuthor'
   | 'onRampCritic'
@@ -105,6 +106,21 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     modelId: 'gemini-2.5-pro',
     temperature: 0.2,
     maxOutputTokens: 16384,
+  },
+  mapReviewer: {
+    // Pre-Freeze Map Review (Block 1): the whole-map, resource-aware critic run
+    // ONCE at the `building → spine_ready` freeze boundary. Sees the final assembled
+    // map — every concept (spine + frontier), its edges, and each concept's chosen
+    // primary resource — and emits `duplication` / `granularity` findings the
+    // spine-only reviewer structurally can't (it runs pre-frontier/pre-split/pre-
+    // resource). Flash, not Pro: this is rule-ish application over a pre-filtered
+    // candidate set (the pure detector already found the similar pairs; the model
+    // confirms/rejects), not open authoring — cheaper tier like mapCandidateJudge /
+    // trackSectioner. Temperature 0 for a stable verdict. 8k output: the findings
+    // array is small, but Flash 2.5 spends budget on internal thinking first.
+    modelId: 'gemini-2.5-flash',
+    temperature: 0,
+    maxOutputTokens: 8192,
   },
   mapCandidateJudge: {
     // Phase 2.5d-2: scores a spine concept's candidate resources — assigns each

@@ -267,6 +267,7 @@ model Path {
   concepts             Concept[]
   tracks               Track[]
   remediationJobs      RemediationJob[]
+  pathReviews          PathReview[]
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 
@@ -680,6 +681,64 @@ enum RemediationState {
   failed
   // Finished, but ≥1 concept was left uncoverable (Path remains `building`).
   escalated
+}
+
+// Pre-Freeze Map Review (Block 1): the operator worklist row for a finding the
+// whole-map, resource-aware critic raised at the `building → spine_ready` freeze
+// boundary — the review reviewSpine structurally can't do (it runs pre-frontier,
+// pre-split, pre-resource). Findings NEVER block the freeze; the Path still goes
+// `spine_ready` and these are hardened in place later. One row per finding,
+// per-(path, concept(s), kind), because a finding targets specific concepts and
+// carries a resolution state no existing flag column models.
+//
+// `conceptSlugs` is denormalized (NOT an FK to Concept) on purpose: a later merge
+// DELETEs the loser concept, but the finding that named it must survive so the
+// operator record stays intact — same snapshot-by-slug philosophy as splitConcept.
+// The writer replaces the OPEN (resolved=false) rows on each run and leaves
+// resolved rows untouched, so a backfill re-review is idempotent and never
+// clobbers an operator's decision. `resolution` is null until Block 3 decides it.
+model PathReview {
+  id           String                @id @default(cuid())
+  pathId       String
+  path         Path                  @relation(fields: [pathId], references: [id], onDelete: Cascade)
+  kind         MapReviewKind
+  // The concept slug(s) the finding implicates: two for a `duplication`, one for a
+  // `hollow` / `granularity`. Denormalized (see model note).
+  conceptSlugs String[]
+  // What's wrong and the concrete fix — the operator (or Block 3's apply) acts on it.
+  message      String
+  resolved     Boolean               @default(false)
+  // Set when an operator decides the finding (Block 3); null while open.
+  resolution   PathReviewResolution?
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  @@index([pathId, resolved])
+}
+
+// The map-review finding kinds — only what the spine-only critic structurally
+// cannot produce (see review-map.ts). `granularity` overlaps the spine reviewer's
+// kind by name but is re-run here over remediation split-in nodes it never saw.
+enum MapReviewKind {
+  // Two concepts cover the same idea (post-frontier/post-split redundancy, e.g.
+  // sql-views vs database-views). Merge target is the primary fix.
+  duplication
+  // A concept "covered" only by a relaxed or low-coverage primary — a papered-over
+  // hole. Deterministic (a coverage threshold), not an LLM judgment.
+  hollow
+  // A split-in / assembled node that bundles several teachable ideas — the spine
+  // reviewer's granularity check, re-run over nodes added after it ran.
+  granularity
+}
+
+// How an operator resolved a PathReview finding (Block 3). Null while open.
+enum PathReviewResolution {
+  // The duplicate was merged into its winner (loser's edges/resources repointed).
+  merged
+  // Not a real problem — dismissed without a mutation.
+  dismissed
+  // A real finding intentionally left as-is for now (acknowledged, no fix).
+  kept
 }
 
 // Phase 2.5g-1: a learner's request for a Track on a topic — the durable unit the
