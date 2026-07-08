@@ -15,6 +15,7 @@
 // an owner (limits/enrollment) to reject null explicitly.
 
 import { createSupabaseServerClient, isSupabaseConfigured } from '@/lib/supabase/server';
+import { requireSameOrigin } from '@/lib/api/origin-check';
 
 export type Session = {
   userId: string | null;
@@ -29,7 +30,7 @@ export type AuthedHandler<C = unknown> = (
   ctx: C
 ) => Promise<Response> | Response;
 
-function devBypass(): boolean {
+export function devBypass(): boolean {
   return process.env.NODE_ENV === 'development' && process.env.DEV_AUTH === '1';
 }
 
@@ -43,6 +44,10 @@ export async function getSessionUserId(): Promise<string | null> {
 
 export function withAuth<C = unknown>(handler: AuthedHandler<C>): (req: Request, ctx: C) => Promise<Response> {
   return async (req: Request, ctx: C) => {
+    // H2 (audit 9.7): CSRF origin check before the session lookup — a
+    // cross-site request is rejected without spending a Supabase round trip.
+    const originError = requireSameOrigin(req);
+    if (originError) return originError;
     const userId = await getSessionUserId();
     if (userId) return handler(req, { userId }, ctx);
     if (devBypass()) return handler(req, { userId: null }, ctx);

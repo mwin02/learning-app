@@ -17,7 +17,8 @@
 // there is deliberately no API for it.
 
 import { prisma } from '@/lib/db';
-import { getSessionUserId } from '@/lib/api/with-auth';
+import { devBypass, getSessionUserId } from '@/lib/api/with-auth';
+import { requireSameOrigin } from '@/lib/api/origin-check';
 
 export type AdminSession = {
   // The operating principal — a human curator or an autonomous review agent.
@@ -26,10 +27,6 @@ export type AdminSession = {
 };
 
 export type AdminHandler = (req: Request, session: AdminSession) => Promise<Response> | Response;
-
-function devBypass(): boolean {
-  return process.env.NODE_ENV === 'development' && process.env.DEV_AUTH === '1';
-}
 
 export async function isAdmin(userId: string | null): Promise<boolean> {
   if (!userId) return false;
@@ -40,8 +37,14 @@ export async function isAdmin(userId: string | null): Promise<boolean> {
 export function withAdminAuth(handler: AdminHandler): (req: Request) => Promise<Response> {
   return async (req: Request) => {
     const userId = await getSessionUserId();
-    if (await isAdmin(userId)) return handler(req, { adminId: userId });
-    if (devBypass()) return handler(req, { adminId: null });
-    return new Response('Not Found', { status: 404 });
+    const admin = await isAdmin(userId);
+    if (!admin && !devBypass()) return new Response('Not Found', { status: 404 });
+    // H2 (audit 9.7): origin check AFTER the admin check — an unauthenticated
+    // scanner probing with a bad Origin still sees the masking 404, not a
+    // route-revealing 403. CSRF protection is unaffected: a forged request
+    // riding an admin's cookie passes the role check and is rejected here.
+    const originError = requireSameOrigin(req);
+    if (originError) return originError;
+    return handler(req, { adminId: admin ? userId : null });
   };
 }
