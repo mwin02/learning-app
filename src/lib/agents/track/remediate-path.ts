@@ -33,6 +33,7 @@ import { classifyHole, type HoleCandidate } from '@/lib/agents/track/classify-ho
 import { splitConcept, type SliceEvidence } from '@/lib/agents/track/split-concept';
 import { sourceAndAttachConcept } from '@/lib/agents/track/source-concept';
 import { claimRemediationJob, finishJob } from '@/lib/agents/track/remediation-job';
+import { reviewAndPersistMap } from '@/lib/agents/map/run-map-review';
 
 export type RemediateResult = {
   // 'busy' when another job holds this Path; 'ready' when there was nothing to
@@ -56,7 +57,35 @@ type HoleConcept = {
   candidates: HoleEvidenceCandidate[];
 };
 
+// Public entry: run remediation, then — if THIS call took the Path across the
+// `building → spine_ready` freeze boundary — run the pre-freeze map review once
+// over the settled map (Pre-Freeze Map Review). The review is best-effort and
+// fail-open: it never changes the remediation outcome and a thrown review never
+// fails the freeze (the Path is already teachable). It is gated on the transition
+// (before ≠ spine_ready, after = spine_ready) so a no-op re-run on an
+// already-frozen Path — or an escalated/failed/busy run — does not re-review.
 export async function remediatePath(
+  pathId: string,
+  opts: { force?: boolean } = {},
+): Promise<RemediateResult> {
+  const before = await prisma.path.findUnique({ where: { id: pathId }, select: { status: true } });
+  const result = await runRemediation(pathId, opts);
+
+  if (result.status === PathStatus.spine_ready && before?.status !== PathStatus.spine_ready) {
+    try {
+      const { findings, written } = await reviewAndPersistMap(pathId);
+      console.log('[remediate] freeze review', { pathId, findings: findings.map((f) => f.kind), written });
+    } catch (err) {
+      console.error('[remediate] freeze review failed (non-fatal)', {
+        pathId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return result;
+}
+
+async function runRemediation(
   pathId: string,
   opts: { force?: boolean } = {},
 ): Promise<RemediateResult> {
