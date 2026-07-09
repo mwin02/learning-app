@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 const TABS = [
   { href: '/playground/path-generation', label: 'Path generation' },
   { href: '/playground/programs', label: 'Programs' },
+  { href: '/playground/failed-builds', label: 'Failed builds' },
   { href: '/playground/concept-maps', label: 'Concept maps' },
   { href: '/playground/resource', label: 'Resource' },
   { href: '/playground/human-review', label: 'Human review' },
