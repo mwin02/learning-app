@@ -26,14 +26,16 @@ export type EnqueueProgramResult = {
   programId: string;
   status: ProgramStatus;
   topicCount: number;
-  // Set only when status=failed — the persisted diagnostic. Safe to echo to the
-  // caller ONLY when failureKind='plan_empty' (a fixed, non-sensitive message); the
-  // 'internal' message is a raw exception string and must not leave the server.
+  // Set only when status=failed — the client-facing diagnostic. Safe to echo to the
+  // caller for failureKind 'plan_empty' and 'goal_rejected' (both fixed, non-sensitive
+  // messages); the 'internal' message is a raw exception string and must not leave the
+  // server, and the goal gate's model-written reason is logged/persisted, never echoed.
   error?: string;
   // Why the plan failed, so the HTTP boundary can pick the right status class:
-  //   'plan_empty' — well-formed request, no in-domain topics survived → 422.
-  //   'internal'   — an LLM/DB exception during plan or fan-out → 500 (generic).
-  failureKind?: 'plan_empty' | 'internal';
+  //   'goal_rejected' — the goal is off-domain / nonsense (Stage-0 gate) → 422.
+  //   'plan_empty'    — goal accepted, but no in-domain topic survived → 422.
+  //   'internal'      — an LLM/DB exception during plan or fan-out → 500 (generic).
+  failureKind?: 'goal_rejected' | 'plan_empty' | 'internal';
 };
 
 // Create Program(planning) → plan → fan out child requests + plan slots → building.
@@ -71,6 +73,24 @@ export async function enqueueProgram(
     // (decompose/gate/reconcile report into it via recordUsage). Null when the
     // caller didn't open a trace (scripts/tests) — persisted as DB NULL.
     const planUsage = traceUsageSnapshot();
+    // Stage-0 goal gate rejected the goal (off-domain / nonsense). Persist the model's
+    // reason for audit, but return a FIXED user-facing message — the reason is
+    // model-written text and never echoed. The anchor row already exists (created
+    // before this fallible plan pass), so this failed row is metered by H1's burst
+    // (counts all statuses), excluded from the monthly quota (failed excluded), and
+    // ignored by dedup (failed never matches) — the gate needs no separate limiter.
+    if (result.goalRejected) {
+      await failProgram(program.id, `goal rejected: ${result.goalRejected.reason}`, planUsage);
+      logWarn('program.goal-rejected', { programId: program.id, reason: result.goalRejected.reason });
+      return {
+        programId: program.id,
+        status: ProgramStatus.failed,
+        topicCount: 0,
+        error:
+          'This goal is outside the subjects we cover — build programs for mathematics, the natural sciences, or computer science.',
+        failureKind: 'goal_rejected',
+      };
+    }
     if (result.topics.length === 0) {
       const error = 'plan pass produced no in-domain topics';
       await failProgram(program.id, error, planUsage);

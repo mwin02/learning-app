@@ -31,6 +31,7 @@ import { listCanonicals, repointCanonical } from '@/lib/agents/topic-registry';
 import { TOPIC_SLUGS } from '@/types/resource';
 import { MAX_PROGRAM_TOPICS, MAX_FRONTIER_PER_TOPIC } from '@/lib/config';
 import { decomposeProgramAgent } from '@/lib/agents/program/decompose-agent';
+import { validateGoal, type GoalGateResult } from '@/lib/agents/program/goal-gate';
 import {
   allocateProgramBudget,
   type AllocatedProgramTopic,
@@ -86,6 +87,11 @@ export type ProgramPlan = {
   // enqueueProgram persists null when absent.
   title?: string;
   description?: string;
+  // Set when the Stage-0 goal gate rejected the goal as off-domain / nonsense. When
+  // present, topics is empty and the plan short-circuited before decompose —
+  // enqueueProgram maps this to failureKind 'goal_rejected', distinct from the
+  // empty-plan case (goal accepted, but no topic survived Stage 2's per-topic gate).
+  goalRejected?: { reason: string };
 };
 
 function systemPrompt(maxTopics: number): string {
@@ -217,6 +223,9 @@ export async function decomposeProgram(
 }
 
 type GateFn = (topic: string) => Promise<TopicGateResult>;
+// Stage-0 goal gate seam (goal-gate.ts). Injectable for fixture tests; the default is
+// the real grounded Gemini Flash call.
+export type ValidateGoalFn = (goal: string, background: string | null) => Promise<GoalGateResult>;
 
 // F7: given a novel canonical (one NOT already in the library) and the library list,
 // return the existing library topic it is a SCOPED VARIANT of, or null when it's a
@@ -323,6 +332,7 @@ function mergeTopics(existing: ProgramTopicInput, candidate: ProgramTopicInput):
 export async function planProgram(
   input: ProgramPlanInput,
   opts: {
+    validateGoal?: ValidateGoalFn;
     decompose?: (input: ProgramPlanInput) => Promise<ProgramDecomposition>;
     gate?: GateFn;
     reconcile?: ReconcileFn;
@@ -333,10 +343,24 @@ export async function planProgram(
   // seam stays injectable so fixtures (and any rollback) can pass decomposeProgram or
   // a stub. The agent's output is a ProgramDecomposition whose topics also carry
   // frontierConcepts, which the stages below thread through to the allocator.
+  const checkGoal = opts.validateGoal ?? ((g: string, b: string | null) => validateGoal(g, b));
   const decompose = opts.decompose ?? ((i: ProgramPlanInput) => decomposeProgramAgent(i));
   const gate = opts.gate ?? ((t: string) => validateTopic(t));
   const reconcile = opts.reconcile ?? ((c: string, lib: string[]) => reconcileScopedTopic(c, lib));
   const listLibrary = opts.listLibrary ?? listLibraryTopics;
+
+  // Stage 0 — goal-domain gate. Reject an off-domain / nonsense goal HERE, before any
+  // decompose or per-topic gate spend: the decompose-agent is prompted to always emit
+  // topics, so without this a junk goal ("become a dog groomer") is rescued into
+  // plausible in-domain topics that pass Stage 2 and build a "random program". Short-
+  // circuits with an empty plan carrying goalRejected; enqueueProgram fails the Program
+  // as 'goal_rejected'. A gate THROW (persistent infra fault) propagates to
+  // enqueueProgram's catch → 'internal' — a fault should not masquerade as a rejection.
+  const goalVerdict = await checkGoal(input.goal, input.background ?? null);
+  if (!goalVerdict.valid) {
+    log('program-plan.goal-rejected', { goalLen: input.goal.length, reason: goalVerdict.reason });
+    return { topics: [], droppedByGate: [], droppedByBudget: [], goalRejected: { reason: goalVerdict.reason } };
+  }
 
   const { topics: proposed, title, description } = await decompose(input);
 

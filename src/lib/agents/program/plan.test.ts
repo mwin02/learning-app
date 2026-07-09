@@ -20,6 +20,13 @@ vi.mock('@/lib/ai/models', () => ({
   getModel: () => ({ model: {}, temperature: 0, maxOutputTokens: 0 }),
 }));
 vi.mock('@/lib/db', () => ({ prisma: {} }));
+// Stage 0's default goal gate is the real Gemini call; make it a passthrough so the
+// existing pipeline fixtures (which don't inject validateGoal) exercise decompose →
+// gate → budget as before. The goal-gate-specific tests below inject their own
+// validateGoal via opts, which overrides this default.
+vi.mock('@/lib/agents/program/goal-gate', () => ({
+  validateGoal: async () => ({ valid: true }),
+}));
 
 import {
   planProgram,
@@ -71,6 +78,47 @@ describe('buildDecomposePrompt — grounds on existing library topics + anti-lis
   it('handles an empty library', () => {
     const empty = buildDecomposePrompt({ goal: 'g', totalHoursPerWeek: 4, totalWeeks: 6 }, []);
     expect(empty).toContain('TOPICS ALREADY IN THE LIBRARY: (none yet)');
+  });
+});
+
+describe('planProgram — Stage 0 goal gate', () => {
+  it('short-circuits a rejected goal before decompose runs', async () => {
+    const decompose = vi.fn(async () => decomp([proposed({ topic: 'Python', weight: 3 })]));
+    const gate = vi.fn(stubGate);
+    const plan = await planProgram(
+      { goal: 'become a dog groomer', totalHoursPerWeek: 10, totalWeeks: 10 },
+      {
+        validateGoal: async () => ({ valid: false, reason: 'out of domain' }),
+        decompose,
+        gate,
+        listLibrary: async () => [],
+      },
+    );
+    expect(plan.goalRejected).toEqual({ reason: 'out of domain' });
+    expect(plan.topics).toEqual([]);
+    expect(plan.droppedByGate).toEqual([]);
+    // The whole point: no decompose / per-topic gate spend on a rejected goal.
+    expect(decompose).not.toHaveBeenCalled();
+    expect(gate).not.toHaveBeenCalled();
+  });
+
+  it('passes the goal + background to the gate and proceeds when valid', async () => {
+    const seen: Array<[string, string | null]> = [];
+    const plan = await planProgram(
+      { goal: 'learn python', background: 'new to code', totalHoursPerWeek: 10, totalWeeks: 10 },
+      {
+        validateGoal: async (g, b) => {
+          seen.push([g, b]);
+          return { valid: true };
+        },
+        decompose: async () => decomp([proposed({ topic: 'Python', weight: 3 })]),
+        gate: stubGate,
+        listLibrary: async () => [],
+      },
+    );
+    expect(seen).toEqual([['learn python', 'new to code']]);
+    expect(plan.goalRejected).toBeUndefined();
+    expect(plan.topics.map((t) => t.key)).toEqual(['python']);
   });
 });
 

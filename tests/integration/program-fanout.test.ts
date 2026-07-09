@@ -149,6 +149,28 @@ describeDb('program fan-out + assembly', () => {
     expect((await siblings(enq.programId)).length).toBe(0);
   });
 
+  it('goal-rejected plan → failed with failureKind=goal_rejected, fixed message, no child requests', async () => {
+    const enq = await enqueueProgram({ goal: `${MARK} goal_reject`, totalHoursPerWeek: 4, totalWeeks: 8 }, {
+      plan: async () => ({
+        topics: [],
+        droppedByGate: [],
+        droppedByBudget: [],
+        goalRejected: { reason: 'dog grooming is outside math/science/cs' },
+      }),
+    });
+    expect(enq.status).toBe(ProgramStatus.failed);
+    expect(enq.topicCount).toBe(0);
+    expect(enq.failureKind).toBe('goal_rejected'); // off-domain goal → 422 GOAL_REJECTED class
+    // Client-facing message is fixed — the model's reason is NOT echoed.
+    expect(enq.error).toContain('outside the subjects we cover');
+    expect(enq.error).not.toContain('dog grooming');
+
+    const prog = await prisma.program.findUniqueOrThrow({ where: { id: enq.programId }, select: { status: true, error: true } });
+    expect(prog.status).toBe(ProgramStatus.failed);
+    expect(prog.error).toContain('dog grooming'); // model reason persisted for audit
+    expect((await siblings(enq.programId)).length).toBe(0);
+  });
+
   it('throwing plan → failed with failureKind=internal + persisted error', async () => {
     const enq = await enqueueProgram({ goal: `${MARK} goal5`, totalHoursPerWeek: 4, totalWeeks: 8 }, {
       plan: async () => {

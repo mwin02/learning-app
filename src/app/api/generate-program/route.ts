@@ -30,7 +30,13 @@ import {
 export const maxDuration = 60;
 export const runtime = 'nodejs';
 
-type ErrorCode = 'INVALID_INPUT' | 'PLAN_EMPTY' | 'INTERNAL' | 'FREE_LIMIT_REACHED' | 'RATE_LIMITED';
+type ErrorCode =
+  | 'INVALID_INPUT'
+  | 'GOAL_REJECTED'
+  | 'PLAN_EMPTY'
+  | 'INTERNAL'
+  | 'FREE_LIMIT_REACHED'
+  | 'RATE_LIMITED';
 
 function errorResponse(status: number, code: ErrorCode, error: string, details?: unknown) {
   const body: { error: string; code: ErrorCode; details?: unknown } = { error, code };
@@ -130,6 +136,18 @@ export const POST = withAuth(async (req, session) => runWithTrace(crypto.randomU
         userId: session.userId,
       });
       return errorResponse(500, 'INTERNAL', 'Internal error.', { programId: result.programId });
+    }
+    if (result.failureKind === 'goal_rejected') {
+      // The Stage-0 goal gate rejected the goal as off-domain / nonsense. 422: the
+      // request was well-formed but its goal isn't a subject we build programs for.
+      // result.error is the fixed, non-sensitive gate message (the model's own reason
+      // is logged server-side, never echoed). programId returned for inspection.
+      return errorResponse(
+        422,
+        'GOAL_REJECTED',
+        result.error ?? 'This goal is outside the subjects we cover.',
+        { programId: result.programId },
+      );
     }
     // The plan produced no buildable topics (all out-of-domain / cut). 422: the
     // request was well-formed but couldn't be turned into a program. result.error is
