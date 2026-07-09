@@ -64,9 +64,14 @@ type HoleConcept = {
 // fails the freeze (the Path is already teachable). It is gated on the transition
 // (before ≠ spine_ready, after = spine_ready) so a no-op re-run on an
 // already-frozen Path — or an escalated/failed/busy run — does not re-review.
+// H4: `abortSignal` is the worker's per-job deadline signal, checked at each
+// remediation pass boundary (each pass can web-source per concept — the long
+// tail). An abort throw lands in runRemediation's catch, which fails the
+// RemediationJob and frees the active-per-path index. Deep forwarding into the
+// sourcing calls is opportunistic; the worker's deadline race is the backstop.
 export async function remediatePath(
   pathId: string,
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; abortSignal?: AbortSignal } = {},
 ): Promise<RemediateResult> {
   const before = await prisma.path.findUnique({ where: { id: pathId }, select: { status: true } });
   const result = await runRemediation(pathId, opts);
@@ -87,7 +92,7 @@ export async function remediatePath(
 
 async function runRemediation(
   pathId: string,
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; abortSignal?: AbortSignal } = {},
 ): Promise<RemediateResult> {
   // Recompute from the rows on disk so we act on the current hole set (and rescue
   // a status that drifted). Nothing to do if the spine is already whole.
@@ -107,6 +112,7 @@ async function runRemediation(
     // --- bounded loop: each pass fixes the current holes; a split adds finer
     // nodes that become the next pass's holes -------------------------------
     for (let pass = 0; pass < MAX_REMEDIATION_PASSES; pass++) {
+      opts.abortSignal?.throwIfAborted();
       const current = await recomputeReadiness(pathId);
       if (current.holes.length === 0) break;
       const { topic, holes } = await loadHoleEvidence(pathId, current.holes);

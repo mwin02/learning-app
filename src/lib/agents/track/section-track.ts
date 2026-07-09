@@ -34,8 +34,9 @@ export type SectionTrackResult = {
 export async function sectionTrack(args: {
   trackId: string;
   onTrace?: OnTrace;
+  abortSignal?: AbortSignal; // H4: worker job-deadline signal
 }): Promise<SectionTrackResult> {
-  const { trackId, onTrace = () => {} } = args;
+  const { trackId, onTrace = () => {}, abortSignal } = args;
 
   const track = await prisma.track.findUnique({
     where: { id: trackId },
@@ -75,6 +76,7 @@ export async function sectionTrack(args: {
     trackSummary: track.summary,
     intent: track.intent,
     targetMastery: track.targetMastery,
+    abortSignal,
     lessons: lessons.map((l) => ({
       orderInTrack: l.orderInTrack,
       title: l.title,

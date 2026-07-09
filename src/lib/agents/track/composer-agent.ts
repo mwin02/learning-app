@@ -72,6 +72,7 @@ export async function composeTrackAgent(args: {
   // mirrored from the single-pass composer so the two modes size cores identically.
   depthTier: DepthTier;
   onTrace?: OnTrace;
+  abortSignal?: AbortSignal; // H4: worker job-deadline signal
 }): Promise<ComposerResult> {
   const {
     topic,
@@ -83,6 +84,7 @@ export async function composeTrackAgent(args: {
     budgetMinutes,
     depthTier,
     onTrace = () => {},
+    abortSignal,
   } = args;
 
   const conceptBySlug = new Map(concepts.map((c) => [c.slug, c]));
@@ -265,6 +267,7 @@ export async function composeTrackAgent(args: {
     model,
     temperature,
     maxOutputTokens,
+    abortSignal,
     tools,
     stopWhen: stepCountIs(TRACK_COMPOSER_MAX_STEPS),
     system: SYSTEM_PROMPT,

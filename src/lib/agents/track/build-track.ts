@@ -60,6 +60,9 @@ export type BuildTrackInput = {
   // Defaults to `beginner` when omitted; drives composer depth + difficulty-match.
   targetMastery?: Difficulty | null;
   onTrace?: OnTrace;
+  // H4: the worker's per-job deadline signal, forwarded to the compose/section
+  // LLM calls; the worker's deadline race is the backstop for everything else.
+  abortSignal?: AbortSignal;
 };
 
 export type BuildTrackResult = {
@@ -89,7 +92,7 @@ export class TrackBuildError extends Error {
 }
 
 export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResult> {
-  const { pathId, priorKnowledge, goal, timeframeWeeks, hoursPerWeek, onTrace = () => {} } = input;
+  const { pathId, priorKnowledge, goal, timeframeWeeks, hoursPerWeek, onTrace = () => {}, abortSignal } = input;
   const targetMastery = input.targetMastery ?? Difficulty.beginner;
   const budgetMinutes = budgetMinutesFor(timeframeWeeks, hoursPerWeek);
 
@@ -154,6 +157,7 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
               budgetMinutes,
               depthTier: tier,
               onTrace,
+              abortSignal,
             })
           : await composeTrack({
               topic: path.topic,
@@ -164,6 +168,7 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
               budgetMinutes,
               depthTier: tier,
               onTrace,
+              abortSignal,
             });
       const validation = validateComposition({
         composition,
@@ -341,7 +346,7 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
     // sectioning never costs the learner a build. Runs after the freeze so it sees
     // the final, trimmed lesson order.
     try {
-      const sectioning = await sectionTrack({ trackId: track.id, onTrace });
+      const sectioning = await sectionTrack({ trackId: track.id, onTrace, abortSignal });
       warnings.push(...sectioning.warnings);
     } catch (err) {
       console.warn('[track-build-track] sectioning failed (non-fatal)', { trackId: track.id, err });

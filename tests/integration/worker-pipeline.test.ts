@@ -12,6 +12,7 @@ import { PathStatus, TrackStatus, CourseRequestStatus } from '@prisma/client';
 import type { CourseRequest } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { processCourseRequest } from '@/lib/services/course-worker';
+import { finishCourseRequest } from '@/lib/services/course-request';
 import { MAX_FRONTIER_PER_TOPIC } from '@/lib/config';
 import type { EnsurePathMapResult } from '@/lib/agents/map/ensure-path-map';
 import type { RemediateResult } from '@/lib/agents/track/remediate-path';
@@ -181,7 +182,7 @@ describeDb('course-worker pipeline branches', () => {
       ensureMap: ensureMapStub(PathStatus.spine_ready),
       backfillBanks: async () => bankResult(),
       addFrontier: async (args) => {
-        calls.push(args);
+        calls.push({ pathId: args.pathId, request: args.request }); // args also carries the H4 abortSignal
         return { outcome: 'created', conceptSlug: args.request.replace(/\s+/g, '-'), resourced: true };
       },
       build: async () => {
@@ -246,6 +247,58 @@ describeDb('course-worker pipeline branches', () => {
     });
     expect(outcome).toBe('fulfilled');
     expect(calls).toBe(0);
+  });
+
+  // --- H4: per-job deadline ------------------------------------------------
+
+  it('a hung stage hits the deadline: request → failed, worker resumes', async () => {
+    const cr = await seedRunning('hung');
+    const outcome = await processCourseRequest(cr, {
+      // The hang the deadline exists for: a stage that never resolves.
+      ensureMap: () => new Promise(() => {}),
+      deadlineMs: 100,
+    });
+    // The race resolved (the loop would tick again) and the row is terminal.
+    expect(outcome).toBe('failed');
+    const row = await getReq(cr.id);
+    expect(row.status).toBe(CourseRequestStatus.failed);
+    expect(row.error).toContain('deadline exceeded');
+
+    // The zombie pipeline finishing late must not resurrect the row.
+    const trackId = await makeTrack('hung-late');
+    const { finished } = await finishCourseRequest(cr.id, { status: 'fulfilled', trackId });
+    expect(finished).toBe(false);
+    expect((await getReq(cr.id)).status).toBe(CourseRequestStatus.failed);
+  });
+
+  it('the deadline aborts the signal threaded into the stages', async () => {
+    const cr = await seedRunning('abort');
+    let signalAtBuild: AbortSignal | undefined;
+    const outcome = await processCourseRequest(cr, {
+      ensureMap: ensureMapStub(PathStatus.spine_ready),
+      backfillBanks: async () => bankResult(),
+      build: (input) => {
+        signalAtBuild = input.abortSignal;
+        return new Promise(() => {}); // hang inside the stage
+      },
+      deadlineMs: 100,
+    });
+    expect(outcome).toBe('failed');
+    expect(signalAtBuild).toBeDefined();
+    expect(signalAtBuild!.aborted).toBe(true);
+  });
+
+  it('a fast pipeline is unaffected by the deadline', async () => {
+    const trackId = await makeTrack('fast');
+    const cr = await seedRunning('fast');
+    const outcome = await processCourseRequest(cr, {
+      ensureMap: ensureMapStub(PathStatus.spine_ready),
+      backfillBanks: async () => bankResult(),
+      build: async () => buildResult(trackId),
+      deadlineMs: 5_000,
+    });
+    expect(outcome).toBe('fulfilled');
+    expect((await getReq(cr.id)).status).toBe(CourseRequestStatus.fulfilled);
   });
 
   it('a throwing concept-bank backfill is non-fatal', async () => {

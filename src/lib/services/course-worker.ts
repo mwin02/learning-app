@@ -22,7 +22,7 @@ import { remediatePath } from '@/lib/agents/track/remediate-path';
 import { buildTrack } from '@/lib/agents/track/build-track';
 import { backfillConceptBanks } from '@/lib/agents/content/generate-concept-bank';
 import { addFrontierConcept } from '@/lib/agents/track/add-frontier-concept';
-import { MAX_FRONTIER_PER_TOPIC } from '@/lib/config';
+import { COURSE_JOB_DEADLINE_MS, MAX_FRONTIER_PER_TOPIC } from '@/lib/config';
 import { log, logError, logWarn, runWithTrace, traceUsageSnapshot } from '@/lib/log';
 import { reclaimStaleRemediationJobs } from '@/lib/agents/track/remediation-job';
 import {
@@ -46,10 +46,12 @@ export type PipelineStages = {
   addFrontier?: typeof addFrontierConcept;
 };
 
-// processCourseRequest adds one more seam over the pipeline: the post-fulfill Program
-// assembler hook, so its fires / failure-is-non-fatal behavior is observable in tests.
+// processCourseRequest adds two more seams over the pipeline: the post-fulfill
+// Program assembler hook (so its fires / failure-is-non-fatal behavior is
+// observable in tests) and the H4 per-job deadline (so tests can use a short one).
 export type ProcessOpts = PipelineStages & {
   assembleProgram?: (programId: string) => Promise<void>;
+  deadlineMs?: number;
 };
 
 // Reclaim both queues' dead-worker claims. Run once per poll cycle BEFORE claiming,
@@ -72,7 +74,35 @@ export async function processCourseRequest(cr: CourseRequest, opts: ProcessOpts 
   // and recordUsage calls anywhere in the pipeline accumulate into the snapshot
   // finishCourseRequest persists as CourseRequest.buildUsage.
   return runWithTrace(cr.id, async () => {
-    const outcome = await processRequestPipeline(cr, opts);
+    // H4 (audit 1.3): race the pipeline against the per-job deadline. The
+    // single-concurrency loop awaits this function, so a hung upstream call
+    // would otherwise stall the whole queue. On expiry: abort the pipeline's
+    // signal (stages stop at their next checkpoint / AI call), fail the request
+    // with a diagnostic, and let the loop move on. If the losing pipeline
+    // finishes anyway (a zombie, not truly hung), its own finishCourseRequest
+    // is a no-op — the status='running' guard sees the row already failed.
+    const deadlineMs = opts.deadlineMs ?? COURSE_JOB_DEADLINE_MS;
+    const controller = new AbortController();
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<ProcessOutcome>((resolve) => {
+      timer = setTimeout(async () => {
+        controller.abort(new Error(`job deadline exceeded (${deadlineMs}ms)`));
+        logError('course-worker.deadline-exceeded', { id: cr.id, topic: cr.topic, deadlineMs });
+        await finishCourseRequest(cr.id, {
+          status: 'failed',
+          error: `job deadline exceeded after ${deadlineMs}ms — pipeline aborted`,
+          buildUsage: traceUsageSnapshot(),
+        }).catch(() => {});
+        resolve('failed');
+      }, deadlineMs);
+    });
+
+    let outcome: ProcessOutcome;
+    try {
+      outcome = await Promise.race([processRequestPipeline(cr, opts, controller.signal), deadline]);
+    } finally {
+      clearTimeout(timer);
+    }
     if (cr.programId) {
       const assembleProgram = opts.assembleProgram ?? maybeAssembleProgram;
       await assembleProgram(cr.programId).catch((err) =>
@@ -86,7 +116,18 @@ export async function processCourseRequest(cr: CourseRequest, opts: ProcessOpts 
 // The per-topic build pipeline: ensurePathMap → remediate → buildTrack → finish.
 // Unchanged by the Program layer. Never throws: any failure is recorded on the
 // request as `failed` with the error message, so the worker loop keeps draining.
-async function processRequestPipeline(cr: CourseRequest, opts: PipelineStages = {}): Promise<ProcessOutcome> {
+//
+// H4: `signal` is the deadline's AbortSignal, forwarded into each stage (they
+// pass it to their AI SDK calls opportunistically — the deadline race above is
+// the backstop where a deep call site doesn't). The throwIfAborted checkpoints
+// between stages stop an aborted-but-not-yet-failed pipeline from STARTING new
+// expensive work; the throw lands in the catch below, whose finishCourseRequest
+// is a harmless no-op when the deadline handler already failed the row.
+async function processRequestPipeline(
+  cr: CourseRequest,
+  opts: PipelineStages = {},
+  signal?: AbortSignal,
+): Promise<ProcessOutcome> {
   const ensureMap = opts.ensureMap ?? ensurePathMap;
   const remediate = opts.remediate ?? remediatePath;
   const build = opts.build ?? buildTrack;
@@ -95,7 +136,7 @@ async function processRequestPipeline(cr: CourseRequest, opts: PipelineStages = 
 
   log('course-worker.processing', { id: cr.id, topic: cr.topic });
   try {
-    const map = await ensureMap({ topic: cr.topic });
+    const map = await ensureMap({ topic: cr.topic, abortSignal: signal });
     let status = map.status;
     log('course-worker.map-ready', { id: cr.id, pathId: map.pathId, status, reclaimed: map.reclaimed });
 
@@ -103,7 +144,8 @@ async function processRequestPipeline(cr: CourseRequest, opts: PipelineStages = 
     // gets one remediation pass: source gaps / split conflations, then relax or
     // escalate the leftovers. remediatePath single-flights via RemediationJob.
     if (status === PathStatus.building) {
-      const rem = await remediate(map.pathId);
+      signal?.throwIfAborted();
+      const rem = await remediate(map.pathId, { abortSignal: signal });
       log('course-worker.remediation', { id: cr.id, outcome: rem.outcome, status: rem.status, escalated: rem.escalatedConceptSlugs });
       if (rem.outcome === 'busy') {
         // Under single-worker concurrency this is an anomaly (stale jobs are
@@ -135,8 +177,9 @@ async function processRequestPipeline(cr: CourseRequest, opts: PipelineStages = 
     // are sampled into per-Lesson exercises at build (2.5h-4). Idempotent across
     // Tracks of this Path; non-fatal — a generation failure must never block the
     // Track the learner is waiting on.
+    signal?.throwIfAborted();
     try {
-      const banks = await backfillBanks({ pathId: map.pathId });
+      const banks = await backfillBanks({ pathId: map.pathId, abortSignal: signal });
       log('course-worker.concept-banks', { id: cr.id, pathId: map.pathId, ...banks });
     } catch (err) {
       logWarn('course-worker.bank-backfill-failed', {
@@ -161,8 +204,9 @@ async function processRequestPipeline(cr: CourseRequest, opts: PipelineStages = 
         });
       }
       for (const request of cr.frontierConcepts.slice(0, MAX_FRONTIER_PER_TOPIC)) {
+        signal?.throwIfAborted();
         try {
-          const res = await addFrontier({ pathId: map.pathId, request });
+          const res = await addFrontier({ pathId: map.pathId, request, abortSignal: signal });
           log('course-worker.frontier-request', { id: cr.id, pathId: map.pathId, request, ...res });
         } catch (err) {
           logWarn('course-worker.frontier-request-failed', {
@@ -175,6 +219,7 @@ async function processRequestPipeline(cr: CourseRequest, opts: PipelineStages = 
       }
     }
 
+    signal?.throwIfAborted();
     const track = await build({
       pathId: map.pathId,
       priorKnowledge: cr.priorKnowledge,
@@ -182,6 +227,7 @@ async function processRequestPipeline(cr: CourseRequest, opts: PipelineStages = 
       timeframeWeeks: cr.timeframeWeeks,
       hoursPerWeek: cr.hoursPerWeek,
       targetMastery: cr.targetMastery,
+      abortSignal: signal,
     });
 
     await logBuiltTrack(cr, track.trackId);

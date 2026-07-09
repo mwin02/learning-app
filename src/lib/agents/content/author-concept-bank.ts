@@ -62,6 +62,7 @@ export async function authorConceptBank(args: {
   resources: ConceptBankResource[];
   targetCount?: number;
   onTrace?: OnTrace;
+  abortSignal?: AbortSignal; // H4: worker job-deadline signal
 }): Promise<AuthoredQuestion[]> {
   const {
     topic,
@@ -71,6 +72,7 @@ export async function authorConceptBank(args: {
     resources,
     targetCount = CONCEPT_BANK_TARGET_QUESTIONS,
     onTrace = () => {},
+    abortSignal,
   } = args;
 
   onTrace({
@@ -84,6 +86,7 @@ export async function authorConceptBank(args: {
     model,
     temperature,
     maxOutputTokens,
+    abortSignal,
     output: Output.object({ schema: QuestionsSchema }),
     system: SYSTEM_PROMPT,
     prompt: buildPrompt({ topic, conceptTitle, isOnRamp, resources, targetCount }),
