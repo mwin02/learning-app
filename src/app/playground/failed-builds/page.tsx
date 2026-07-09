@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { requireAdminPage } from '@/lib/auth/viewer';
 import { PROGRAM_STATUS_STYLE } from '../programs/status-style';
+import { RequestActions, DeleteButton } from './failed-build-actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -130,6 +131,7 @@ function RequestRow({ r, diag }: { r: FailedRequest; diag: Diagnosis | undefined
       </div>
       <p className="font-mono text-red-900/80 break-all">{r.error ?? '(no error message recorded)'}</p>
       {diag && <DiagnosisPanel diag={diag} />}
+      <RequestActions courseRequestId={r.id} />
     </li>
   );
 }
@@ -265,6 +267,7 @@ export default async function FailedBuildsPage() {
                 <p className="font-mono text-xs text-red-900/80 break-all">
                   {p.error ?? '(no error message recorded)'}
                 </p>
+                <DeleteButton kind="program" id={p.id} label="failed program" />
               </li>
             ))}
           </ul>
