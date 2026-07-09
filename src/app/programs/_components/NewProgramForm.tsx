@@ -1,11 +1,12 @@
 'use client';
 
 // Phase 3e: posts /api/generate-program and routes to the program hub on 202.
-// Handles the route's real error vocabulary: 429 FREE_LIMIT_REACHED (quota),
-// 422 PLAN_EMPTY (goal produced no in-domain topics), 400/500 generic.
+// The POST + error-vocabulary mapping lives in the shared submitProgram helper
+// (chat intake Block 4) — the chat confirmation card uses the same one.
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { submitProgram } from './submit-program';
 
 const inputCls =
   'w-full rounded-control border border-line bg-surface px-3 py-2 text-sm text-ink';
@@ -20,32 +21,18 @@ export function NewProgramForm({ defaultGoal }: { defaultGoal?: string }) {
     setBusy(true);
     setError(null);
     const f = new FormData(e.currentTarget);
-    const body = {
+    const result = await submitProgram({
       goal: String(f.get('goal') ?? ''),
       background: String(f.get('background') ?? '') || undefined,
       totalHoursPerWeek: Number(f.get('totalHoursPerWeek')),
       totalWeeks: Number(f.get('totalWeeks')),
-    };
-    const res = await fetch('/api/generate-program', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
     });
-    const data = await res.json().catch(() => ({}));
-    if (res.status === 202 && data.programId) {
-      router.push(`/programs/${data.programId}`);
+    if (result.ok) {
+      router.push(`/programs/${result.programId}`);
       return;
     }
     setBusy(false);
-    if (data.code === 'FREE_LIMIT_REACHED') {
-      setError(`You've reached the free limit of ${data.details?.limit ?? ''} programs this month.`);
-    } else if (data.code === 'PLAN_EMPTY') {
-      setError('We could not turn that goal into a program — try a more specific learning goal.');
-    } else if (data.code === 'INVALID_INPUT') {
-      setError('Please check the form — some fields are invalid.');
-    } else {
-      setError('Something went wrong. Please try again.');
-    }
+    setError(result.message);
   }
 
   return (
