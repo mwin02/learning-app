@@ -30,7 +30,7 @@ Number of queue **roots** to process this run: **$ARGUMENTS** (default 10 if emp
 - Fails #1, broken/dead/removed → **reject hard**.
 - Fails #2/#3/#4, page works but violates a quality rule or is misrepresented → **reject soft**.
 - `blocked: true` in the queue (decompositionStatus `pending`/`human_review`) → **skip**, flag "resolve in Human review first" (the API 409s on these anyway).
-- **Flat decomposition** (a `decomposed` container whose subtree is a single flat layer — its direct `children` are *all* `atomic`, none nested `decomposed` — yet one or more of those "leaves" is itself a chapter-index / intro / table-of-contents page that links to sibling units) → **skip** and flag **"re-decompose: index pages exposed as atomic siblings"**. Do **not** approve-cascade: it would publish the chapter-index pages as pickable duplicates of the very units they list (a pre-multi-layer decomposition artifact). Hand to Human review / the `decompose-large-page` skill to rebuild the nested tree first.
+- **Flat decomposition** (a `decomposed` container whose subtree is a single flat layer — its direct `children` are *all* `atomic`, none nested `decomposed` — yet one or more of those "leaves" is itself a chapter-index / intro / table-of-contents page that links to sibling units) → **skip** and flag **"re-decompose: index pages exposed as atomic siblings"**. Do **not** approve-cascade: it would publish the chapter-index pages as pickable duplicates of the very units they list (a pre-multi-layer decomposition artifact). Hand to Human review / the `decompose` skill to rebuild the nested tree first.
 - Genuinely unsure → **skip** and flag it; do not guess. We accept the residual risk and act on broken resources retroactively from user feedback.
 
 ## Steps
