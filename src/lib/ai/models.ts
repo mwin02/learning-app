@@ -27,6 +27,7 @@ type AgentName =
   | 'docTocExtractor'
   | 'validityAgent'
   | 'topicGate'
+  | 'goalGate'
   | 'programPlanner'
   | 'programDecomposer'
   | 'health';
@@ -266,6 +267,19 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // JSON is emitted (NoObjectGeneratedError → an unhandled throw that 500s a
     // standalone /api/generate-path). 2048 leaves ample thinking headroom for a
     // one-shot classification while staying far cheaper than the decomposer tier.
+    modelId: 'gemini-2.5-flash',
+    temperature: 0,
+    maxOutputTokens: 2048,
+  },
+  goalGate: {
+    // Goal-domain gate: a one-shot classifier that decides whether a Program GOAL is
+    // a legitimate learnable objective within {math, natural science, cs} — the
+    // goal-level analog of topicGate, run as Stage 0 of the plan pass so an
+    // off-domain / nonsense goal is rejected BEFORE the decomposer rescues it into
+    // plausible in-domain topics. Same tier + budget rationale as topicGate: the
+    // verdict object is tiny, but Flash 2.5 spends output tokens on internal thinking
+    // FIRST, so a 512 ceiling could cap mid-object (NoObjectGeneratedError); 2048
+    // leaves thinking headroom while staying far cheaper than the decomposer tier.
     modelId: 'gemini-2.5-flash',
     temperature: 0,
     maxOutputTokens: 2048,
