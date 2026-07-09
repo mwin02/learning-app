@@ -25,6 +25,7 @@ import { generateObject } from 'ai';
 import { z } from 'zod';
 import { PriorityTier } from '@prisma/client';
 import { getModel } from '@/lib/ai/models';
+import { log, logWarn, recordUsage } from '@/lib/log';
 import { validateTopic, type TopicGateResult } from '@/lib/agents/topic-gate';
 import { listCanonicals, repointCanonical } from '@/lib/agents/topic-registry';
 import { TOPIC_SLUGS } from '@/types/resource';
@@ -193,7 +194,8 @@ export async function decomposeProgram(
         system: systemPrompt(MAX_PROGRAM_TOPICS),
         prompt,
       });
-      console.log('[program-plan] decompose', {
+      recordUsage('plan.decompose', result.usage);
+      log('program-plan.decompose', {
         attempt,
         goalLen: input.goal.length,
         groundedOn: existingTopics.length,
@@ -205,7 +207,7 @@ export async function decomposeProgram(
       return result.object;
     } catch (err) {
       lastErr = err;
-      console.warn('[program-plan] decompose attempt failed', {
+      logWarn('program-plan.decompose-attempt-failed', {
         attempt,
         error: err instanceof Error ? err.message : String(err),
       });
@@ -269,6 +271,7 @@ export async function reconcileScopedTopic(
         system: RECONCILE_SYSTEM,
         prompt,
       });
+      recordUsage('plan.reconcile', result.usage);
       const v = result.object;
       // Only accept a target that is actually in the library and distinct from the input.
       if (v.isScopedVariant && v.ofTopic && v.ofTopic !== canonical && library.includes(v.ofTopic)) {
@@ -277,7 +280,7 @@ export async function reconcileScopedTopic(
       return null;
     } catch (err) {
       lastErr = err;
-      console.warn('[program-plan] reconcile attempt failed', {
+      logWarn('program-plan.reconcile-attempt-failed', {
         attempt,
         canonical,
         error: err instanceof Error ? err.message : String(err),
@@ -355,7 +358,7 @@ export async function planProgram(
         // means it threw twice (a persistent `No object generated` / infra fault). A gate
         // that THROWS (vs. cleanly rejects) drops just this one topic — never the program.
         const reason = `gate error: ${err instanceof Error ? err.message : String(err)}`;
-        console.warn('[program-plan] gate threw, dropping topic', { topic: p.topic, reason });
+        logWarn('program-plan.gate-threw', { topic: p.topic, reason });
         return { ok: false as const, p, reason };
       }
     }),
@@ -404,7 +407,7 @@ export async function planProgram(
       } catch (err) {
         // A reconcile THROW (persistent infra fault) leaves the topic as its own novel
         // slug — never drops it and never fails the program.
-        console.warn('[program-plan] reconcile threw, keeping topic as-is', {
+        logWarn('program-plan.reconcile-threw', {
           topic: t.key,
           error: err instanceof Error ? err.message : String(err),
         });
@@ -432,7 +435,7 @@ export async function planProgram(
   // an otherwise-valid plan.
   for (const { from, to } of remaps) {
     await repointCanonical(from, to).catch((err) =>
-      console.warn('[program-plan] repointCanonical failed (non-fatal)', { from, to, err }),
+      logWarn('program-plan.repoint-failed', { from, to, err }),
     );
   }
 
@@ -442,7 +445,7 @@ export async function planProgram(
     totalWeeks: input.totalWeeks,
   });
 
-  console.log('[program-plan] planned', {
+  log('program-plan.planned', {
     proposed: proposed.length,
     gated: bySlug.size,
     reconciled: reconciled.size,

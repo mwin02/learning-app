@@ -19,6 +19,7 @@ import { Output, generateText } from 'ai';
 import { z } from 'zod';
 import { Difficulty, TrackIntent } from '@prisma/client';
 import { getModel } from '@/lib/ai/models';
+import { recordUsage } from '@/lib/log';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 
 // One lesson as the sectioner sees it — the learner-facing framing the composer
@@ -77,6 +78,7 @@ export async function sectionLessons(args: {
   });
 
   const raw = result.experimental_output;
+  recordUsage('track.sectioner', result.usage);
   console.log('[track-sectioner]', {
     trackTitle,
     modelId,

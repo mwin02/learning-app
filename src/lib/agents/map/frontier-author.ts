@@ -24,6 +24,7 @@
 import { Output, generateText } from 'ai';
 import { z } from 'zod';
 import { getModel } from '@/lib/ai/models';
+import { recordUsage } from '@/lib/log';
 import { FRONTIER_MIN_CONCEPTS, FRONTIER_MAX_CONCEPTS } from '@/lib/config';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 
@@ -96,6 +97,7 @@ export async function authorFrontier(args: AuthorFrontierArgs): Promise<{ concep
   });
 
   const parsed = result.experimental_output;
+  recordUsage('map.frontier-author', result.usage);
   console.log('[map-frontier-author]', {
     topic,
     modelId,

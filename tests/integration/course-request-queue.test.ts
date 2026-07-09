@@ -40,8 +40,9 @@ async function claimMine(): Promise<CourseRequest | null> {
 }
 
 // Directly insert a marker row in a chosen state (bypasses enqueue's queued-only path),
-// so ordering/aging is deterministic.
-function makeRow(suffix: string, over: Partial<CourseRequest> = {}) {
+// so ordering/aging is deterministic. buildUsage is excluded: Prisma's read-side
+// JsonValue type isn't assignable to the Json create input, and no test sets it.
+function makeRow(suffix: string, over: Partial<Omit<CourseRequest, 'buildUsage'>> = {}) {
   return prisma.courseRequest.create({
     data: { topic: `${MARK}${suffix}`, ...over },
   });

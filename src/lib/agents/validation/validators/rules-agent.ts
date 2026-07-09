@@ -7,6 +7,7 @@
 import { generateObject } from 'ai';
 import { z } from 'zod';
 import { getModel } from '@/lib/ai/models';
+import { recordUsage } from '@/lib/log';
 import { RESOURCE_RULES } from '../rules';
 import type { Validator, ValidatorVerdict, ValidatableResource } from '../types';
 
@@ -46,6 +47,8 @@ export const rulesAgentValidator: Validator = {
         JSON.stringify(input, null, 2),
       ].join('\n'),
     });
+
+    recordUsage('validate.rules-agent', result.usage);
 
     console.log('[rules-agent] call', {
       rowCount: rows.length,

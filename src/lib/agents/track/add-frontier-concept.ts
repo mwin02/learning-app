@@ -25,6 +25,7 @@ import { z } from 'zod';
 import { ConceptMembership, Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { getModel } from '@/lib/ai/models';
+import { recordUsage } from '@/lib/log';
 import { attachCandidates } from '@/lib/agents/map/attach-candidates';
 import { hasQualifyingPrimary } from '@/lib/agents/map/readiness';
 import { sourceAndAttachConcept } from '@/lib/agents/track/source-concept';
@@ -169,6 +170,8 @@ async function authorFrontier(args: {
       JSON.stringify(concepts.map((c) => ({ slug: c.slug, title: c.title, membership: c.membership })), null, 2),
     ].join('\n'),
   });
+
+  recordUsage('track.frontier-author', result.usage);
 
   console.log('[frontier-author]', { topic, modelId, usage: result.usage, finishReason: result.finishReason });
   return result.experimental_output;

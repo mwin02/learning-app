@@ -23,6 +23,7 @@ import { z } from 'zod';
 import type { Difficulty } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { getModel } from '@/lib/ai/models';
+import { recordUsage } from '@/lib/log';
 import { vertex } from '@/lib/ai/vertex';
 import {
   REMEDIATION_SOURCE_TARGET_COUNT,
@@ -475,6 +476,8 @@ async function runDiscovery(args: {
     system: args.system,
     prompt: args.prompt,
   });
+
+  recordUsage('web-fallback.discovery', result.usage);
 
   console.log('[web-fallback] discovery call', {
     label: args.label,

@@ -25,6 +25,7 @@ import { generateText, tool, stepCountIs, Output } from 'ai';
 import { z } from 'zod';
 import { Difficulty, TrackIntent } from '@prisma/client';
 import { getModel } from '@/lib/ai/models';
+import { recordUsage } from '@/lib/log';
 import { TRACK_COMPOSER_MAX_STEPS } from '@/lib/config';
 import { TIME_WEIGHTS, type TimeWeight, type DepthTier } from '@/lib/agents/track/allocate';
 import { DEPTH_TIER_CORE_SIZE } from '@/lib/agents/track/composer';
@@ -322,6 +323,8 @@ export async function composeTrackAgent(args: {
   const trackTitle = fr?.trackTitle ?? topic;
   const trackSummary = fr?.trackSummary ?? `A learning path for ${topic}.`;
   const resourceSufficiency = fr?.resourceSufficiency ?? { enough: true, underResourced: [], thinForBudget: [] };
+
+  recordUsage('track.composer-agent', result.totalUsage);
 
   console.log('[composer-agent]', {
     topic,

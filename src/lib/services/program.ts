@@ -9,8 +9,9 @@
 // `failed` row rather than a silent 500 (on-brand with the queue's durable-audit
 // philosophy). Only the builds are async.
 
-import { ProgramStatus, CourseRequestStatus } from '@prisma/client';
+import { ProgramStatus, CourseRequestStatus, Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
+import { log, logError, logWarn, traceUsageSnapshot } from '@/lib/log';
 import { planProgram, type ProgramPlan, type ProgramPlanInput } from '@/lib/agents/program/plan';
 
 // inputHash: the H1 idempotency fingerprint (programInputHash), persisted on the
@@ -66,10 +67,14 @@ export async function enqueueProgram(
 
   try {
     const result = await plan(input);
+    // H3 (audit 9.4): the trace's accumulated token usage for the plan pass
+    // (decompose/gate/reconcile report into it via recordUsage). Null when the
+    // caller didn't open a trace (scripts/tests) — persisted as DB NULL.
+    const planUsage = traceUsageSnapshot();
     if (result.topics.length === 0) {
       const error = 'plan pass produced no in-domain topics';
-      await failProgram(program.id, error);
-      console.warn('[program] plan produced nothing', { programId: program.id, droppedByGate: result.droppedByGate });
+      await failProgram(program.id, error, planUsage);
+      logWarn('program.plan-empty', { programId: program.id, droppedByGate: result.droppedByGate });
       return { programId: program.id, status: ProgramStatus.failed, topicCount: 0, error, failureKind: 'plan_empty' };
     }
 
@@ -115,30 +120,40 @@ export async function enqueueProgram(
           status: ProgramStatus.building,
           title: result.title ?? null,
           description: result.description ?? null,
+          planUsage: planUsage ?? Prisma.JsonNull,
         },
       });
     });
 
-    console.log('[program] enqueued', {
+    log('program.enqueued', {
       programId: program.id,
       topics: result.topics.map((t) => t.key),
       droppedByGate: result.droppedByGate.length,
       droppedByBudget: result.droppedByBudget.length,
+      planUsage: planUsage?.totals,
     });
     return { programId: program.id, status: ProgramStatus.building, topicCount: result.topics.length };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error('[program] plan/fan-out failed', { programId: program.id, error: message });
-    await failProgram(program.id, message);
+    logError('program.plan-failed', { programId: program.id, error: message });
+    // Usage may have accumulated before the throw (a failed retry still billed).
+    await failProgram(program.id, message, traceUsageSnapshot());
     // A genuine server fault (Gemini/Vertex or Prisma threw) — persisted for audit,
     // but 'internal' so the route reports 500 and never echoes `message` to the client.
     return { programId: program.id, status: ProgramStatus.failed, topicCount: 0, error: message, failureKind: 'internal' };
   }
 }
 
-async function failProgram(programId: string, error: string): Promise<void> {
+async function failProgram(
+  programId: string,
+  error: string,
+  planUsage?: Prisma.InputJsonValue | null,
+): Promise<void> {
   await prisma.program
-    .update({ where: { id: programId }, data: { status: ProgramStatus.failed, error } })
+    .update({
+      where: { id: programId },
+      data: { status: ProgramStatus.failed, error, planUsage: planUsage ?? Prisma.JsonNull },
+    })
     .catch(() => {});
 }
 
