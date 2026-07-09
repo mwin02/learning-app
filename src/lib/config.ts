@@ -445,6 +445,24 @@ export const MAX_PROGRAM_TOPICS = 6;
 // check — acceptable (off-by-one on a free cap, not a security boundary).
 export const FREE_PROGRAMS_PER_MONTH = 3;
 
+// H1 (creation-route hardening, audit 1.1): the short-window burst cap on Program
+// creation attempts per user. Unlike FREE_PROGRAMS_PER_MONTH this counts ALL
+// statuses INCLUDING failed — a plan-empty/failed attempt doesn't burn monthly
+// quota (by design) but DID burn the synchronous plan pass (an LLM call), so the
+// burst cap is what stops a scripted loop of failing requests from hammering
+// Vertex. Same soft-limit caveat as the quota: two racing requests can both pass.
+export const PROGRAM_BURST_PER_HOUR = 3;
+export const PROGRAM_BURST_WINDOW_MS = 60 * 60 * 1000;
+
+// H1: duplicate-submit dedup window. A creation whose normalized payload hash
+// (programInputHash) matches a non-failed Program the same user created within
+// this window returns the EXISTING programId (202) instead of creating a sibling —
+// a double-clicked submit or client retry is invisible to the user and burns
+// nothing. Failed programs never dedup (an immediate retry after a failure is
+// legitimate). Short on purpose: re-running the same goal LATER to get a fresh
+// plan is a supported behavior, not a duplicate.
+export const PROGRAM_DEDUP_WINDOW_MS = 10 * 60 * 1000;
+
 // Decomposer-agent plan (Block 2): hard ceiling on model turns in the decompose
 // agent's tool loop (mirrors TRACK_COMPOSER_MAX_STEPS). One step = one model turn,
 // which may issue several tool calls. The happy path is short — a get_path_map per

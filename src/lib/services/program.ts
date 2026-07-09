@@ -13,7 +13,13 @@ import { ProgramStatus, CourseRequestStatus } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { planProgram, type ProgramPlan, type ProgramPlanInput } from '@/lib/agents/program/plan';
 
-export type EnqueueProgramInput = ProgramPlanInput & { userId?: string | null };
+// inputHash: the H1 idempotency fingerprint (programInputHash), persisted on the
+// anchor row so findRecentDuplicate can match a resubmit. Null for operator/dev
+// creations that skip the metered path.
+export type EnqueueProgramInput = ProgramPlanInput & {
+  userId?: string | null;
+  inputHash?: string | null;
+};
 
 export type EnqueueProgramResult = {
   programId: string;
@@ -52,6 +58,7 @@ export async function enqueueProgram(
       antiList: input.antiList ?? [],
       status: ProgramStatus.planning,
       userId: input.userId ?? null,
+      inputHash: input.inputHash ?? null,
       ...(input.userId ? { enrollments: { create: { userId: input.userId } } } : {}),
     },
     select: { id: true },

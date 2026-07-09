@@ -16,7 +16,12 @@ import { ZodError } from 'zod';
 import { generateProgramInputSchema } from '@/lib/api/generate-program-schema';
 import { withAuth } from '@/lib/api/with-auth';
 import { enqueueProgram } from '@/lib/services/program';
-import { programQuota } from '@/lib/services/program-limits';
+import {
+  findRecentDuplicate,
+  programBurst,
+  programInputHash,
+  programQuota,
+} from '@/lib/services/program-limits';
 
 // Prisma + the Vertex SDK (plan pass) need the Node runtime, not Edge. The plan
 // pass's worst case (one Pro-tier-free Flash decomposition + a handful of topic-gate
@@ -24,7 +29,7 @@ import { programQuota } from '@/lib/services/program-limits';
 export const maxDuration = 60;
 export const runtime = 'nodejs';
 
-type ErrorCode = 'INVALID_INPUT' | 'PLAN_EMPTY' | 'INTERNAL' | 'FREE_LIMIT_REACHED';
+type ErrorCode = 'INVALID_INPUT' | 'PLAN_EMPTY' | 'INTERNAL' | 'FREE_LIMIT_REACHED' | 'RATE_LIMITED';
 
 function errorResponse(status: number, code: ErrorCode, error: string, details?: unknown) {
   const body: { error: string; code: ErrorCode; details?: unknown } = { error, code };
@@ -50,12 +55,32 @@ export const POST = withAuth(async (req, session) => {
     throw err;
   }
 
-  // Phase 3c: the free-tier creation cap — Program creation is the app's most
-  // expensive user action (plan pass + N child Track builds), so it's metered per
-  // user per calendar month. Checked AFTER validation (a malformed request should
-  // say so, not burn a confusing quota error) and BEFORE the anchor insert. The
-  // dev bypass's null userId skips the check (local/scripted work is unmetered).
+  // H1: the idempotency fingerprint, persisted on the Program so a resubmit of the
+  // same payload can be matched. Computed for every creation (pure, cheap); the
+  // metered checks below only run for real sessions — the dev bypass's null userId
+  // stays unmetered (local/scripted work), as with the 3c quota.
+  const inputHash = programInputHash(input);
+
   if (session.userId) {
+    // H1 dedup — checked FIRST, before the quota/burst gates: a duplicate submit
+    // (double-click, client retry) should return the already-created Program even
+    // when the user is at a limit, not a confusing 429 for work that already exists.
+    const duplicate = await findRecentDuplicate(session.userId, inputHash);
+    if (duplicate) {
+      console.log('[generate-program] deduplicated', {
+        programId: duplicate.id,
+        userId: session.userId,
+      });
+      return Response.json(
+        { programId: duplicate.id, status: duplicate.status, deduplicated: true },
+        { status: 202 },
+      );
+    }
+
+    // Phase 3c: the free-tier creation cap — Program creation is the app's most
+    // expensive user action (plan pass + N child Track builds), so it's metered per
+    // user per calendar month. Checked AFTER validation (a malformed request should
+    // say so, not burn a confusing quota error) and BEFORE the anchor insert.
     const quota = await programQuota(session.userId);
     if (!quota.allowed) {
       return errorResponse(
@@ -65,13 +90,25 @@ export const POST = withAuth(async (req, session) => {
         { used: quota.used, limit: quota.limit }
       );
     }
+
+    // H1 burst cap — distinct payloads in a tight loop. Counts failed attempts too
+    // (they burned the plan pass), which the monthly quota deliberately doesn't.
+    const burst = await programBurst(session.userId);
+    if (!burst.allowed) {
+      return errorResponse(
+        429,
+        'RATE_LIMITED',
+        `Too many programs created recently — try again in a bit (limit ${burst.limit}/hour).`,
+        { used: burst.used, limit: burst.limit }
+      );
+    }
   }
 
   // enqueueProgram never throws — a plan/fan-out failure is recorded on the Program
   // as `failed` and returned here, so a failed plan still yields a pollable programId.
   let result;
   try {
-    result = await enqueueProgram({ ...input, userId: session.userId });
+    result = await enqueueProgram({ ...input, userId: session.userId, inputHash });
   } catch (err) {
     console.error('[generate-program] unexpected enqueue failure', err);
     return errorResponse(500, 'INTERNAL', 'Internal error.');

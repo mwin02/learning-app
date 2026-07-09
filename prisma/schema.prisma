@@ -848,11 +848,20 @@ model Program {
   // SetNull keeps the Program if the User is later removed.
   userId            String?
   user              User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  // H1 (audit 1.1): sha256 fingerprint of the normalized creation payload
+  // (programInputHash) — the idempotency key findRecentDuplicate matches a
+  // resubmit against. Null for pre-H1 rows and unmetered (dev/operator) creations.
+  inputHash         String?
   programPaths      ProgramPath[]
   courseRequests    CourseRequest[]
   enrollments       EnrolledProgram[]
   createdAt         DateTime        @default(now())
   updatedAt         DateTime        @updatedAt
+
+  // Serves the per-user metering scans (programQuota month count, programBurst
+  // hour count, findRecentDuplicate window lookup) — all filter on userId +
+  // createdAt first.
+  @@index([userId, createdAt])
 }
 
 // Phase 3a: program enrollment — the user-facing access record. Programs are
