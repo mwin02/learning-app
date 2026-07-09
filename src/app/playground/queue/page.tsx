@@ -127,7 +127,11 @@ export default async function QueuePage() {
     // Pending = claim order (oldest first, the worker's own ORDER BY).
     prisma.courseRequest.findMany({ where: { status: 'queued' }, orderBy: { createdAt: 'asc' }, take: ACTIVE_CAP, select: crSelect }),
     prisma.courseRequest.findMany({ where: { status: 'running' }, orderBy: { claimedAt: 'asc' }, take: ACTIVE_CAP, select: crSelect }),
-    prisma.courseRequest.findMany({ where: { status: 'fulfilled' }, orderBy: { updatedAt: 'desc' }, take: FINISHED_CAP, select: crSelect }),
+    // Ordered by createdAt (not finish time) so @@index([status, createdAt])
+    // serves it as an index scan + limit — no full scan of the unbounded
+    // `fulfilled` history. For a FIFO queue this is near finish-order; the
+    // displayed timestamp is still the true finish time (updatedAt).
+    prisma.courseRequest.findMany({ where: { status: 'fulfilled' }, orderBy: { createdAt: 'desc' }, take: FINISHED_CAP, select: crSelect }),
     prisma.remediationJob.findMany({ where: { state: 'queued' }, orderBy: { createdAt: 'asc' }, take: ACTIVE_CAP, select: remSelect }),
     prisma.remediationJob.findMany({ where: { state: 'running' }, orderBy: { claimedAt: 'asc' }, take: ACTIVE_CAP, select: remSelect }),
     prisma.remediationJob.findMany({ where: { state: 'succeeded' }, orderBy: { updatedAt: 'desc' }, take: FINISHED_CAP, select: remSelect }),
