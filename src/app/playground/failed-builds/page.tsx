@@ -23,6 +23,15 @@ const ROW_CAP = 300;
 
 const FAILED_BADGE = 'bg-red-100 text-red-800';
 
+// Path readiness → badge. spine_ready is a "warm" Path (a retry skips spine
+// authoring), so it's the useful signal that a re-queue will build fast.
+const PATH_STATUS_STYLE: Record<string, string> = {
+  draft: 'bg-gray-100 text-gray-700',
+  building: 'bg-amber-100 text-amber-800',
+  spine_ready: 'bg-green-100 text-green-800',
+  failed: 'bg-red-100 text-red-800',
+};
+
 type FailedRequest = {
   id: string;
   topic: string;
@@ -32,6 +41,20 @@ type FailedRequest = {
   updatedAt: Date;
   programId: string | null;
   program: { id: string; goal: string; title: string | null; status: string } | null;
+};
+
+// Why a build failed, resolved from its topic's Path (topic is @@unique, so 1:1).
+// A build that failed before ensurePathMap has no Path → path: null.
+type Diagnosis = {
+  path: { id: string; status: string; conceptCount: number } | null;
+  remediation: {
+    state: string;
+    holes: number;
+    escalated: number;
+    relaxed: number;
+    error: string | null;
+  } | null;
+  failedTrackIds: string[];
 };
 
 // Wall-clock the build ran before failing: claim → fail if it was claimed
@@ -49,7 +72,54 @@ function fmtWhen(d: Date): string {
   return d.toISOString().slice(0, 16).replace('T', ' ');
 }
 
-function RequestRow({ r }: { r: FailedRequest }) {
+// The "why" panel: the topic's Path state, its latest remediation attempt, and any
+// failed Track — the same trail a manual investigation walks (e.g. "spine_ready, 11
+// holes, remediation failed on deadline"). Absent for a build that never made a Path.
+function DiagnosisPanel({ diag }: { diag: Diagnosis }) {
+  if (!diag.path) {
+    return (
+      <p className="text-2xs text-gray-500">
+        No Path for this topic — the build failed before map creation.
+      </p>
+    );
+  }
+  const { path, remediation, failedTrackIds } = diag;
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-gray-600">
+      <span className="flex items-center gap-1">
+        <span className="text-gray-400">Path</span>
+        <Link href={`/playground/concept-maps/${path.id}`} className="underline">
+          <span className={`rounded px-1.5 py-0.5 font-medium ${PATH_STATUS_STYLE[path.status] ?? 'bg-gray-100 text-gray-700'}`}>
+            {path.status}
+          </span>
+        </Link>
+        <span>{path.conceptCount} concepts</span>
+      </span>
+      {remediation && (
+        <span className="flex items-center gap-1">
+          <span className="text-gray-400">Remediation</span>
+          <span className="font-medium">{remediation.state}</span>
+          <span>· {remediation.holes} holes</span>
+          {remediation.escalated > 0 && <span>· {remediation.escalated} escalated</span>}
+          {remediation.relaxed > 0 && <span>· {remediation.relaxed} relaxed</span>}
+          {remediation.error && <span className="font-mono text-red-900/70">· {remediation.error}</span>}
+        </span>
+      )}
+      {failedTrackIds.length > 0 && (
+        <span className="flex items-center gap-1">
+          <span className="text-gray-400">Failed track{failedTrackIds.length === 1 ? '' : 's'}</span>
+          {failedTrackIds.map((id) => (
+            <Link key={id} href={`/playground/tracks/${id}`} className="font-mono underline">
+              {id.slice(-6)}
+            </Link>
+          ))}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function RequestRow({ r, diag }: { r: FailedRequest; diag: Diagnosis | undefined }) {
   return (
     <li className="flex flex-col gap-1 border-l-2 border-red-200 pl-3 py-1 text-xs">
       <div className="flex items-center gap-2 flex-wrap">
@@ -59,6 +129,7 @@ function RequestRow({ r }: { r: FailedRequest }) {
         <span className="font-mono text-gray-400">{fmtWhen(r.updatedAt)}</span>
       </div>
       <p className="font-mono text-red-900/80 break-all">{r.error ?? '(no error message recorded)'}</p>
+      {diag && <DiagnosisPanel diag={diag} />}
     </li>
   );
 }
@@ -111,6 +182,54 @@ export default async function FailedBuildsPage() {
     g.requests.push(r);
   }
   const programGroups = [...byProgram.values()];
+
+  // Diagnose each failed build: resolve its topic → Path (topic is @@unique) →
+  // latest remediation attempt + any failed Track. One batched scan over the
+  // distinct topics, keyed back by topic for the render.
+  const topics = [...new Set(failedRequests.map((r) => r.topic))];
+  const paths = topics.length
+    ? await prisma.path.findMany({
+        where: { topic: { in: topics } },
+        select: {
+          id: true,
+          topic: true,
+          status: true,
+          _count: { select: { concepts: true } },
+          remediationJobs: {
+            orderBy: { updatedAt: 'desc' },
+            take: 1,
+            select: {
+              state: true,
+              holeSlugs: true,
+              escalatedConceptSlugs: true,
+              relaxedConceptSlugs: true,
+              error: true,
+            },
+          },
+          tracks: { where: { status: 'failed' }, select: { id: true }, take: 10 },
+        },
+      })
+    : [];
+  const diagByTopic = new Map<string, Diagnosis>();
+  for (const p of paths) {
+    const job = p.remediationJobs[0];
+    diagByTopic.set(p.topic, {
+      path: { id: p.id, status: p.status, conceptCount: p._count.concepts },
+      remediation: job
+        ? {
+            state: job.state,
+            holes: job.holeSlugs.length,
+            escalated: job.escalatedConceptSlugs.length,
+            relaxed: job.relaxedConceptSlugs.length,
+            error: job.error,
+          }
+        : null,
+      failedTrackIds: p.tracks.map((t) => t.id),
+    });
+  }
+  // A topic with no Path row still gets a panel ("failed before map creation").
+  const diagFor = (topic: string): Diagnosis =>
+    diagByTopic.get(topic) ?? { path: null, remediation: null, failedTrackIds: [] };
 
   const nothing = planFailures.length === 0 && programGroups.length === 0 && standalone.length === 0;
 
@@ -176,7 +295,7 @@ export default async function FailedBuildsPage() {
                 </div>
                 <ul className="flex flex-col gap-2">
                   {requests.map((r) => (
-                    <RequestRow key={r.id} r={r} />
+                    <RequestRow key={r.id} r={r} diag={diagFor(r.topic)} />
                   ))}
                 </ul>
               </li>
@@ -192,7 +311,7 @@ export default async function FailedBuildsPage() {
             {standalone.map((r) => (
               <li key={r.id} className="border rounded p-4">
                 <ul>
-                  <RequestRow r={r} />
+                  <RequestRow r={r} diag={diagFor(r.topic)} />
                 </ul>
               </li>
             ))}
