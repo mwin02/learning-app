@@ -3,10 +3,12 @@ import {
   log,
   logError,
   logWarn,
+  addUsageToSnapshot,
   currentTraceId,
   recordUsage,
   runWithTrace,
   traceUsageSnapshot,
+  type UsageSnapshot,
 } from '@/lib/log';
 
 afterEach(() => {
@@ -127,5 +129,51 @@ describe('trace usage accounting', () => {
       }),
     ]);
     expect(snapshots).toEqual({ a: 1, b: 100 });
+  });
+});
+
+describe('addUsageToSnapshot (persisted cross-request accumulation)', () => {
+  it('starts a snapshot from null', () => {
+    const snap = addUsageToSnapshot(null, 'intake.turn', {
+      inputTokens: 100,
+      outputTokens: 20,
+      totalTokens: 120,
+    });
+    expect(snap).toEqual({
+      stages: { 'intake.turn': { calls: 1, inputTokens: 100, outputTokens: 20, totalTokens: 120 } },
+      totals: { calls: 1, inputTokens: 100, outputTokens: 20, totalTokens: 120 },
+    });
+  });
+
+  it('folds into an existing snapshot without mutating it', () => {
+    const prev: UsageSnapshot = {
+      stages: { 'intake.turn': { calls: 1, inputTokens: 100, outputTokens: 20, totalTokens: 120 } },
+      totals: { calls: 1, inputTokens: 100, outputTokens: 20, totalTokens: 120 },
+    };
+    const next = addUsageToSnapshot(prev, 'intake.turn', {
+      inputTokens: 50,
+      outputTokens: 10,
+      totalTokens: 60,
+    });
+    expect(next?.stages['intake.turn']).toEqual({
+      calls: 2,
+      inputTokens: 150,
+      outputTokens: 30,
+      totalTokens: 180,
+    });
+    expect(next?.totals.totalTokens).toBe(180);
+    expect(prev.stages['intake.turn'].calls).toBe(1); // untouched
+  });
+
+  it('recomputes totals across stages and treats missing fields as 0', () => {
+    const a = addUsageToSnapshot(null, 's1', { totalTokens: 10 });
+    const b = addUsageToSnapshot(a, 's2', {});
+    expect(b?.totals).toEqual({ calls: 2, inputTokens: 0, outputTokens: 0, totalTokens: 10 });
+  });
+
+  it('returns prev unchanged for an undefined usage (failed call)', () => {
+    const prev = addUsageToSnapshot(null, 's', { totalTokens: 1 });
+    expect(addUsageToSnapshot(prev, 's', undefined)).toBe(prev);
+    expect(addUsageToSnapshot(null, 's', undefined)).toBeNull();
   });
 });
