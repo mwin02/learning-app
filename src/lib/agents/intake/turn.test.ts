@@ -72,9 +72,19 @@ describe('mergeDraft', () => {
     expect(mergeDraft({}, { ...NOTHING, antiList: many }).antiList).toHaveLength(20);
   });
 
-  it('an empty/all-blank antiList is an omission — it never clears persisted exclusions', () => {
-    expect(mergeDraft(FULL, { ...NOTHING, antiList: [] }).antiList).toEqual(['statistics']);
+  it('a literal [] is an explicit retraction — it clears persisted exclusions', () => {
+    expect(mergeDraft(FULL, { ...NOTHING, antiList: [] }).antiList).toBeUndefined();
+    // null stays the no-change signal.
+    expect(mergeDraft(FULL, NOTHING).antiList).toEqual(['statistics']);
+  });
+
+  it('an all-blank antiList is model junk, not a retraction — persisted exclusions survive', () => {
     expect(mergeDraft(FULL, { ...NOTHING, antiList: ['', ' '] }).antiList).toEqual(['statistics']);
+  });
+
+  it('a cleared antiList still parses ready (retraction cannot un-ready a draft)', () => {
+    const out = mergeDraft(FULL, { ...NOTHING, antiList: [] });
+    expect(draftReady(out)).toBe(true);
   });
 
   it('does not mutate the persisted draft', () => {

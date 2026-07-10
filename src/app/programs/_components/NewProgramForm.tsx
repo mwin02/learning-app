@@ -6,17 +6,28 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { submitProgram } from './submit-program';
+import { submitProgram, type GenerateProgramPayload } from './submit-program';
 
 // Notebook language (intake Block 5): fields are sticky-note fills with gold
 // kicker labels, matching the chat pane it shares the sheet with.
+// focus-visible keeps a keyboard-visible indicator despite outline-none.
 const inputCls =
-  'w-full rounded border border-note-edge bg-note px-3 py-2 font-script text-sm text-script-body outline-none placeholder:italic placeholder:text-script-dim';
+  'w-full rounded border border-note-edge bg-note px-3 py-2 font-script text-sm text-script-body outline-none placeholder:italic placeholder:text-script-dim focus-visible:border-pen';
 
-export function NewProgramForm({ defaultGoal }: { defaultGoal?: string }) {
+export function NewProgramForm({
+  defaultGoal,
+  defaults,
+}: {
+  defaultGoal?: string;
+  // The chat intake's gathered draft (intake Block 6): when the chat dead-ends
+  // into this form, everything already answered arrives prefilled — including
+  // antiList, which has no field here and is carried through the submit.
+  defaults?: Partial<GenerateProgramPayload>;
+}) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const antiList = defaults?.antiList?.length ? defaults.antiList : undefined;
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -28,6 +39,7 @@ export function NewProgramForm({ defaultGoal }: { defaultGoal?: string }) {
       background: String(f.get('background') ?? '') || undefined,
       totalHoursPerWeek: Number(f.get('totalHoursPerWeek')),
       totalWeeks: Number(f.get('totalWeeks')),
+      antiList,
     });
     if (result.ok) {
       router.push(`/programs/${result.programId}`);
@@ -46,7 +58,7 @@ export function NewProgramForm({ defaultGoal }: { defaultGoal?: string }) {
           required
           maxLength={2000}
           rows={3}
-          defaultValue={defaultGoal}
+          defaultValue={defaults?.goal ?? defaultGoal}
           placeholder="e.g. Be ready for first-year CS: comfortable with Python and calculus"
           className={inputCls}
         />
@@ -57,6 +69,7 @@ export function NewProgramForm({ defaultGoal }: { defaultGoal?: string }) {
           name="background"
           maxLength={2000}
           rows={2}
+          defaultValue={defaults?.background}
           placeholder="What do you already know?"
           className={inputCls}
         />
@@ -64,13 +77,18 @@ export function NewProgramForm({ defaultGoal }: { defaultGoal?: string }) {
       <div className="flex gap-4">
         <label className="flex flex-1 flex-col gap-1">
           <span className="nb-kicker text-[11px] text-note-label">Hours / week *</span>
-          <input type="number" name="totalHoursPerWeek" required min={1} max={40} defaultValue={5} className={inputCls} />
+          <input type="number" name="totalHoursPerWeek" required min={1} max={40} defaultValue={defaults?.totalHoursPerWeek ?? 5} className={inputCls} />
         </label>
         <label className="flex flex-1 flex-col gap-1">
           <span className="nb-kicker text-[11px] text-note-label">Weeks *</span>
-          <input type="number" name="totalWeeks" required min={1} max={52} defaultValue={8} className={inputCls} />
+          <input type="number" name="totalWeeks" required min={1} max={52} defaultValue={defaults?.totalWeeks ?? 8} className={inputCls} />
         </label>
       </div>
+      {antiList && (
+        <p className="font-script text-xs text-script-faint">
+          Excluded (from your chat): {antiList.join(', ')}
+        </p>
+      )}
       {error && <p className="font-script text-sm text-crayon-red">{error}</p>}
       <button
         type="submit"
