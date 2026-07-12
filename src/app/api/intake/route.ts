@@ -42,8 +42,14 @@ function errorResponse(status: number, code: ErrorCode, error: string, details?:
 const EXHAUSTED_REPLY =
   'We’ve hit the length limit for this conversation. Your answers so far aren’t lost — switch to the form below to finish creating your program.';
 
-// Body limits per the plan: message ≤ 1,000 chars; transcript ≤ MAX_TURNS × 2
-// messages of ≤ 1,000 chars each — a resent history can't balloon the prompt.
+// Body limits per the plan: message ≤ 1,000 chars; transcript messages ≤ 1,000
+// chars each — a resent history can't balloon the prompt. The transcript is
+// context-only, so an over-long one is SLICED to the newest INTAKE_MAX_TURNS × 2
+// messages in the handler rather than rejected: the client's mirror constant
+// can't know a server-side env override of INTAKE_MAX_TURNS, and a cap mismatch
+// must degrade to trimmed context, never a 400 that kills the conversation.
+// The Zod max is only an abuse backstop on raw body size.
+const TRANSCRIPT_HARD_CAP = 200;
 const bodySchema = z.object({
   sessionId: z.string().min(1).optional(),
   message: z.string().trim().min(1).max(1000),
@@ -54,7 +60,7 @@ const bodySchema = z.object({
         content: z.string().max(1000),
       }),
     )
-    .max(INTAKE_MAX_TURNS * 2)
+    .max(TRANSCRIPT_HARD_CAP)
     .default([]),
 });
 
@@ -131,9 +137,13 @@ export const POST = withAuth(async (req, session) =>
     }
 
     // Run the turn against the SERVER-persisted draft. The client transcript
-    // (bounded above) is context only; the newest message is appended here.
+    // is context only — sliced to the newest MAX_TURNS × 2 messages (see
+    // bodySchema note); the newest message is appended here.
     const draft = (intakeSession.draft ?? {}) as IntakeDraft;
-    const transcript = [...body.transcript, { role: 'user' as const, content: body.message }];
+    const transcript = [
+      ...body.transcript.slice(-(INTAKE_MAX_TURNS * 2)),
+      { role: 'user' as const, content: body.message },
+    ];
     let result;
     try {
       result = await intakeTurn({ transcript, draft });

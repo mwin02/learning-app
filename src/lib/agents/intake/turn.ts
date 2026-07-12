@@ -65,9 +65,12 @@ function clampInt(n: number, min: number, max: number): number {
 //     lose to server state — the model re-emitting only what changed is fine).
 //   - numerics are rounded + clamped into schema range; non-finite is ignored.
 //   - strings are trimmed + truncated to the schema cap.
-//   - antiList entries are trimmed, empties dropped, each capped, list capped;
-//     an empty result counts as an omission (keeps the persisted list — the
-//     model defaulting to [] on unrelated turns must not clear real exclusions).
+//   - antiList entries are trimmed, empties dropped, each capped, list capped.
+//     A literal [] is an explicit RETRACTION and clears the persisted list (the
+//     prompt reserves it for "the learner withdrew their exclusions"; null is
+//     the no-change signal — without a clear signal, exclusions were a one-way
+//     ratchet the chat could never undo). A non-empty list that cleans to
+//     nothing is model junk and counts as an omission, not a retraction.
 export function mergeDraft(persisted: IntakeDraft, extracted: IntakeExtraction['draft']): IntakeDraft {
   const next: IntakeDraft = { ...persisted };
 
@@ -85,11 +88,15 @@ export function mergeDraft(persisted: IntakeDraft, extracted: IntakeExtraction['
   }
 
   if (extracted.antiList) {
-    const cleaned = extracted.antiList
-      .map((s) => s.trim().slice(0, ANTI_ITEM_MAX))
-      .filter((s) => s.length > 0)
-      .slice(0, ANTI_LIST_MAX);
-    if (cleaned.length > 0) next.antiList = cleaned;
+    if (extracted.antiList.length === 0) {
+      delete next.antiList;
+    } else {
+      const cleaned = extracted.antiList
+        .map((s) => s.trim().slice(0, ANTI_ITEM_MAX))
+        .filter((s) => s.length > 0)
+        .slice(0, ANTI_LIST_MAX);
+      if (cleaned.length > 0) next.antiList = cleaned;
+    }
   }
 
   return next;

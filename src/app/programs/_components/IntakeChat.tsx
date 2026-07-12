@@ -5,8 +5,11 @@
 // as context; the server owns the draft and the turn budget. On `ready` the
 // confirmation card renders from the server's draft, and "Create program" POSTs
 // it through the shared submitProgram helper — the same public route, quota,
-// burst, dedup, and validation as the form. Any dead end (exhausted budget,
-// rate limit, fetch failure) points at the form toggle, the designed fallback.
+// burst, dedup, and validation as the form. A true dead end (exhausted budget,
+// rate limit) points at the form toggle, the designed fallback — and hands it
+// the gathered draft so nothing is retyped. Transient faults (network, 5xx)
+// are retryable in place: the server deliberately does NOT count a failed
+// turn, so the client must not kill the conversation over one.
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -15,9 +18,11 @@ import { submitProgram, type GenerateProgramPayload } from './submit-program';
 
 type ChatMessage = { role: 'user' | 'assistant'; content: string };
 
-// Mirrors the route's body caps (message ≤ 1000 chars, transcript ≤ 30 msgs of
-// ≤ 1000): the client clamps before sending so a long assistant reply or a
-// huge ?goal= never turns into a 400.
+// Mirrors the route's default caps (message ≤ 1000 chars, transcript ≤ 30 msgs
+// of ≤ 1000) so a long assistant reply or a huge ?goal= is clamped before
+// sending. Best-effort only: the route SLICES an over-long transcript to its
+// own (env-tunable) cap rather than rejecting, so a mismatch degrades to
+// trimmed context, never a 400.
 const MSG_MAX = 1000;
 const TRANSCRIPT_MAX = 30;
 
@@ -96,24 +101,43 @@ function ConfirmationCard({ draft }: { draft: Partial<GenerateProgramPayload> })
 export function IntakeChat({
   initialGoal,
   onFallbackToForm,
+  onDraftChange,
 }: {
   initialGoal?: string;
   onFallbackToForm: () => void;
+  // Reports the server's latest draft upward so the form fallback can be
+  // seeded from it (nothing gathered is lost when the chat dead-ends).
+  onDraftChange?: (draft: Partial<GenerateProgramPayload>) => void;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState('');
+  // The home scratchpad's ?goal= carry-through PREFILLS the input; the learner
+  // presses Send. (It used to auto-send on mount, but that burned an
+  // IntakeSession + a Flash call on every reload of /programs/new?goal=… —
+  // five reloads rate-limited the user out of chat without them typing a word.
+  // Visiting the page must cost nothing until the user acts.)
+  const [input, setInput] = useState(() => (initialGoal ?? '').trim().slice(0, MSG_MAX));
   const [sessionId, setSessionId] = useState<string | undefined>(undefined);
   const [draft, setDraft] = useState<Partial<GenerateProgramPayload> | null>(null);
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [dead, setDead] = useState<string | null>(null); // terminal: exhausted / rate-limited / failed
+  const [dead, setDead] = useState<string | null>(null); // terminal: exhausted / rate-limited / rejected
+  const [notice, setNotice] = useState<string | null>(null); // transient: retry is fine
   const bottomRef = useRef<HTMLDivElement | null>(null);
-  const seededRef = useRef(false);
+
+  // A transient fault: un-append the optimistic user bubble and put the
+  // message back in the input so Send retries it verbatim. The server didn't
+  // count the turn, so neither should the UI.
+  function retryable(message: string, why: string) {
+    setMessages((prev) => prev.slice(0, -1));
+    setInput(message);
+    setNotice(why);
+  }
 
   async function send(text: string) {
     const message = text.trim().slice(0, MSG_MAX);
     if (!message || busy || dead) return;
     setBusy(true);
+    setNotice(null);
     const transcript = messages
       .map((m) => ({ ...m, content: m.content.slice(0, MSG_MAX) }))
       .slice(-TRANSCRIPT_MAX);
@@ -131,7 +155,7 @@ export function IntakeChat({
       status = res.status;
       data = await res.json().catch(() => ({}));
     } catch {
-      setDead('The chat is unavailable right now — the form below works.');
+      retryable(message, 'That didn’t go through — check your connection and send it again.');
       setBusy(false);
       return;
     }
@@ -142,34 +166,24 @@ export function IntakeChat({
     } else if (status === 200 && data.reply) {
       setSessionId(data.sessionId);
       setMessages((prev) => [...prev, { role: 'assistant', content: data.reply! }]);
-      if (data.draft) setDraft(data.draft);
+      if (data.draft) {
+        setDraft(data.draft);
+        onDraftChange?.(data.draft);
+      }
       setReady(Boolean(data.ready));
     } else if (data.code === 'RATE_LIMITED') {
       setDead('Too many chat sessions recently — use the form below, or come back in a bit.');
+    } else if (status >= 500 || status === 200) {
+      // 5xx (the route deliberately did NOT count the turn) or a 200 missing
+      // its reply — one hiccup must not forfeit the conversation.
+      retryable(message, 'That didn’t go through — send it again.');
     } else {
+      // 4xx: something structurally wrong (stale/closed session, bad body) —
+      // retrying the same request can't help.
       setDead('The chat hit a snag — the form below works.');
     }
     setBusy(false);
   }
-
-  // The home scratchpad's ?goal= carry-through seeds and auto-sends the first
-  // message. Ref-guarded so React strict-mode's double effect run (and any
-  // re-render) can't burn a second turn.
-  useEffect(() => {
-    if (seededRef.current) return;
-    seededRef.current = true;
-    if (!initialGoal?.trim()) return;
-    // Deferred a tick: the auto-send mutates state, which doesn't belong
-    // synchronously inside an effect body. Cleanup re-arms the ref so strict
-    // mode's mount→unmount→mount cycle sends exactly once (the first mount's
-    // timer is cancelled, the second's fires).
-    const t = setTimeout(() => void send(initialGoal), 0);
-    return () => {
-      clearTimeout(t);
-      seededRef.current = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -212,10 +226,18 @@ export function IntakeChat({
             writing…
           </div>
         )}
-        {ready && draft && !dead && <ConfirmationCard draft={draft} />}
+        {/* The card survives a dead chat on purpose: a ready draft that hit
+            the turn budget is still submittable — killing it would break the
+            exhausted reply's "your answers aren't lost" promise. */}
+        {ready && draft && <ConfirmationCard draft={draft} />}
         <div ref={bottomRef} />
       </div>
 
+      {notice && !dead && (
+        <p className="font-script text-sm text-crayon-red" role="status">
+          {notice}
+        </p>
+      )}
       {dead ? (
         <p className="max-w-[440px] rounded border border-note-edge bg-note px-3.5 py-2 font-script text-sm text-crayon-red">
           {dead}
@@ -234,7 +256,7 @@ export function IntakeChat({
             disabled={busy}
             maxLength={MSG_MAX}
             placeholder={messages.length === 0 ? 'e.g. I want to be ready for first-year CS' : 'Reply…'}
-            className="w-full border-b-2 border-rule bg-transparent px-0 py-1 font-script text-lg text-pen caret-pen outline-none placeholder:italic placeholder:text-script-dim disabled:opacity-50"
+            className="w-full border-b-2 border-rule bg-transparent px-0 py-1 font-script text-lg text-pen caret-pen outline-none placeholder:italic placeholder:text-script-dim focus-visible:border-pen disabled:opacity-50"
           />
           <button
             type="submit"
@@ -259,15 +281,25 @@ export function IntakeChat({
 }
 
 // The /programs/new pane: chat by default, the structured form behind a toggle
-// (the turn-budget fallback and the chat-hater escape hatch).
+// (the turn-budget fallback and the chat-hater escape hatch). The chat stays
+// MOUNTED (hidden) while the form shows: unmounting discarded the sessionId,
+// transcript, and server draft, so a toggle round-trip silently orphaned the
+// conversation. The form is seeded from the chat's latest draft for the same
+// reason — the fallback must carry the answers over, not restart.
 export function IntakePane({ initialGoal }: { initialGoal?: string }) {
   const [mode, setMode] = useState<'chat' | 'form'>('chat');
+  const [draft, setDraft] = useState<Partial<GenerateProgramPayload> | null>(null);
   return (
     <div className="flex flex-col gap-4">
-      {mode === 'chat' ? (
-        <IntakeChat initialGoal={initialGoal} onFallbackToForm={() => setMode('form')} />
-      ) : (
-        <NewProgramForm defaultGoal={initialGoal} />
+      <div className={mode === 'chat' ? 'flex flex-col' : 'hidden'}>
+        <IntakeChat
+          initialGoal={initialGoal}
+          onFallbackToForm={() => setMode('form')}
+          onDraftChange={setDraft}
+        />
+      </div>
+      {mode === 'form' && (
+        <NewProgramForm defaultGoal={initialGoal} defaults={draft ?? undefined} />
       )}
       <button
         type="button"
