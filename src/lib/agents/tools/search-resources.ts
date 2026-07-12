@@ -205,6 +205,40 @@ export async function searchResources(params: SearchParams): Promise<SearchResul
   return ranked;
 }
 
+// Library re-judge Block 4 (rung 0): distance-gated candidate search. Unlike
+// searchResources this ALWAYS ranks (no fast path — the caller needs real
+// distances even on a small filtered set, where the fast path would return
+// trust-ordered rows of arbitrary relevance) and applies a hard distance
+// ceiling, so a far-off row can never enter the result on trust alone.
+// Eligibility reuses buildConditions with the rung-0 defaults locked in the
+// re-judge plan: statuses ['active','pending_review'], pickableOnly, plus
+// excludeGenerated (on-ramp lessons enter only via their own concept's
+// injected map). Un-embedded rows can't be ranked and are excluded.
+export async function searchNearbyResources(args: {
+  topics: string[];
+  query: string;
+  maxDistance: number;
+  limit: number;
+  // e.g. rows already attached to the demanding concept.
+  excludeIds?: string[];
+}): Promise<{ id: string; distance: number }[]> {
+  const { topics, query, maxDistance, limit, excludeIds } = args;
+  const vec = await embedQuery(query);
+  const literal = `[${vec.join(',')}]`;
+  const conds = buildConditions({ topics, excludeGenerated: true });
+  conds.push(Prisma.sql`embedding IS NOT NULL`);
+  conds.push(Prisma.sql`(embedding <=> ${literal}::vector) <= ${maxDistance}`);
+  if (excludeIds && excludeIds.length > 0) {
+    conds.push(Prisma.sql`id NOT IN (${Prisma.join(excludeIds)})`);
+  }
+  return prisma.$queryRaw<{ id: string; distance: number }[]>`
+    SELECT id, (embedding <=> ${literal}::vector)::float8 AS distance
+    FROM "Resource" ${whereClause(conds)}
+    ORDER BY embedding <=> ${literal}::vector
+    LIMIT ${limit}
+  `;
+}
+
 // AI SDK tool wrapper. Not yet wired into any agent — AR-3's retrieval loop
 // consumes it (and adds the opaque-handle indirection over the real ids this
 // returns). Pickability and the status window are fixed here; the model only
