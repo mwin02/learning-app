@@ -8,8 +8,10 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { submitProgram } from './submit-program';
 
+// Notebook language (intake Block 5): fields are sticky-note fills with gold
+// kicker labels, matching the chat pane it shares the sheet with.
 const inputCls =
-  'w-full rounded-control border border-line bg-surface px-3 py-2 text-sm text-ink';
+  'w-full rounded border border-note-edge bg-note px-3 py-2 font-script text-sm text-script-body outline-none placeholder:italic placeholder:text-script-dim';
 
 export function NewProgramForm({ defaultGoal }: { defaultGoal?: string }) {
   const router = useRouter();
@@ -38,7 +40,7 @@ export function NewProgramForm({ defaultGoal }: { defaultGoal?: string }) {
   return (
     <form onSubmit={onSubmit} className="flex flex-col gap-4">
       <label className="flex flex-col gap-1">
-        <span className="meta-xs">Goal *</span>
+        <span className="nb-kicker text-[11px] text-note-label">Goal *</span>
         <textarea
           name="goal"
           required
@@ -50,7 +52,7 @@ export function NewProgramForm({ defaultGoal }: { defaultGoal?: string }) {
         />
       </label>
       <label className="flex flex-col gap-1">
-        <span className="meta-xs">Your background (optional)</span>
+        <span className="nb-kicker text-[11px] text-note-label">Your background (optional)</span>
         <textarea
           name="background"
           maxLength={2000}
@@ -61,23 +63,23 @@ export function NewProgramForm({ defaultGoal }: { defaultGoal?: string }) {
       </label>
       <div className="flex gap-4">
         <label className="flex flex-1 flex-col gap-1">
-          <span className="meta-xs">Hours / week *</span>
+          <span className="nb-kicker text-[11px] text-note-label">Hours / week *</span>
           <input type="number" name="totalHoursPerWeek" required min={1} max={40} defaultValue={5} className={inputCls} />
         </label>
         <label className="flex flex-1 flex-col gap-1">
-          <span className="meta-xs">Weeks *</span>
+          <span className="nb-kicker text-[11px] text-note-label">Weeks *</span>
           <input type="number" name="totalWeeks" required min={1} max={52} defaultValue={8} className={inputCls} />
         </label>
       </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="font-script text-sm text-crayon-red">{error}</p>}
       <button
         type="submit"
         disabled={busy}
-        className="rounded-button bg-brand px-5 py-2.5 font-semibold text-white disabled:opacity-50"
+        className="btn-ink -rotate-[0.5deg] self-start px-6 py-1.5 text-[24px] disabled:opacity-50"
       >
         {busy ? 'Planning your program…' : 'Generate program'}
       </button>
-      <p className="meta-xs">
+      <p className="font-script text-xs text-script-faint">
         Planning takes a few seconds; the tracks build in the background afterwards.
       </p>
     </form>

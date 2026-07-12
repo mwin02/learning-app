@@ -7,6 +7,7 @@
 
 import { redirect } from 'next/navigation';
 import { getViewer } from '@/lib/auth/viewer';
+import { Desk, Sheet } from '@/components/notebook/Sheet';
 import { IntakePane } from '../_components/IntakeChat';
 
 export const dynamic = 'force-dynamic';
@@ -22,12 +23,16 @@ export default async function NewProgramPage({
     redirect(`/signin?next=${encodeURIComponent(next)}`);
   }
   return (
-    <div className="flex min-h-screen items-center justify-center bg-surface px-6 text-ink">
-      <main className="card w-full max-w-lg p-8">
-        <div className="eyebrow mb-2">New program</div>
-        <h1 className="mb-4 text-2xl font-bold tracking-[-0.5px]">What&apos;s your goal?</h1>
-        <IntakePane initialGoal={goal} />
-      </main>
-    </div>
+    <Desk maxWidth={860}>
+      <Sheet>
+        <div className="nb-kicker">new program —</div>
+        <h1 className="mb-5 mt-1.5 font-hand text-[46px] font-bold leading-[0.95] text-script">
+          What&apos;s your goal?
+        </h1>
+        <div className="max-w-[640px]">
+          <IntakePane initialGoal={goal} />
+        </div>
+      </Sheet>
+    </Desk>
   );
 }
