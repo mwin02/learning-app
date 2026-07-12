@@ -30,6 +30,7 @@ type AgentName =
   | 'goalGate'
   | 'programPlanner'
   | 'programDecomposer'
+  | 'intake'
   | 'health';
 
 type ModelConfig = {
@@ -312,6 +313,19 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     modelId: 'gemini-2.5-flash',
     temperature: 0.2,
     maxOutputTokens: 16384,
+  },
+  intake: {
+    // Chat intake (Block 2): one non-streaming structured call per /programs/new
+    // chat turn — conversation + field extraction over a short fenced transcript.
+    // Extraction + chitchat, not judgment (plan-pass reasoning stays in
+    // programDecomposer), so Flash; overridable via MODEL_INTAKE. Temperature
+    // above zero so replies read conversational rather than canned, low enough
+    // that extraction stays literal. 4k output: the reply is a couple of
+    // sentences + a small draft object, but Flash 2.5 spends output budget on
+    // internal thinking first.
+    modelId: 'gemini-2.5-flash',
+    temperature: 0.4,
+    maxOutputTokens: 4096,
   },
   health: {
     modelId: 'gemini-2.5-flash',
