@@ -15,6 +15,12 @@
 // ranked search path filters `embedding IS NOT NULL`, and a just-sourced row's
 // embedding is written best-effort post-commit, so it would be invisible to a
 // semantic re-search in the same run. The insertedIds ARE the candidate set.
+//
+// Library re-judge Block 2: the judge → attach tail is factored out as
+// judgeAndAttachCandidates so callers holding EXISTING candidate ids (the
+// decompose-time hook, rung-0 library candidates) run the identical pipeline
+// without a web-sourcing round. sourceAndAttachConcept = sourceForConcept →
+// on-ramp backstop → judgeAndAttachCandidates(insertedIds).
 
 import { Difficulty, BankStaleReason } from '@prisma/client';
 import { prisma } from '@/lib/db';
@@ -46,20 +52,73 @@ export async function sourceAndAttachConcept(args: {
   const { pathId, topic, conceptId, slug, title, targetMastery, isOnRamp = false, preferSubstantial = false } = args;
 
   const sourced = await sourceForConcept({ topic, concept: { slug, title }, conceptId, targetMastery, preferSubstantial });
-  let rows = await loadAsSearchResults(sourced.insertedIds);
+  let candidateIds = sourced.insertedIds;
 
   // Phase 2g-4: on-ramp backstop. The cold build (ensure-path-map) normally authors the
   // on-ramp's generated primary; this covers the case where that generation failed and
   // left the on-ramp a hole, so remediation reaches it. Idempotent (reuses a row the
   // cold build did manage to write). Prepended, deduped — the generated row is already
-  // `active`, so the promote-on-attach updateMany below simply no-ops for it.
+  // `active`, so the promote-on-attach updateMany in the attach tail no-ops for it.
   if (isOnRamp) {
     const generated = await generateOnRampResource({ topic, concept: { slug, title } });
-    if (generated) rows = [generated, ...rows.filter((r) => r.id !== generated.id)];
+    if (generated) candidateIds = [generated.id, ...candidateIds.filter((id) => id !== generated.id)];
   }
 
+  return judgeAndAttachCandidates({
+    pathId,
+    conceptId,
+    slug,
+    title,
+    candidateIds,
+    targetMastery,
+    isOnRamp,
+    reason: 'source-concept',
+  });
+}
+
+// Library re-judge Block 2: the judge → attach tail as a standalone primitive, so
+// callers that already HAVE candidate ids (the decompose-time hook re-judging a
+// container's children, rung-0 library candidates) reuse the exact
+// judge/floor/cap/promote/readiness pipeline that remediation uses.
+//
+// Loads candidates DIRECTLY by id (see the embedding-race note above), drops any
+// already attached to this concept (re-judging an attached row would just churn
+// the judge), judges with the concept's regime, and attaches the keepers in one
+// transaction. Returns how many candidates it attached (0 = nothing new).
+export async function judgeAndAttachCandidates(args: {
+  pathId: string;
+  conceptId: string;
+  slug: string;
+  title: string;
+  candidateIds: string[];
+  // Logged only — the attach tail is mastery-agnostic (discovery already biased);
+  // kept in the signature so call sites read like their sourcing context.
+  targetMastery?: Difficulty;
+  // Lever C: strict orientation-only judge rubric for the on-ramp concept.
+  isOnRamp?: boolean;
+  // For logs: which flow demanded this judge pass (remediation, decompose hook…).
+  reason?: string;
+}): Promise<number> {
+  const { pathId, conceptId, slug, title, candidateIds, targetMastery, isOnRamp = false, reason = 'judge-attach' } = args;
+
+  // Exclude rows already attached to this concept: they were judged when they
+  // attached, and re-attaching is a createMany no-op anyway — spending judge
+  // tokens on them is pure waste. (Today's sourcing callers can't hit this —
+  // insertedIds are new rows — but the hook and rung 0 re-judge library rows.)
+  let ids = candidateIds;
+  if (ids.length > 0) {
+    const attached = await prisma.conceptResource.findMany({
+      where: { conceptId, resourceId: { in: ids } },
+      select: { resourceId: true },
+    });
+    const attachedIds = new Set(attached.map((a) => a.resourceId));
+    ids = ids.filter((id) => !attachedIds.has(id));
+  }
+
+  const rows = await loadAsSearchResults(ids);
+
   if (rows.length === 0) {
-    console.log('[source-concept] sourced nothing', { pathId, concept: slug });
+    console.log('[source-concept] no candidates to judge', { pathId, concept: slug, reason });
     return 0;
   }
 
@@ -69,7 +128,7 @@ export async function sourceAndAttachConcept(args: {
   // aware duration penalty as the cold-build path (strict for the on-ramp).
   const kept = selectAttachable(judged, { isOnRamp });
   if (kept.length === 0) {
-    console.log('[source-concept] sourced rows all judged irrelevant', { pathId, concept: slug, sourced: rows.length });
+    console.log('[source-concept] candidates all judged irrelevant', { pathId, concept: slug, reason, candidates: rows.length });
     return 0;
   }
 
@@ -120,13 +179,16 @@ export async function sourceAndAttachConcept(args: {
     }
     await recomputeReadiness(pathId, tx);
   });
-  console.log('[source-concept] attached', { pathId, concept: slug, attached: kept.length, targetMastery: targetMastery ?? null });
+  console.log('[source-concept] attached', { pathId, concept: slug, attached: kept.length, reason, targetMastery: targetMastery ?? null });
   return kept.length;
 }
 
-// Hydrate freshly-sourced rows into the SearchResult shape the judge consumes,
-// loading them directly by id (see the embedding-race note above).
+// Hydrate candidate rows into the SearchResult shape the judge consumes, loading
+// them directly by id (see the embedding-race note above). Preserves the caller's
+// id order (findMany returns DB order) — the on-ramp backstop relies on its
+// generated row coming first.
 async function loadAsSearchResults(ids: string[]): Promise<SearchResult[]> {
+  if (ids.length === 0) return [];
   const rows = await prisma.resource.findMany({
     where: { id: { in: ids } },
     select: {
@@ -135,5 +197,8 @@ async function loadAsSearchResults(ids: string[]): Promise<SearchResult[]> {
       conceptsTaught: true, requiresPurchase: true, trustScore: true, decompositionStatus: true,
     },
   });
-  return rows.map((r) => ({ ...r, distance: null }));
+  const order = new Map(ids.map((id, i) => [id, i]));
+  return rows
+    .map((r) => ({ ...r, distance: null }))
+    .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
 }
