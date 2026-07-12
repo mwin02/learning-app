@@ -31,6 +31,7 @@ import {
   markAtomic,
   markUnsupported,
 } from '@/lib/agents/decomposition/upsert-resource';
+import { rejudgeForDemandingPaths, type RejudgeResult } from '@/lib/agents/decomposition/rejudge-sourced-for';
 
 // A force-decompose of a large container runs YouTube paging / doc fetch + chunked
 // concept-derivation LLM calls and can exceed Vercel's 60s cap — those are a
@@ -102,12 +103,28 @@ export const POST = withAdminAuth(async (req) => {
   const raced = () =>
     errorResponse(409, 'INVALID_STATE', 'Resource was decided concurrently; no change applied.');
 
+  // Library re-judge Block 3: after every success shape, offer the now-pickable
+  // rows (atomic children, or the row itself on accept_atomic) back to the
+  // path(s) whose demand sourced this container. Inline and best-effort — the
+  // decomposition is already committed, so a hook failure reports in the
+  // response instead of failing it. Note: an operator-accepted over-ceiling row
+  // (> the attach duration ceiling) is dropped by the attach floor inside the
+  // hook — `attachments` comes back empty by design, not a bug.
+  const rejudge = async (): Promise<RejudgeResult | { error: string }> => {
+    try {
+      return await rejudgeForDemandingPaths(resource.id);
+    } catch (err) {
+      console.error('[decomposition-review] rejudge hook failed', { resourceId: resource.id, err });
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  };
+
   try {
     switch (input.action) {
       case 'accept_atomic': {
         const { applied } = await markAtomic(resource.id);
         if (!applied) return raced();
-        return Response.json({ resourceId: resource.id, status: 'atomic' });
+        return Response.json({ resourceId: resource.id, status: 'atomic', rejudge: await rejudge() });
       }
 
       case 'reject': {
@@ -136,6 +153,7 @@ export const POST = withAdminAuth(async (req) => {
           status,
           childrenCreated,
           ...(result.reason ? { reason: result.reason } : {}),
+          rejudge: await rejudge(),
         });
       }
 
@@ -153,7 +171,7 @@ export const POST = withAdminAuth(async (req) => {
           status: 'decomposed',
           children,
         });
-        return Response.json({ resourceId: resource.id, status, childrenCreated });
+        return Response.json({ resourceId: resource.id, status, childrenCreated, rejudge: await rejudge() });
       }
     }
   } catch (err) {
