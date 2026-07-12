@@ -223,6 +223,7 @@ model User {
   progress       Progress[]
   courseRequests CourseRequest[]
   programs       Program[]
+  intakeSessions IntakeSession[]
 }
 
 enum UserRole {
@@ -935,4 +936,41 @@ enum ProgramStatus {
 enum PriorityTier {
   core
   nice_to_have
+}
+
+// Chat intake (Block 1): one row per intake conversation — the rate-limit anchor
+// (sessions-per-hour count over [userId, createdAt]) and the server-authoritative
+// draft/turn state. Deliberately minimal and PERMANENT in shape: no message or
+// transcript storage, ever (user decision — the transcript is client-held and
+// resent each turn as conversational context only).
+model IntakeSession {
+  id        String              @id @default(cuid())
+  userId    String
+  user      User                @relation(fields: [userId], references: [id])
+  status    IntakeSessionStatus @default(active)
+  // Server-side turn counter — the INTAKE_MAX_TURNS budget anchor. A tampered
+  // client transcript can't dodge it because only the route increments it.
+  turnCount Int                 @default(0)
+  // Partial GenerateProgramInput, server-authoritative — each turn the route
+  // loads THIS draft (never the client's), merges the agent's extraction, and
+  // persists the result. Ready = it parses against generateProgramInputSchema.
+  draft     Json?
+  // Accumulated per-turn token usage (H3 idiom — a UsageSnapshot, mirrors
+  // Program.planUsage) so intake LLM spend is visible per session.
+  usage     Json?
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+
+  // The sessions-per-hour burst count (intakeSessionBurst).
+  @@index([userId, createdAt])
+}
+
+// `submitted`/`abandoned` are reserved for later write-backs (funnel metrics);
+// Blocks 1–4 only transition active → exhausted. Enum minted now so the column
+// never needs a migration when those land.
+enum IntakeSessionStatus {
+  active
+  submitted
+  exhausted
+  abandoned
 }
