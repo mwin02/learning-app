@@ -95,6 +95,37 @@ export function traceUsageSnapshot(): UsageSnapshot | null {
   return { stages, totals };
 }
 
+/**
+ * Pure accumulator for a PERSISTED UsageSnapshot that grows across requests
+ * (IntakeSession.usage — one turn per HTTP request, so a single trace can't
+ * accumulate it the way Program.planUsage does). Folds one call's usage into
+ * an existing snapshot under a stage label; never mutates `prev`. An undefined
+ * usage (failed call) returns `prev` unchanged — consistent with recordUsage.
+ */
+export function addUsageToSnapshot(
+  prev: UsageSnapshot | null,
+  stage: string,
+  usage: UsageLike | undefined,
+): UsageSnapshot | null {
+  if (!usage) return prev;
+  const stages: Record<string, StageUsage> = {};
+  for (const [k, u] of Object.entries(prev?.stages ?? {})) stages[k] = { ...u };
+  const entry = stages[stage] ?? { calls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  entry.calls += 1;
+  entry.inputTokens += usage.inputTokens ?? 0;
+  entry.outputTokens += usage.outputTokens ?? 0;
+  entry.totalTokens += usage.totalTokens ?? 0;
+  stages[stage] = entry;
+  const totals: StageUsage = { calls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  for (const u of Object.values(stages)) {
+    totals.calls += u.calls;
+    totals.inputTokens += u.inputTokens;
+    totals.outputTokens += u.outputTokens;
+    totals.totalTokens += u.totalTokens;
+  }
+  return { stages, totals };
+}
+
 // JSON.stringify drops Error objects to {} — surface what matters instead.
 function serializable(value: unknown): unknown {
   if (value instanceof Error) return { name: value.name, message: value.message };
