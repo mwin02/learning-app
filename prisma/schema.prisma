@@ -84,6 +84,7 @@ model Resource {
   embedCheckedAt       DateTime?
   lessonResources      LessonResource[]
   conceptResources     ConceptResource[]
+  sourcedFor           ResourceSourcedFor[]
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 
@@ -545,6 +546,7 @@ model Concept {
   prereqsIn  ConceptPrereq[]   @relation("PrereqTo")
   resources  ConceptResource[]
   questions  ConceptQuestion[]
+  sourcedResources ResourceSourcedFor[]
   createdAt  DateTime          @default(now())
   updatedAt  DateTime          @updatedAt
 
@@ -617,6 +619,29 @@ enum ConceptResourceRole {
   teaches
   uses
   assesses
+}
+
+// Library re-judge Block 1 — sourcing provenance. Records every Concept whose
+// remediation/thickener demand caused a resource to be sourced but NOT attached
+// in the same run (the row parked non-atomic: pending / human_review /
+// unsupported / decomposed container). Written in web-fallback's persistence
+// tail on BOTH the insert and the dedup-rediscovery path (skipDuplicates makes
+// a re-demand under a second concept a second pair, not an error). Atomic rows
+// are judged+attached in-run and never recorded here. Consumed by the
+// decompose-time hook (Block 3), which resolves surviving pairs to their paths
+// and judges the decomposed children against those paths' concepts. Cascades
+// with both parents, so a deleted Concept (or Resource) leaves no dangling
+// demand and the hook's zero-pairs case is a clean no-op.
+model ResourceSourcedFor {
+  id         String   @id @default(cuid())
+  resourceId String
+  resource   Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  conceptId  String
+  concept    Concept  @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([resourceId, conceptId])
+  @@index([conceptId])
 }
 
 // Phase 2.5h — a question in a Concept's reusable question bank. Generated ONCE

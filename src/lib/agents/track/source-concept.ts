@@ -45,7 +45,7 @@ export async function sourceAndAttachConcept(args: {
 }): Promise<number> {
   const { pathId, topic, conceptId, slug, title, targetMastery, isOnRamp = false, preferSubstantial = false } = args;
 
-  const sourced = await sourceForConcept({ topic, concept: { slug, title }, targetMastery, preferSubstantial });
+  const sourced = await sourceForConcept({ topic, concept: { slug, title }, conceptId, targetMastery, preferSubstantial });
   let rows = await loadAsSearchResults(sourced.insertedIds);
 
   // Phase 2g-4: on-ramp backstop. The cold build (ensure-path-map) normally authors the
