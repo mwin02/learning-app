@@ -21,5 +21,41 @@ services:
       timeout: 3s
       retries: 10
 
+  # Workers Block C (local mode): N containerized course workers, opt-in via
+  # the "workers" profile so a plain `docker compose up -d` still starts only
+  # the db. The Cloud Run worker-pool deploy is deferred; this runs the same
+  # Dockerfile.worker image locally instead.
+  #
+  #   docker compose --profile workers up -d --build   # start db + 2 workers
+  #   docker compose --profile workers stop worker     # graceful SIGTERM (A2 requeue)
+  #   docker compose --profile workers up -d --scale worker=3   # change count
+  #   docker compose logs -f worker                    # both replicas' logs
+  worker:
+    profiles: ["workers"]
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    # Vertex project/location + service-account JSON + YOUTUBE_API_KEY come
+    # from .env.local. (The JSON value must stay single-quoted there: compose
+    # keeps single-quoted values literal, so the \n in private_key survive.)
+    env_file: .env.local
+    environment:
+      # Override .env.local's host-facing URL: inside the compose network the
+      # db service is reachable directly. Point this at the Supabase pooled
+      # URL instead to have local containers drain the production queue.
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/learning_app
+    # Two replicas = the N>1 concurrency the A-blocks made safe. Each gets a
+    # distinct container hostname, so claims carry distinct claimedBy ids.
+    deploy:
+      replicas: 2
+    # SIGTERM → the A2 graceful release requeues the in-flight claim within
+    # ~a second; an idle loop takes up to POLL_MS (5s) to exit. 30s is ample —
+    # compose's default 10s would also work, but don't shave it below that.
+    stop_grace_period: 30s
+
 volumes:
   learning_app_pgdata:
