@@ -214,6 +214,49 @@ jsonPayload.claimedBy=~"<instance id prefix>"  -- one instance's claims
    two-instance contention behavior matches the A2 local verification
    (same-topic cold builds: one builds, one requeues with backoff).
 
+## 10. Observability & scaling (Workers Block D)
+
+The code half already ships with the worker: every poll cycle each worker
+emits a **queue-depth gauge** —
+
+```json
+{"event":"course-worker.queue-depth","queued":N,"running":N,"oldestQueuedAgeMs":N|null,"workerId":"…"}
+```
+
+`queued` includes backed-off rows (still backlog), `oldestQueuedAgeMs` ages
+from `createdAt` (queue latency, not eligibility), `null` = empty queue. It
+fires even at 0/0 so the metric has a heartbeat: **"no data" means "no
+worker", not "no work"**. N workers emit N lines per cycle — aggregate with
+max/percentile, never sum.
+
+**Locally** (compose mode), each condition below is a `jq` filter away:
+
+```bash
+docker compose logs --no-log-prefix worker | jq -c 'select(.event=="course-worker.queue-depth")'
+docker compose logs --no-log-prefix worker | jq -c 'select(.event=="course-request.reclaimed-stale")'
+```
+
+**At deploy time**, wire these as Cloud Logging **log-based metrics** +
+alerting policies (all fields land in `jsonPayload`):
+
+| Alert | Filter | Threshold / meaning |
+| --- | --- | --- |
+| Job deadline exceeded | `jsonPayload.event="course-worker.deadline-exceeded"` | count > 0 — a pipeline hit the 30m ceiling; look up its `traceId` |
+| Zombie finish | `jsonPayload.event="course-request.finish-noop"` | count > 0 — a worker finished a request that had already been reclaimed; expected to be rare |
+| Stale reclaims | `jsonPayload.event="course-request.reclaimed-stale"` | count > 0 — a worker died holding a claim (crash or SIGKILL past grace) |
+| Contention spike | `jsonPayload.event="course-worker.requeued-contention"` | rate spike — many same-topic cold requests; usually benign backoff, but a sustained spike means the backoff budget (12 × 3m) is being spent |
+| Queue depth | metric on `jsonPayload.queued` (gauge line) | sustained > ~5 — enqueue rate exceeds fleet throughput |
+| Queue age | metric on `jsonPayload.oldestQueuedAgeMs` | sustained > ~10m — someone's build has been waiting; page-worthy once real users wait on builds |
+
+**Scaling policy (manual, deliberate):** worker count tracks **Vertex quota
+headroom, not CPU** — each worker is ≈ one concurrent LLM pipeline, so the
+useful fleet size is `concurrent quota ÷ per-build burst`, and beyond that
+extra instances just queue on Vertex instead of Postgres. When the queue-age
+alert fires repeatedly, bump `--instances` (cloud) or `--scale worker=N`
+(local) and watch the gauge drop; DB headroom per instance is the step-7
+math. Genuine autoscaling on the queue-depth metric stays deferred until
+real load exists.
+
 ## Relationship to local compose mode
 
 Local mode (docker-compose.yml `workers` profile) and the cloud pool run the

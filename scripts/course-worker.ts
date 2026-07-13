@@ -20,8 +20,9 @@
 import os from 'node:os';
 import { COURSE_WORKER_POLL_MS } from '../src/lib/config';
 import { prisma } from '../src/lib/db';
+import { log } from '../src/lib/log';
 import { tickOnce, reclaimStaleClaims, processCourseRequest } from '../src/lib/services/course-worker';
-import { claimNextQueued } from '../src/lib/services/course-request';
+import { claimNextQueued, queueDepth } from '../src/lib/services/course-request';
 import { sweepStuckPrograms } from '../src/lib/services/program';
 
 // D6: worker identity, stamped on every claim (CourseRequest.claimedBy) and
@@ -64,6 +65,12 @@ async function runWatch() {
     // finishCourseRequest) — reclaim doesn't cover it.
     const swept = await sweepStuckPrograms();
     if (swept) console.log(`[course-worker ${workerId}] swept stuck programs`, { swept });
+    // Workers-D: queue-depth gauge, once per poll cycle BEFORE draining — it
+    // reads as backlog-at-wakeup. H3 JSON → (at deploy) a Cloud Logging
+    // log-based metric; locally, `docker compose logs worker | jq`. Emitted
+    // even when 0/0 so the metric has a heartbeat and "no data" means "no
+    // worker", not "no work".
+    log('course-worker.queue-depth', { ...(await queueDepth()), workerId });
     let cr;
     while (running && (cr = await claimNextQueued(workerId))) {
       // A 'requeued' outcome (contention) keeps draining: the bounced row is
