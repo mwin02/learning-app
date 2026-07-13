@@ -14,26 +14,40 @@ function requireEnv(name: string): string {
 
 const project = requireEnv('GOOGLE_VERTEX_PROJECT');
 const location = requireEnv('GOOGLE_VERTEX_LOCATION');
-const credentialsJson = requireEnv('GOOGLE_APPLICATION_CREDENTIALS_JSON');
 
-let parsedCredentials: { client_email: string; private_key: string };
-try {
-  parsedCredentials = JSON.parse(credentialsJson);
-} catch (err) {
-  throw new Error(
-    `GOOGLE_APPLICATION_CREDENTIALS_JSON is not valid JSON: ${(err as Error).message}`,
-  );
+// Auth: an inline service-account key (GOOGLE_APPLICATION_CREDENTIALS_JSON —
+// the full key JSON as one line; the local/.env.local and Vercel path) when
+// set, otherwise Application Default Credentials. ADC is the containerized
+// worker's path (Workers Block B): on Cloud Run the runtime service account
+// via the metadata server — no key JSON ships in the image. Locally, ADC means
+// `gcloud auth application-default login` or a GOOGLE_APPLICATION_CREDENTIALS
+// file path.
+const credentialsJson = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
+
+let googleAuthOptions:
+  | { credentials: { client_email: string; private_key: string } }
+  | undefined;
+if (credentialsJson) {
+  let parsedCredentials: { client_email: string; private_key: string };
+  try {
+    parsedCredentials = JSON.parse(credentialsJson);
+  } catch (err) {
+    throw new Error(
+      `GOOGLE_APPLICATION_CREDENTIALS_JSON is not valid JSON: ${(err as Error).message}`,
+    );
+  }
+  googleAuthOptions = {
+    credentials: {
+      client_email: parsedCredentials.client_email,
+      private_key: parsedCredentials.private_key,
+    },
+  };
 }
-
-const credentials = {
-  client_email: parsedCredentials.client_email,
-  private_key: parsedCredentials.private_key,
-};
 
 export const vertex = createVertex({
   project,
   location,
-  googleAuthOptions: { credentials },
+  googleAuthOptions,
 });
 
 export const geminiFlash = vertex('gemini-2.5-flash');
@@ -51,7 +65,7 @@ const anthropicLocation =
 export const vertexAnthropic = createVertexAnthropic({
   project,
   location: anthropicLocation,
-  googleAuthOptions: { credentials },
+  googleAuthOptions,
 });
 
 // Gemini 3.x models are NOT served from regional endpoints like us-central1
@@ -65,7 +79,7 @@ const gemini3Location =
 export const vertexGlobal = createVertex({
   project,
   location: gemini3Location,
-  googleAuthOptions: { credentials },
+  googleAuthOptions,
 });
 
 // Resolve a chat model id to the right Vertex provider:

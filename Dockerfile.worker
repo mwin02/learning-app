@@ -1,0 +1,61 @@
+# Course-worker image (Workers Block B, D9) — runs the CourseRequest queue
+# worker (scripts/course-worker.ts) as a long-lived poll loop. No Next.js
+# build: the worker imports src/lib directly and never serves HTTP. D9 keeps
+# the runtime simple — tsx over full node_modules, same invocation as local
+# dev; a compiled slim image is a later optimization.
+#
+#   docker build -f Dockerfile.worker -t course-worker .
+#   docker run --rm --env-file <env file> course-worker
+#
+# Env contract (all provided by the platform at runtime — no --env-file in the
+# CMD, and .dockerignore keeps .env* out of the build context):
+#
+#   Required (validated at module eval; the process exits at boot if missing):
+#     DATABASE_URL       Supabase transaction-pooler URL (src/lib/db.ts)
+#     GOOGLE_VERTEX_PROJECT    GCP project id (src/lib/ai/vertex.ts)
+#     GOOGLE_VERTEX_LOCATION   Vertex region for Gemini ≤2.5, e.g. us-central1
+#
+#   Vertex auth — ADC, no key in the image:
+#     GOOGLE_APPLICATION_CREDENTIALS_JSON   optional. When unset (the in-cloud
+#       path), vertex.ts falls back to Application Default Credentials — on
+#       Cloud Run that's the runtime service account (grant roles/aiplatform.user).
+#       Set it (inline one-line key JSON) only for local docker runs without ADC.
+#
+#   Optional:
+#     GOOGLE_VERTEX_ANTHROPIC_LOCATION   Claude partner-model region (default global)
+#     GOOGLE_VERTEX_GEMINI3_LOCATION     Gemini 3.x endpoint (default global)
+#     MODEL_EMBEDDING                    embedding-model override (src/lib/ai/models.ts)
+#     YOUTUBE_API_KEY                    playlist decomposition; skipped when unset
+#     CLOUD_RUN_INSTANCE_ID              set by Cloud Run; worker id falls back to hostname
+#
+# DIRECT_URL is NOT needed: it's Prisma-CLI-only (migrations), and the build's
+# `prisma generate` uses prisma.config.ts's placeholder fallback.
+
+FROM node:22-slim
+
+WORKDIR /app
+
+# prisma/ and prisma.config.ts must precede npm ci: the postinstall hook runs
+# `prisma generate`, which reads the config for the schema path.
+COPY package.json package-lock.json prisma.config.ts ./
+COPY prisma ./prisma
+RUN npm ci
+
+COPY tsconfig.json ./
+COPY src ./src
+COPY scripts ./scripts
+
+# postinstall already generated the client; re-run explicitly so the final
+# image never depends on hook ordering (idempotent, seconds).
+RUN npx prisma generate
+
+ENV NODE_ENV=production
+USER node
+
+# `node --import tsx` (loader mode), NOT `npx tsx`: node must be PID 1 so
+# docker stop's SIGTERM reaches the worker's handler (A2/D7 — abort the
+# in-flight job, requeue its claim, exit). Via npx, npm wraps the command in
+# `sh -c` and the signal kills the tree without the graceful release ever
+# running (verified empirically: `npm error signal SIGTERM`, no requeue log).
+# Same tsx runtime as local dev (D9), one process, no forwarding layers.
+CMD ["node", "--import", "tsx", "scripts/course-worker.ts"]
