@@ -1,6 +1,7 @@
-// DB integration tests for the CourseRequest queue primitives (Phase 2.5g-1):
-// enqueueCourseRequest / claimNextQueued / finishCourseRequest / reclaimStale. Real DB,
-// no LLM. Self-cleaning: rows are marked with a __verify_queue__ topic prefix and
+// DB integration tests for the CourseRequest queue primitives (Phase 2.5g-1;
+// retry primitives Workers-A1): enqueueCourseRequest / claimNextQueued /
+// finishCourseRequest / requeueCourseRequest / reclaimStale. Real DB, no LLM.
+// Self-cleaning: rows are marked with a __verify_queue__ topic prefix and
 // deleted in before/after hooks. Added in R3.
 //
 // Skips cleanly when DATABASE_URL is unset (describeDb). Run with the worker STOPPED —
@@ -15,8 +16,10 @@ import {
   enqueueCourseRequest,
   claimNextQueued,
   finishCourseRequest,
+  requeueCourseRequest,
   reclaimStale,
 } from '@/lib/services/course-request';
+import { COURSE_REQUEST_MAX_ATTEMPTS } from '@/lib/config';
 import { describeDb } from './db';
 
 const MARK = '__verify_queue__';
@@ -30,9 +33,9 @@ async function cleanup() {
 // Foreign `queued` rows this test claims by accident (claimNextQueued is global) are
 // parked here and restored to `queued` in afterAll — never stranded in `running`.
 const quarantined: string[] = [];
-async function claimMine(): Promise<CourseRequest | null> {
+async function claimMine(workerId?: string): Promise<CourseRequest | null> {
   for (;;) {
-    const r = await claimNextQueued();
+    const r = await claimNextQueued(workerId);
     if (!r) return null;
     if (r.topic.startsWith(MARK)) return r;
     quarantined.push(r.id);
@@ -52,9 +55,16 @@ describeDb('CourseRequest queue', () => {
   beforeAll(cleanup);
   afterAll(async () => {
     for (const id of quarantined) {
+      // Undo the accidental claim fully: our claim burned an attempt and stamped
+      // claimedBy on a row we don't own — put both back along with the status.
       await prisma.courseRequest.updateMany({
         where: { id, status: CourseRequestStatus.running },
-        data: { status: CourseRequestStatus.queued, claimedAt: null },
+        data: {
+          status: CourseRequestStatus.queued,
+          claimedAt: null,
+          claimedBy: null,
+          attempts: { decrement: 1 },
+        },
       });
     }
     quarantined.length = 0;
@@ -119,8 +129,116 @@ describeDb('CourseRequest queue', () => {
     const freshAfter = await prisma.courseRequest.findUniqueOrThrow({ where: { id: fresh.id } });
     expect(oldAfter.status).toBe(CourseRequestStatus.queued); // past cutoff → bounced
     expect(oldAfter.claimedAt).toBeNull();
+    expect(oldAfter.nextAttemptAt).toBeNull(); // dead worker's request retries immediately
     expect(freshAfter.status).toBe(CourseRequestStatus.running); // within cutoff → left alone
 
     await prisma.courseRequest.deleteMany({ where: { id: { in: [old.id, fresh.id] } } });
+  });
+
+  // ——— Workers-A1 retry primitives ———
+
+  it('claimNextQueued skips a row with a future nextAttemptAt, claims it once past due', async () => {
+    const backedOff = await makeRow('backoff', { nextAttemptAt: new Date(Date.now() + 60_000) });
+
+    expect(await claimMine()).toBeNull(); // future nextAttemptAt → ineligible
+
+    await prisma.courseRequest.update({
+      where: { id: backedOff.id },
+      data: { nextAttemptAt: new Date(Date.now() - 1_000) },
+    });
+    const claimed = await claimMine();
+    expect(claimed?.id).toBe(backedOff.id); // past due → eligible again
+    expect(claimed?.status).toBe(CourseRequestStatus.running);
+
+    await prisma.courseRequest.delete({ where: { id: backedOff.id } });
+  });
+
+  it('claimNextQueued increments attempts and stamps claimedBy', async () => {
+    const row = await makeRow('stamp');
+
+    const claimed = await claimMine('worker-test-1');
+    expect(claimed?.id).toBe(row.id);
+    expect(claimed?.attempts).toBe(1);
+    expect(claimed?.claimedBy).toBe('worker-test-1');
+
+    // A requeue + second claim burns a second attempt and restamps claimedBy.
+    await requeueCourseRequest(row.id, { delayMs: 0, reason: 'test bounce' });
+    const reclaimed = await claimMine('worker-test-2');
+    expect(reclaimed?.id).toBe(row.id);
+    expect(reclaimed?.attempts).toBe(2);
+    expect(reclaimed?.claimedBy).toBe('worker-test-2');
+
+    await prisma.courseRequest.delete({ where: { id: row.id } });
+  });
+
+  it('requeueCourseRequest under cap → queued with delayed nextAttemptAt', async () => {
+    const row = await makeRow('requeue', { status: CourseRequestStatus.running, claimedAt: new Date(), attempts: 1 });
+
+    const before = Date.now();
+    const res = await requeueCourseRequest(row.id, { delayMs: 60_000, reason: 'contention' });
+    expect(res).toEqual({ requeued: true, failedAtCap: false });
+
+    const after = await prisma.courseRequest.findUniqueOrThrow({ where: { id: row.id } });
+    expect(after.status).toBe(CourseRequestStatus.queued);
+    expect(after.claimedAt).toBeNull();
+    expect(after.nextAttemptAt!.getTime()).toBeGreaterThanOrEqual(before + 60_000);
+
+    await prisma.courseRequest.delete({ where: { id: row.id } });
+  });
+
+  it('requeueCourseRequest at cap → terminal failed with a max-attempts diagnostic', async () => {
+    const row = await makeRow('requeue-cap', {
+      status: CourseRequestStatus.running,
+      claimedAt: new Date(),
+      attempts: COURSE_REQUEST_MAX_ATTEMPTS,
+    });
+
+    const res = await requeueCourseRequest(row.id, { delayMs: 60_000, reason: 'contention' });
+    expect(res).toEqual({ requeued: false, failedAtCap: true });
+
+    const after = await prisma.courseRequest.findUniqueOrThrow({ where: { id: row.id } });
+    expect(after.status).toBe(CourseRequestStatus.failed);
+    expect(after.error).toContain('max attempts');
+    expect(after.error).toContain('contention'); // the last reason is in the diagnostic
+
+    await prisma.courseRequest.delete({ where: { id: row.id } });
+  });
+
+  it('requeueCourseRequest is a no-op on a non-running row', async () => {
+    const row = await makeRow('requeue-noop', { status: CourseRequestStatus.queued });
+
+    const res = await requeueCourseRequest(row.id, { delayMs: 60_000, reason: 'late bounce' });
+    expect(res).toEqual({ requeued: false, failedAtCap: false });
+
+    const after = await prisma.courseRequest.findUniqueOrThrow({ where: { id: row.id } });
+    expect(after.status).toBe(CourseRequestStatus.queued);
+    expect(after.nextAttemptAt).toBeNull(); // untouched
+
+    await prisma.courseRequest.delete({ where: { id: row.id } });
+  });
+
+  it('reclaimStale requeues under-cap stale rows and fails at-cap ones', async () => {
+    const staleAt = new Date(Date.now() - 10 * 60_000);
+    const underCap = await makeRow('reclaim-under', {
+      status: CourseRequestStatus.running,
+      claimedAt: staleAt,
+      attempts: COURSE_REQUEST_MAX_ATTEMPTS - 1,
+    });
+    const atCap = await makeRow('reclaim-cap', {
+      status: CourseRequestStatus.running,
+      claimedAt: staleAt,
+      attempts: COURSE_REQUEST_MAX_ATTEMPTS,
+    });
+
+    await reclaimStale(5 * 60_000); // asserts on MY rows, not the global count
+
+    const underAfter = await prisma.courseRequest.findUniqueOrThrow({ where: { id: underCap.id } });
+    const capAfter = await prisma.courseRequest.findUniqueOrThrow({ where: { id: atCap.id } });
+    expect(underAfter.status).toBe(CourseRequestStatus.queued);
+    expect(underAfter.nextAttemptAt).toBeNull(); // immediate retry, no backoff
+    expect(capAfter.status).toBe(CourseRequestStatus.failed);
+    expect(capAfter.error).toContain('max attempts');
+
+    await prisma.courseRequest.deleteMany({ where: { id: { in: [underCap.id, atCap.id] } } });
   });
 });

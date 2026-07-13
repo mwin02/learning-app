@@ -431,6 +431,23 @@ export const COURSE_JOB_DEADLINE_MS = 30 * 60 * 1000;
 // in-process; stale-reclaim only catches a worker that DIED holding a claim.
 export const COURSE_REQUEST_STALE_MS = 45 * 60 * 1000;
 
+// Workers-A1 (D2/D3): backoff for a same-topic contention requeue. When worker B
+// claims a request whose topic another worker is actively building (spine in
+// flight, or remediation `busy`), it bounces the request back to `queued` with
+// nextAttemptAt = now() + this, and moves on. 3 minutes: each bounce burns one
+// attempt (attempts increments at claim), so the total patience is roughly
+// COURSE_CONTENTION_REQUEUE_MS × COURSE_REQUEST_MAX_ATTEMPTS ≈ 36m+ — sized to
+// outlast a full cold build (≥ COURSE_JOB_DEADLINE_MS, 30m), so a request never
+// exhausts its cap merely by waiting politely for a slow sibling build.
+export const COURSE_CONTENTION_REQUEUE_MS = 3 * 60 * 1000;
+
+// Workers-A1 (D3/D5): poison-request cap. A request that has been CLAIMED this
+// many times without reaching a terminal state (crash-loop stale reclaims,
+// endless contention bounces) is failed terminally with a "max attempts
+// exhausted" diagnostic instead of requeueing forever. 12 — see the sizing math
+// on COURSE_CONTENTION_REQUEUE_MS above.
+export const COURSE_REQUEST_MAX_ATTEMPTS = 12;
+
 // Phase 2.5e (track sections): a built Track with FEWER than this many lessons is
 // not sectioned — it renders as a flat list. Chaptering a 2–3 lesson Track buys
 // nothing (the headers would outnumber the content), so the post-build sectioner
