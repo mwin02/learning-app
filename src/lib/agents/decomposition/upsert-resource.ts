@@ -44,7 +44,17 @@ export type UpsertResourceInput = {
 // visible to search even on an above-gate topic (where search is active-only).
 // Empty on 'skipped' and on an inserted-but-unpickable container (pending /
 // human_review parent with no atomic children).
-export type UpsertOutcome = { outcome: 'inserted' | 'skipped'; atomicIds: string[] };
+//
+// `resourceId` / `decompositionStatus` identify the PARENT row the input URL
+// resolved to — the freshly-created row on 'inserted', the existing row on a
+// dedup 'skipped' (so provenance can record a rediscovery of a parked
+// container). Null when there is no addressable row (transaction failure).
+export type UpsertOutcome = {
+  outcome: 'inserted' | 'skipped';
+  atomicIds: string[];
+  resourceId: string | null;
+  decompositionStatus: DecompositionStatus | null;
+};
 
 type TxClient = Omit<
   PrismaClient,
@@ -65,7 +75,7 @@ export async function upsertResource(
   const url = normalizeResourceUrl(resource.url);
   const existing = await prisma.resource.findUnique({
     where: { url },
-    select: { id: true, topic: true },
+    select: { id: true, topic: true, decompositionStatus: true },
   });
   if (existing) {
     if (existing.topic !== topic) {
@@ -75,7 +85,12 @@ export async function upsertResource(
         requestedTopic: topic,
       });
     }
-    return { outcome: 'skipped', atomicIds: [] };
+    return {
+      outcome: 'skipped',
+      atomicIds: [],
+      resourceId: existing.id,
+      decompositionStatus: existing.decompositionStatus,
+    };
   }
 
   // YouTube videos resolve their Source by channelId (hostname can't tell channels
@@ -92,6 +107,7 @@ export async function upsertResource(
   });
   const taken = new Set<string>();
   const embedTasks: EmbedTask[] = [];
+  let parentId: string | null = null;
 
   try {
     await prisma.$transaction(async (tx) => {
@@ -121,6 +137,7 @@ export async function upsertResource(
         },
         select: { id: true },
       });
+      parentId = parent.id;
       // A decomposed container is the unpickable parent; an atomic resource has
       // no children. Either way the parent itself is only embedded when it can
       // be picked (atomic) — embedding an unpickable container wastes a call.
@@ -154,7 +171,7 @@ export async function upsertResource(
       url,
       error: (err as Error).message,
     });
-    return { outcome: 'skipped', atomicIds: [] };
+    return { outcome: 'skipped', atomicIds: [], resourceId: null, decompositionStatus: null };
   }
 
   // Best-effort embeds, post-commit: a failure logs but leaves the row in place
@@ -171,7 +188,12 @@ export async function upsertResource(
     await safeClassifyAndPersist(t.id, t.url);
   }
 
-  return { outcome: 'inserted', atomicIds: embedTasks.map((t) => t.id) };
+  return {
+    outcome: 'inserted',
+    atomicIds: embedTasks.map((t) => t.id),
+    resourceId: parentId,
+    decompositionStatus: decomposition.status,
+  };
 }
 
 // Apply a decomposition to an ALREADY-EXISTING resource (the seed-backfill case,

@@ -38,6 +38,7 @@ import { upsertResource } from '@/lib/agents/decomposition/upsert-resource';
 import { loadTopicVocab } from '@/lib/agents/decomposition/concepts';
 import { classifyDiscoveryTopics } from '@/lib/agents/tools/classify-topic';
 import { searchYouTubeForConcept, type YoutubeSourcedResource } from '@/lib/agents/tools/youtube-search';
+import { deriveSourcedForPairs, type SourcedForRow } from '@/lib/agents/tools/sourced-for';
 import { relatedTopics } from '@/types/resource';
 
 const RAW_RESOURCE_TYPES = ['article', 'video', 'course', 'interactive', 'docs', 'book'] as const;
@@ -118,12 +119,18 @@ const VALIDATORS = [livenessValidator, rulesAgentValidator];
 export async function sourceForConcept({
   topic,
   concept,
+  conceptId,
   targetCount = REMEDIATION_SOURCE_TARGET_COUNT,
   targetMastery,
   preferSubstantial = false,
 }: {
   topic: string;
   concept: { slug: string; title: string };
+  // Library re-judge Block 1: the demanding Concept's id, recorded as
+  // ResourceSourcedFor provenance for rows that park non-atomic (so the
+  // decompose-time hook can later route their children back to this concept's
+  // path). Optional — a caller without a Concept row writes no provenance.
+  conceptId?: string;
   targetCount?: number;
   targetMastery?: Difficulty;
   // Budget-fill Block 2: bias every prong toward substantial (~20-90m) resources.
@@ -153,7 +160,13 @@ export async function sourceForConcept({
         ? discoverAllowlisted(topic, concept.title, oversample, denyList, allowDomains, targetMastery, preferSubstantial)
         : discoverForConcept(topic, concept.title, oversample, denyList, targetMastery, preferSubstantial),
   });
-  return persistDiscovered(topic, survivors, { label, iterations, totalDiscovered, targetCount });
+  return persistDiscovered(topic, survivors, {
+    label,
+    iterations,
+    totalDiscovered,
+    targetCount,
+    sourcedForConceptId: conceptId ?? null,
+  });
 }
 
 // ── shared engine ─────────────────────────────────────────────────────────────
@@ -248,9 +261,17 @@ function interleave<T>(a: T[], b: T[]): T[] {
 async function persistDiscovered(
   topic: string,
   finalRows: SourcedResource[],
-  meta: { label: string; iterations: number; totalDiscovered: number; targetCount: number },
+  meta: {
+    label: string;
+    iterations: number;
+    totalDiscovered: number;
+    targetCount: number;
+    // Non-null when a Concept's demand drove this run — provenance pairs are
+    // written for rows that park non-atomic (see recordSourcedFor below).
+    sourcedForConceptId: string | null;
+  },
 ): Promise<WebFallbackResult> {
-  const { label, iterations, totalDiscovered, targetCount } = meta;
+  const { label, iterations, totalDiscovered, targetCount, sourcedForConceptId } = meta;
   if (finalRows.length === 0) {
     console.log('[web-fallback] no survivors', { label, iterations, totalDiscovered });
     return { insertedCount: 0, skippedCount: 0, discoveredCount: totalDiscovered, iterations, insertedIds: [] };
@@ -309,6 +330,7 @@ async function persistDiscovered(
   let skippedCount = 0;
   let reclassifiedCount = 0;
   const insertedIds: string[] = [];
+  const upsertedRows: SourcedForRow[] = [];
   for (const { row, result } of decomposed) {
     const tags = canonical.get(row.url) ?? {
       prerequisiteConcepts: row.rawPrerequisiteConcepts,
@@ -316,7 +338,7 @@ async function persistDiscovered(
     };
     const filedTopic = filedTopicByUrl.get(row.url) ?? topic;
     if (filedTopic !== topic) reclassifiedCount += 1;
-    const { outcome, atomicIds } = await upsertResource(
+    const { outcome, atomicIds, resourceId, decompositionStatus } = await upsertResource(
       filedTopic,
       {
         url: row.url,
@@ -336,6 +358,27 @@ async function persistDiscovered(
     if (outcome === 'inserted') insertedCount += 1;
     else skippedCount += 1;
     insertedIds.push(...atomicIds);
+    upsertedRows.push({ resourceId, decompositionStatus });
+  }
+
+  // Library re-judge Block 1: record sourcing provenance for rows that parked
+  // non-atomic — this run demanded them but can't attach them, so the
+  // decompose-time hook needs to know which concept asked. Covers both fresh
+  // inserts and dedup rediscoveries of an existing parked row (a second demand
+  // under a new concept is a second pair; same concept is skipDuplicates'd).
+  // Best-effort: provenance is a side channel — a write failure (e.g. the
+  // concept was deleted mid-run) must not fail the sourcing run itself.
+  const sourcedForPairs = deriveSourcedForPairs(sourcedForConceptId, upsertedRows);
+  if (sourcedForPairs.length > 0) {
+    try {
+      await prisma.resourceSourcedFor.createMany({ data: sourcedForPairs, skipDuplicates: true });
+    } catch (err) {
+      console.warn('[web-fallback] sourced-for provenance write failed', {
+        label,
+        pairs: sourcedForPairs.length,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   console.log('[web-fallback] summary', {
@@ -346,6 +389,7 @@ async function persistDiscovered(
     insertedCount,
     skippedCount,
     reclassifiedCount,
+    sourcedForPairs: sourcedForPairs.length,
     targetMet: finalRows.length >= targetCount,
   });
   return { insertedCount, skippedCount, discoveredCount: totalDiscovered, iterations, insertedIds };
