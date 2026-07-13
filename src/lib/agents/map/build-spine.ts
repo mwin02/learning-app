@@ -22,6 +22,11 @@ export type BuildSpineArgs = {
   topic: string;
   subject?: string;
   onTrace?: OnTrace;
+  // Workers-A2 (D7): the worker's per-job abort (deadline or shutdown). Forwarded
+  // into the author/review AI calls and checked between attempts, so a released
+  // job stops within one network round-trip instead of finishing a minutes-long
+  // authoring loop it no longer owns.
+  abortSignal?: AbortSignal;
 };
 
 export class SpineBuildError extends Error {
@@ -41,7 +46,7 @@ export class SpineBuildError extends Error {
 // not be persisted as if it were sound (a partial/cyclic map silently corrupts
 // every Track built over it).
 export async function buildSpine(args: BuildSpineArgs): Promise<AuthoredSpine> {
-  const { topic, subject, onTrace = () => {} } = args;
+  const { topic, subject, onTrace = () => {}, abortSignal } = args;
   let repairFeedback: string | undefined;
   let lastDefects: SpineDefect[] = [];
   // Two independent budgets so a string of structural failures can't starve the
@@ -59,10 +64,14 @@ export async function buildSpine(args: BuildSpineArgs): Promise<AuthoredSpine> {
   // counters below decide when to stop, this only guards against a logic slip.
   const maxIterations = SPINE_MAX_REPAIRS + SPINE_MAX_REVIEW_REPAIRS + 1;
   for (let attempt = 0; attempt < maxIterations; attempt++) {
+    abortSignal?.throwIfAborted();
     let spine: AuthoredSpine;
     try {
-      spine = await authorSpine({ topic, subject, repairFeedback, onTrace });
+      spine = await authorSpine({ topic, subject, repairFeedback, onTrace, abortSignal });
     } catch (err) {
+      // An abort (deadline/shutdown) is NOT a transient author failure — rethrow
+      // instead of burning a repair attempt retrying a job we no longer own.
+      if (abortSignal?.aborted) throw err;
       // The author call threw (transient Vertex/network error, or output the
       // permissive schema still couldn't parse). Consume a structural attempt and
       // retry rather than aborting the whole build. We deliberately do NOT set
@@ -112,8 +121,10 @@ export async function buildSpine(args: BuildSpineArgs): Promise<AuthoredSpine> {
     if (reviewRepairs >= SPINE_MAX_REVIEW_REPAIRS) return spine;
     let review;
     try {
-      review = await reviewSpine({ topic, subject, spine, onTrace });
+      review = await reviewSpine({ topic, subject, spine, onTrace, abortSignal });
     } catch (err) {
+      // An aborted review still ships the (already valid) spine — the pipeline's
+      // own next checkpoint decides the job's fate; no work is lost either way.
       console.warn('[map-build-spine] spine review failed; shipping validated spine', {
         topic,
         error: err instanceof Error ? err.message : String(err),

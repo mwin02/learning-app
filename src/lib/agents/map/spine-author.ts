@@ -30,6 +30,10 @@ export type AuthorSpineArgs = {
   // on a repair pass.
   repairFeedback?: string;
   onTrace?: OnTrace;
+  // Workers-A2 (D7): the worker's per-job abort (deadline or shutdown), forwarded
+  // to the AI call so a minutes-long author generation stops mid-flight instead of
+  // running to completion after the job is already released.
+  abortSignal?: AbortSignal;
 };
 
 // Deliberately permissive: the constraints the deterministic validator
@@ -63,7 +67,7 @@ const SpineSchema = z.object({
 });
 
 export async function authorSpine(args: AuthorSpineArgs): Promise<AuthoredSpine> {
-  const { topic, subject, repairFeedback, onTrace = () => {} } = args;
+  const { topic, subject, repairFeedback, onTrace = () => {}, abortSignal } = args;
   const { model, temperature, maxOutputTokens, modelId } = getModel('mapSpineAuthor');
 
   onTrace({
@@ -79,6 +83,7 @@ export async function authorSpine(args: AuthorSpineArgs): Promise<AuthoredSpine>
     output: Output.object({ schema: SpineSchema }),
     system: SYSTEM_PROMPT,
     prompt: buildPrompt({ topic, subject, repairFeedback }),
+    abortSignal,
   });
 
   // TODO(observability): fold into the structured logger when it lands.

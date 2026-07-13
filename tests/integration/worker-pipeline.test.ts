@@ -13,7 +13,7 @@ import type { CourseRequest } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { processCourseRequest } from '@/lib/services/course-worker';
 import { finishCourseRequest } from '@/lib/services/course-request';
-import { MAX_FRONTIER_PER_TOPIC } from '@/lib/config';
+import { COURSE_CONTENTION_REQUEUE_MS, COURSE_REQUEST_MAX_ATTEMPTS, MAX_FRONTIER_PER_TOPIC } from '@/lib/config';
 import type { EnsurePathMapResult } from '@/lib/agents/map/ensure-path-map';
 import type { RemediateResult } from '@/lib/agents/track/remediate-path';
 import type { BuildTrackResult } from '@/lib/agents/track/build-track';
@@ -66,8 +66,8 @@ const getReq = (id: string) =>
 
 // --- stage stubs (typed against the real result shapes) ---
 const ensureMapStub =
-  (status: PathStatus): (() => Promise<EnsurePathMapResult>) =>
-  async () => ({ pathId: `${MARK}path`, status, created: true, reclaimed: false, holes: [] });
+  (status: PathStatus, inFlight = false): (() => Promise<EnsurePathMapResult>) =>
+  async () => ({ pathId: `${MARK}path`, status, created: true, reclaimed: false, inFlight, holes: [] });
 
 const remResult = (outcome: RemediateResult['outcome'], status: PathStatus): RemediateResult => ({
   outcome,
@@ -100,16 +100,150 @@ describeDb('course-worker pipeline branches', () => {
   beforeAll(cleanup);
   afterAll(cleanup);
 
-  it('remediation `busy` → failed with a retryable diagnostic', async () => {
+  // --- Workers-A2: same-topic contention → requeue with backoff (D2) ---------
+
+  it('remediation `busy` → requeued with backoff (expected contention under N workers)', async () => {
     const cr = await seedRunning('busy');
+    const before = Date.now();
     const outcome = await processCourseRequest(cr, {
       ensureMap: ensureMapStub(PathStatus.building),
       remediate: async () => remResult('busy', PathStatus.building),
     });
+    expect(outcome).toBe('requeued');
+    const row = await prisma.courseRequest.findUniqueOrThrow({ where: { id: cr.id } });
+    expect(row.status).toBe(CourseRequestStatus.queued); // back in the queue, not failed
+    expect(row.error).toBeNull();
+    expect(row.nextAttemptAt!.getTime()).toBeGreaterThanOrEqual(before + COURSE_CONTENTION_REQUEUE_MS);
+  });
+
+  it('an in-flight sibling build (map.inFlight) → requeued; remediate/build/hook never run', async () => {
+    const program = await makeProgram('inflight');
+    const cr = await seedRunning('inflight', { programId: program.id });
+    const called = { remediate: false, build: false, hook: false };
+    const before = Date.now();
+    const outcome = await processCourseRequest(cr, {
+      ensureMap: ensureMapStub(PathStatus.building, /* inFlight */ true),
+      remediate: async () => {
+        called.remediate = true;
+        return remResult('succeeded', PathStatus.spine_ready);
+      },
+      build: async () => {
+        called.build = true;
+        return buildResult('never');
+      },
+      assembleProgram: async () => {
+        called.hook = true;
+      },
+    });
+    expect(outcome).toBe('requeued');
+    // Contention short-circuits the pipeline: no remediation-slot steal, no Track
+    // on a not-ready Path — and a requeued child is NOT terminal, so the Program
+    // assembler must not have been consulted.
+    expect(called).toEqual({ remediate: false, build: false, hook: false });
+    const row = await prisma.courseRequest.findUniqueOrThrow({ where: { id: cr.id } });
+    expect(row.status).toBe(CourseRequestStatus.queued);
+    expect(row.nextAttemptAt!.getTime()).toBeGreaterThanOrEqual(before + COURSE_CONTENTION_REQUEUE_MS);
+  });
+
+  it('contention at the attempts cap → terminal failed (and the hook DOES fire)', async () => {
+    const program = await makeProgram('inflight-cap');
+    const cr = await prisma.courseRequest.create({
+      data: {
+        topic: `${MARK}inflight-cap`,
+        status: CourseRequestStatus.running,
+        claimedAt: new Date(),
+        programId: program.id,
+        attempts: COURSE_REQUEST_MAX_ATTEMPTS,
+      },
+    });
+    let hookFired = false;
+    const outcome = await processCourseRequest(cr, {
+      ensureMap: ensureMapStub(PathStatus.building, true),
+      assembleProgram: async () => {
+        hookFired = true;
+      },
+    });
+    expect(outcome).toBe('failed');
+    expect(hookFired).toBe(true); // failed IS terminal — it must count toward assembly
+    const row = await getReq(cr.id);
+    expect(row.status).toBe(CourseRequestStatus.failed);
+    expect(row.error).toContain('max attempts');
+  });
+
+  // --- Workers-A2: graceful shutdown → release, not fail (D7) ----------------
+
+  it('a shutdown abort mid-pipeline → requeued immediately claimable, not failed', async () => {
+    const cr = await seedRunning('shutdown');
+    const shutdown = new AbortController();
+    const outcome = await processCourseRequest(cr, {
+      // The stage observes the per-job signal (as the real stages do at their
+      // checkpoints) after the shutdown fires mid-flight.
+      ensureMap: async (args) => {
+        shutdown.abort(new Error('SIGTERM shutdown'));
+        args.abortSignal?.throwIfAborted(); // the propagated per-job abort lands here
+        throw new Error('unreachable');
+      },
+      shutdownSignal: shutdown.signal,
+    });
+    expect(outcome).toBe('requeued');
+    const row = await prisma.courseRequest.findUniqueOrThrow({ where: { id: cr.id } });
+    expect(row.status).toBe(CourseRequestStatus.queued); // released, not failed
+    expect(row.error).toBeNull();
+    // delayMs 0: a surviving worker's next poll can claim it right away.
+    expect(row.nextAttemptAt!.getTime()).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('an already-aborted shutdown signal releases the claim before any stage work', async () => {
+    const cr = await seedRunning('shutdown-early');
+    const shutdown = new AbortController();
+    shutdown.abort(new Error('SIGTERM shutdown'));
+    let stageRan = false;
+    const outcome = await processCourseRequest(cr, {
+      ensureMap: async (args) => {
+        stageRan = true;
+        args.abortSignal?.throwIfAborted();
+        throw new Error('unreachable');
+      },
+      shutdownSignal: shutdown.signal,
+    });
+    expect(outcome).toBe('requeued');
+    expect(stageRan).toBe(true); // the stage is entered but its first checkpoint throws
+    expect((await prisma.courseRequest.findUniqueOrThrow({ where: { id: cr.id } })).status).toBe(
+      CourseRequestStatus.queued,
+    );
+  });
+
+  it('shutdown during a HUNG stage → the deadline path releases (requeue), not fails', async () => {
+    const cr = await seedRunning('shutdown-hung');
+    const shutdown = new AbortController();
+    const outcome = await processCourseRequest(cr, {
+      // A stage that never observes any signal: only the deadline can unstick the
+      // race, and with shutdown aborted it must requeue rather than fail.
+      ensureMap: () => {
+        shutdown.abort(new Error('SIGTERM shutdown'));
+        return new Promise(() => {});
+      },
+      shutdownSignal: shutdown.signal,
+      deadlineMs: 100,
+    });
+    expect(outcome).toBe('requeued');
+    const row = await prisma.courseRequest.findUniqueOrThrow({ where: { id: cr.id } });
+    expect(row.status).toBe(CourseRequestStatus.queued);
+    expect(row.error).toBeNull();
+  });
+
+  it('a deadline abort (no shutdown) still fails — the two aborts stay distinguishable', async () => {
+    const cr = await seedRunning('deadline-vs-shutdown');
+    const shutdown = new AbortController(); // present but never aborted
+    const outcome = await processCourseRequest(cr, {
+      ensureMap: () => new Promise(() => {}), // hang → deadline fires
+      shutdownSignal: shutdown.signal,
+      deadlineMs: 100,
+    });
     expect(outcome).toBe('failed');
     const row = await getReq(cr.id);
     expect(row.status).toBe(CourseRequestStatus.failed);
-    expect(row.error).toContain('remediation busy');
+    expect(row.error).toContain('deadline exceeded');
   });
 
   it('still `building` after remediation → failed (not spine_ready)', async () => {
