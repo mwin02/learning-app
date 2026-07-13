@@ -1,0 +1,7 @@
+# Keep the worker-image build context lean and secret-free (Dockerfile.worker).
+node_modules
+.next
+.env*
+.claude
+docs
+.git
