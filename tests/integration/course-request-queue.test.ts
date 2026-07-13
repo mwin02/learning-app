@@ -18,6 +18,7 @@ import {
   finishCourseRequest,
   requeueCourseRequest,
   reclaimStale,
+  queueDepth,
 } from '@/lib/services/course-request';
 import { COURSE_REQUEST_MAX_ATTEMPTS } from '@/lib/config';
 import { describeDb } from './db';
@@ -240,5 +241,38 @@ describeDb('CourseRequest queue', () => {
     expect(capAfter.error).toContain('max attempts');
 
     await prisma.courseRequest.deleteMany({ where: { id: { in: [underCap.id, atCap.id] } } });
+  });
+
+  // ——— Workers-D queue-depth gauge ———
+
+  it('queueDepth counts queued/running and ages the oldest queued row', async () => {
+    // The gauge scans the whole table (like reclaimStale), so assert deltas
+    // against a baseline rather than absolute values — foreign rows may exist.
+    const base = await queueDepth();
+
+    const oldMs = 5 * 60_000;
+    const oldQueued = await makeRow('depth-old', { createdAt: new Date(Date.now() - oldMs) });
+    const newQueued = await makeRow('depth-new');
+    const running = await makeRow('depth-run', { status: CourseRequestStatus.running, claimedAt: new Date() });
+    // Backed-off rows are still backlog: counted in queued, eligible for oldest.
+    const backedOff = await makeRow('depth-backoff', { nextAttemptAt: new Date(Date.now() + 60_000) });
+
+    const depth = await queueDepth();
+    expect(depth.queued).toBe(base.queued + 3);
+    expect(depth.running).toBe(base.running + 1);
+    // Our 5-minute-old row is queued, so the oldest queued row is at least that old.
+    expect(depth.oldestQueuedAgeMs).not.toBeNull();
+    expect(depth.oldestQueuedAgeMs!).toBeGreaterThanOrEqual(oldMs - 1_000);
+
+    await prisma.courseRequest.deleteMany({
+      where: { id: { in: [oldQueued.id, newQueued.id, running.id, backedOff.id] } },
+    });
+
+    // Terminal rows never count.
+    const done = await makeRow('depth-done', { status: CourseRequestStatus.fulfilled });
+    const after = await queueDepth();
+    expect(after.queued).toBe(base.queued);
+    expect(after.running).toBe(base.running);
+    await prisma.courseRequest.delete({ where: { id: done.id } });
   });
 });

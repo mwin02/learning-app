@@ -144,6 +144,34 @@ export async function requeueCourseRequest(
   return { requeued: count > 0, failedAtCap: false };
 }
 
+// Workers-D: the queue-depth gauge — one cheap whole-table aggregate the worker
+// emits once per poll cycle (course-worker.queue-depth). queued counts ALL
+// queued rows including backed-off ones (a row sitting out its nextAttemptAt is
+// still backlog), and oldestQueuedAgeMs ages from createdAt for the same reason:
+// the gauge answers "how far behind are we", not "what's claimable this instant".
+// null oldestQueuedAgeMs = empty queue. With N workers each cycle emits N gauge
+// lines; that's expected — dedup/aggregation happens at the metric layer.
+export type QueueDepth = {
+  queued: number;
+  running: number;
+  oldestQueuedAgeMs: number | null;
+};
+
+export async function queueDepth(): Promise<QueueDepth> {
+  const [row] = await prisma.$queryRaw<{ queued: bigint; running: bigint; oldest: Date | null }[]>`
+    SELECT
+      count(*) FILTER (WHERE status = 'queued')          AS queued,
+      count(*) FILTER (WHERE status = 'running')         AS running,
+      min("createdAt") FILTER (WHERE status = 'queued')  AS oldest
+      FROM "CourseRequest"
+  `;
+  return {
+    queued: Number(row.queued),
+    running: Number(row.running),
+    oldestQueuedAgeMs: row.oldest ? Date.now() - row.oldest.getTime() : null,
+  };
+}
+
 // Reclaim requests stuck `running` past the stale threshold (a worker that died
 // mid-run). Rows under the attempts cap bounce back to `queued` with
 // nextAttemptAt = null — a dead worker's request retries immediately, no backoff.
