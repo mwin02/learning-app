@@ -812,6 +812,20 @@ model CourseRequest {
   // Set when status→running (worker claim); the basis for stale-claim reclaim by
   // age (a worker that died mid-run), which the g-3 worker acts on each tick.
   claimedAt      DateTime?
+  // Workers-A1 (D3): claims consumed. Incremented at claim time ONLY (the single
+  // code path) — contention requeues and stale reclaims each burn one attempt on
+  // re-claim. requeueCourseRequest/reclaimStale fail the row terminally once this
+  // reaches COURSE_REQUEST_MAX_ATTEMPTS (poison-request cap, D5).
+  attempts       Int                 @default(0)
+  // Workers-A1 (D2/D10): earliest next claim; null = immediately claimable. Set by
+  // requeueCourseRequest (contention backoff); cleared on stale reclaim (a dead
+  // worker's request retries immediately). Claim ordering stays createdAt ASC — a
+  // requeued row rejoins at its original priority once eligible.
+  nextAttemptAt  DateTime?
+  // Workers-A1 (D6): worker identity (hostname / Cloud Run instance id) stamped at
+  // claim. Observability only. Deliberately NOT cleared on requeue/reclaim: a
+  // bounced row keeps its last claimant for stale-claim triage.
+  claimedBy      String?
   // The built Track on success; null until fulfilled. SetNull keeps the request
   // row for audit if the (immutable) Track is later deleted in cleanup.
   trackId        String?

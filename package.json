@@ -12,6 +12,7 @@
     "test:int": "vitest run --project integration",
     "test:all": "vitest run",
     "db:seed": "tsx --env-file=.env.local prisma/seed.ts",
+    "worker": "tsx --env-file=.env.local scripts/course-worker.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
