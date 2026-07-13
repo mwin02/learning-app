@@ -52,7 +52,10 @@ export async function sourceAndAttachConcept(args: {
   const { pathId, topic, conceptId, slug, title, targetMastery, isOnRamp = false, preferSubstantial = false } = args;
 
   const sourced = await sourceForConcept({ topic, concept: { slug, title }, conceptId, targetMastery, preferSubstantial });
-  let candidateIds = sourced.insertedIds;
+  // Rung-0 library hits first (already embedded + semantically ranked), then the
+  // fresh web finds. Disjoint by construction: library ids are existing rows,
+  // insertedIds are rows this run just created.
+  let candidateIds = [...sourced.libraryCandidateIds, ...sourced.insertedIds];
 
   // Phase 2g-4: on-ramp backstop. The cold build (ensure-path-map) normally authors the
   // on-ramp's generated primary; this covers the case where that generation failed and

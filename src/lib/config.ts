@@ -74,14 +74,17 @@ export const REMEDIATION_CONFLATION_SLICE_SIMILARITY = 0.6;
 export const REMEDIATION_SPLIT_MIN_NODES = 2;
 export const REMEDIATION_SPLIT_MAX_NODES = 6;
 
-// Library re-judge Block 3: the routing distance ceiling for the decompose-time
-// hook — a decomposed container's child is offered to a path concept only when
-// the pgvector cosine distance between the concept-title query embedding and
-// the child's embedding is at or under this. Calibrated empirically on the dev
-// library (2026-07-12): resources attached to a concept measure ≤ ~0.42 from
-// its title; unrelated-topic resources ≥ ~0.51. Generous on purpose — the
-// candidate judge gates quality, this only prunes obvious non-matches so a
-// 23-chapter container doesn't fan every child into every concept's judge call.
+// Library re-judge: the concept↔resource semantic-match ceiling — a resource
+// is offered to a concept only when the pgvector cosine distance between the
+// concept-title query embedding and the resource's embedding is at or under
+// this. Used by BOTH the decompose-time hook's child→concept routing (Block 3)
+// and rung-0 library candidate search (Block 4, where a hit suppresses web
+// sourcing so trust alone must never qualify one). Calibrated empirically on
+// the dev library (2026-07-12): resources attached to a concept measure
+// ≤ ~0.42 from its title; unrelated-topic resources ≥ ~0.51. Generous on
+// purpose — the candidate judge gates quality, this only prunes obvious
+// non-matches so a 23-chapter container doesn't fan every child into every
+// concept's judge call.
 export const REJUDGE_ROUTE_MAX_DISTANCE = 0.48;
 
 // Phase 2.5f-4b: hard ceiling on remediation passes per run. A pass fixes the

@@ -29,7 +29,9 @@ import {
   REMEDIATION_SOURCE_TARGET_COUNT,
   REMEDIATION_DISCOVERY_OVERSAMPLE,
   REMEDIATION_MAX_DISCOVERY_ITERATIONS,
+  REJUDGE_ROUTE_MAX_DISTANCE,
 } from '@/lib/config';
+import { searchNearbyResources } from '@/lib/agents/tools/search-resources';
 import { runValidationPipeline } from '@/lib/agents/validation';
 import { livenessValidator } from '@/lib/agents/validation/validators/liveness';
 import { rulesAgentValidator } from '@/lib/agents/validation/validators/rules-agent';
@@ -96,7 +98,9 @@ const CanonicalizedTagsSchema = z.object({
     .min(0),
 });
 
-export type WebFallbackResult = {
+// What the web half of a sourcing run persisted (unchanged semantics — these
+// trace/report fields describe DISCOVERY, not the library rung).
+type PersistResult = {
   insertedCount: number;
   skippedCount: number;
   discoveredCount: number;
@@ -105,6 +109,15 @@ export type WebFallbackResult = {
   // re-judge (source-concept.ts) loads them by id to attach as candidates before
   // the post-commit embed lands.
   insertedIds: string[];
+};
+
+export type WebFallbackResult = PersistResult & {
+  // Library re-judge Block 4 (rung 0): EXISTING library rows semantically near
+  // the concept — already embedded and validated, so they bypass the
+  // discover/validate loop entirely and merge into the caller's candidate set
+  // alongside insertedIds. They count toward targetCount: web discovery runs
+  // only for the shortfall.
+  libraryCandidateIds: string[];
 };
 
 const VALIDATORS = [livenessValidator, rulesAgentValidator];
@@ -142,6 +155,13 @@ export async function sourceForConcept({
 }): Promise<WebFallbackResult> {
   const label = `${topic}::${concept.slug}`;
   // The sourcing LADDER (replaces the old "same vague open-web query, repeated"):
+  //   rung 0 — the EXISTING library: rows semantically near the concept (hard
+  //     pgvector distance ceiling; trust alone can't qualify a row), minus ones
+  //     already attached to the demanding concept. Cheapest — no discovery, no
+  //     validation, no upsert; the judge still gates quality. Hits count toward
+  //     targetCount, so the web rungs run only for the shortfall. Accepted
+  //     tradeoff (locked): a concept whose library candidates are mediocre-but-
+  //     passing sees no fresh web results until they stop passing.
   //   rung 1 (iteration 1) — allowlisted fan-out: the YouTube Data API prong +
   //     a grounded prong hard-restricted to the curated source domains. Distinct
   //     queries against high-quality sources, so a concept usually fills here.
@@ -149,10 +169,28 @@ export async function sourceForConcept({
   //     run only when rung 1 came up short (protects coverage on thin/niche concepts).
   // collectSurvivors carries the deny-list across rungs so a rung never re-surfaces
   // what an earlier rung already returned.
+  const libraryCandidateIds = await libraryRung({ topic, conceptTitle: concept.title, conceptId, targetCount });
+  const webTarget = webShortfall(targetCount, libraryCandidateIds.length);
+  if (webTarget === 0) {
+    console.log('[web-fallback] library rung filled the target, skipping discovery', {
+      label,
+      libraryHits: libraryCandidateIds.length,
+      targetCount,
+    });
+    return {
+      insertedCount: 0,
+      skippedCount: 0,
+      discoveredCount: 0,
+      iterations: 0,
+      insertedIds: [],
+      libraryCandidateIds,
+    };
+  }
+
   const allowDomains = await loadAllowlistDomains();
   const { survivors, iterations, totalDiscovered } = await collectSurvivors({
     label,
-    targetCount,
+    targetCount: webTarget,
     oversample: REMEDIATION_DISCOVERY_OVERSAMPLE,
     maxIterations: REMEDIATION_MAX_DISCOVERY_ITERATIONS,
     discover: (oversample, denyList, iteration) =>
@@ -160,13 +198,48 @@ export async function sourceForConcept({
         ? discoverAllowlisted(topic, concept.title, oversample, denyList, allowDomains, targetMastery, preferSubstantial)
         : discoverForConcept(topic, concept.title, oversample, denyList, targetMastery, preferSubstantial),
   });
-  return persistDiscovered(topic, survivors, {
+  const persisted = await persistDiscovered(topic, survivors, {
     label,
     iterations,
     totalDiscovered,
-    targetCount,
+    targetCount: webTarget,
     sourcedForConceptId: conceptId ?? null,
   });
+  return { ...persisted, libraryCandidateIds };
+}
+
+// How many resources web discovery still owes after the library rung: library
+// hits count toward targetCount (the locked rung-0 cost policy), floored at 0
+// so an over-full library rung can't demand negative discovery.
+export function webShortfall(targetCount: number, libraryHits: number): number {
+  return Math.max(0, targetCount - libraryHits);
+}
+
+// Rung 0: existing library rows near the concept. Scoped like the cold map
+// build's candidate search (topic ∪ related topics, excludeGenerated, the
+// default active+pending_review window via searchNearbyResources), gated by the
+// same distance ceiling the decompose-time hook routes with — a hit must be
+// semantically close, not merely high-trust, because hits SUPPRESS web sourcing
+// via the shortfall arithmetic. Rows already attached to the demanding concept
+// are excluded so they can't re-count toward the target.
+async function libraryRung(args: {
+  topic: string;
+  conceptTitle: string;
+  conceptId?: string;
+  targetCount: number;
+}): Promise<string[]> {
+  const { topic, conceptTitle, conceptId, targetCount } = args;
+  const attached = conceptId
+    ? await prisma.conceptResource.findMany({ where: { conceptId }, select: { resourceId: true } })
+    : [];
+  const hits = await searchNearbyResources({
+    topics: relatedTopics(topic),
+    query: conceptTitle,
+    maxDistance: REJUDGE_ROUTE_MAX_DISTANCE,
+    limit: targetCount,
+    excludeIds: attached.map((a) => a.resourceId),
+  });
+  return hits.map((h) => h.id);
 }
 
 // ── shared engine ─────────────────────────────────────────────────────────────
@@ -270,7 +343,7 @@ async function persistDiscovered(
     // written for rows that park non-atomic (see recordSourcedFor below).
     sourcedForConceptId: string | null;
   },
-): Promise<WebFallbackResult> {
+): Promise<PersistResult> {
   const { label, iterations, totalDiscovered, targetCount, sourcedForConceptId } = meta;
   if (finalRows.length === 0) {
     console.log('[web-fallback] no survivors', { label, iterations, totalDiscovered });
