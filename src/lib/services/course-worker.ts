@@ -11,9 +11,10 @@
 // Track summary to stdout — the exact hook the "course ready" email later replaces.
 //
 // tickOnce() is the unit the CLI loop (scripts/course-worker.ts) drives: reclaim
-// stale claims, then claim + process at most one request. Concurrency is 1 by
-// design (see CourseRequest schema note) — the inner ensurePathMap advisory lock +
-// RemediationJob single-flight are the backstops if that ever changes.
+// stale claims, then claim + process at most one request. Workers-A2: safe at
+// N > 1 workers — the ensurePathMap advisory lock + RemediationJob single-flight
+// serialize same-topic builds, and a worker that loses that race requeues the
+// request with backoff (`requeued`) instead of failing it.
 
 import { PathStatus } from '@prisma/client';
 import type { CourseRequest } from '@prisma/client';
@@ -22,17 +23,24 @@ import { remediatePath } from '@/lib/agents/track/remediate-path';
 import { buildTrack } from '@/lib/agents/track/build-track';
 import { backfillConceptBanks } from '@/lib/agents/content/generate-concept-bank';
 import { addFrontierConcept } from '@/lib/agents/track/add-frontier-concept';
-import { COURSE_JOB_DEADLINE_MS, MAX_FRONTIER_PER_TOPIC } from '@/lib/config';
+import {
+  COURSE_CONTENTION_REQUEUE_MS,
+  COURSE_JOB_DEADLINE_MS,
+  MAX_FRONTIER_PER_TOPIC,
+} from '@/lib/config';
 import { log, logError, logWarn, runWithTrace, traceUsageSnapshot } from '@/lib/log';
 import { reclaimStaleRemediationJobs } from '@/lib/agents/track/remediation-job';
 import {
   claimNextQueued,
   finishCourseRequest,
   reclaimStale,
+  requeueCourseRequest,
 } from '@/lib/services/course-request';
 import { maybeAssembleProgram, sweepStuckPrograms } from '@/lib/services/program';
 
-export type ProcessOutcome = 'fulfilled' | 'failed';
+// Workers-A2: `requeued` is NON-terminal — the request went back to `queued` (topic
+// contention backoff, or a graceful-shutdown release) and a later claim retries it.
+export type ProcessOutcome = 'fulfilled' | 'failed' | 'requeued';
 
 // Injectable pipeline stages (same `opts` pattern as enqueueProgram's `plan`): the
 // expensive/LLM-backed steps default to the real implementations, so production
@@ -46,12 +54,16 @@ export type PipelineStages = {
   addFrontier?: typeof addFrontierConcept;
 };
 
-// processCourseRequest adds two more seams over the pipeline: the post-fulfill
+// processCourseRequest adds three more seams over the pipeline: the post-fulfill
 // Program assembler hook (so its fires / failure-is-non-fatal behavior is
-// observable in tests) and the H4 per-job deadline (so tests can use a short one).
+// observable in tests), the H4 per-job deadline (so tests can use a short one),
+// and the Workers-A2 shutdown signal (D7): the CLI's SIGTERM controller. When it
+// aborts, the in-flight job is REQUEUED (not failed) so a surviving worker picks
+// it up immediately, distinguishing a graceful release from a deadline abort.
 export type ProcessOpts = PipelineStages & {
   assembleProgram?: (programId: string) => Promise<void>;
   deadlineMs?: number;
+  shutdownSignal?: AbortSignal;
 };
 
 // Reclaim both queues' dead-worker claims. Run once per poll cycle BEFORE claiming,
@@ -83,10 +95,25 @@ export async function processCourseRequest(cr: CourseRequest, opts: ProcessOpts 
     // is a no-op — the status='running' guard sees the row already failed.
     const deadlineMs = opts.deadlineMs ?? COURSE_JOB_DEADLINE_MS;
     const controller = new AbortController();
+    // Workers-A2 (D7): a shutdown abort also aborts the per-job controller, so
+    // in-flight AI calls stop at their next checkpoint. The requeue-vs-fail
+    // decision itself lives in ONE place — the pipeline catch (and the deadline
+    // handler below) check shutdownSignal.aborted — so a shutdown never races a
+    // second guarded write against the pipeline's own finish.
+    const shutdownSignal = opts.shutdownSignal;
+    const onShutdown = () => controller.abort(new Error('worker shutdown'));
+    if (shutdownSignal?.aborted) onShutdown();
+    else shutdownSignal?.addEventListener('abort', onShutdown, { once: true });
     let timer: NodeJS.Timeout | undefined;
     const deadline = new Promise<ProcessOutcome>((resolve) => {
       timer = setTimeout(async () => {
         controller.abort(new Error(`job deadline exceeded (${deadlineMs}ms)`));
+        // A shutdown that landed while a stage was hung (never observed its
+        // abort signal): release the claim instead of failing it.
+        if (shutdownSignal?.aborted) {
+          resolve(await requeueShutdown(cr).catch(() => 'requeued' as const));
+          return;
+        }
         logError('course-worker.deadline-exceeded', { id: cr.id, topic: cr.topic, deadlineMs });
         await finishCourseRequest(cr.id, {
           status: 'failed',
@@ -102,8 +129,12 @@ export async function processCourseRequest(cr: CourseRequest, opts: ProcessOpts 
       outcome = await Promise.race([processRequestPipeline(cr, opts, controller.signal), deadline]);
     } finally {
       clearTimeout(timer);
+      shutdownSignal?.removeEventListener('abort', onShutdown);
     }
-    if (cr.programId) {
+    // Workers-A2: only TERMINAL outcomes count toward Program assembly — a
+    // requeued child is still pending and must not trip the "all siblings
+    // terminal" check early.
+    if (cr.programId && outcome !== 'requeued') {
       const assembleProgram = opts.assembleProgram ?? maybeAssembleProgram;
       await assembleProgram(cr.programId).catch((err) =>
         logError('course-worker.assemble-failed', { programId: cr.programId, err }),
@@ -125,7 +156,7 @@ export async function processCourseRequest(cr: CourseRequest, opts: ProcessOpts 
 // is a harmless no-op when the deadline handler already failed the row.
 async function processRequestPipeline(
   cr: CourseRequest,
-  opts: PipelineStages = {},
+  opts: ProcessOpts = {},
   signal?: AbortSignal,
 ): Promise<ProcessOutcome> {
   const ensureMap = opts.ensureMap ?? ensurePathMap;
@@ -138,7 +169,15 @@ async function processRequestPipeline(
   try {
     const map = await ensureMap({ topic: cr.topic, abortSignal: signal });
     let status = map.status;
-    log('course-worker.map-ready', { id: cr.id, pathId: map.pathId, status, reclaimed: map.reclaimed });
+    log('course-worker.map-ready', { id: cr.id, pathId: map.pathId, status, reclaimed: map.reclaimed, inFlight: map.inFlight });
+
+    // Workers-A2 (D2): another worker's spine build for this topic is plausibly
+    // mid-flight (fresh empty `building` Path between its tx1 and tx2). Building
+    // now would race it; remediating would steal its RemediationJob slot. Bounce
+    // the request with backoff and let a later claim find the settled Path.
+    if (map.inFlight) {
+      return requeueContention(cr, 'topic build in flight');
+    }
 
     // A `building` map (thin/novel topic, or a reclaimed rebuild that hit holes)
     // gets one remediation pass: source gaps / split conflations, then relax or
@@ -148,15 +187,11 @@ async function processRequestPipeline(
       const rem = await remediate(map.pathId, { abortSignal: signal });
       log('course-worker.remediation', { id: cr.id, outcome: rem.outcome, status: rem.status, escalated: rem.escalatedConceptSlugs });
       if (rem.outcome === 'busy') {
-        // Under single-worker concurrency this is an anomaly (stale jobs are
-        // reclaimed by age before we get here). Fail with a retryable diagnostic
-        // rather than build a Track on a not-ready Path.
-        await finishCourseRequest(cr.id, {
-          status: 'failed',
-          error: 'remediation busy — another job holds this Path (likely a concurrency anomaly)',
-          buildUsage: traceUsageSnapshot(),
-        });
-        return 'failed';
+        // Workers-A2 (D2): under N workers this is EXPECTED contention — another
+        // worker's remediation holds this Path's single-flight slot. Requeue with
+        // backoff rather than build a Track on a not-ready Path (or fail a
+        // learner for picking a popular topic).
+        return requeueContention(cr, 'remediation busy — another job holds this Path');
       }
       status = rem.status;
     }
@@ -241,6 +276,13 @@ async function processRequestPipeline(
     });
     return 'fulfilled';
   } catch (err) {
+    // Workers-A2 (D7): an abort caused by graceful shutdown releases the claim
+    // (requeue, immediately claimable) instead of failing it — the surviving
+    // workers pick it up on their next poll. Checked here, not in a separate
+    // shutdown handler, so requeue-vs-fail is a single write path.
+    if (opts.shutdownSignal?.aborted) {
+      return requeueShutdown(cr).catch(() => 'requeued' as const);
+    }
     const message = err instanceof Error ? err.message : String(err);
     logError('course-worker.failed', { id: cr.id, topic: cr.topic, error: message });
     await finishCourseRequest(cr.id, {
@@ -252,17 +294,43 @@ async function processRequestPipeline(
   }
 }
 
+// Workers-A2 (D2): bounce a contended request back to `queued` with the standard
+// backoff. requeueCourseRequest enforces the attempts cap (D5) — a request that
+// has already burned its claims fails terminally there, and we report which
+// branch was taken as the outcome.
+async function requeueContention(cr: CourseRequest, reason: string): Promise<ProcessOutcome> {
+  const res = await requeueCourseRequest(cr.id, {
+    delayMs: COURSE_CONTENTION_REQUEUE_MS,
+    reason,
+  });
+  log('course-worker.requeued-contention', { id: cr.id, topic: cr.topic, reason, ...res });
+  return res.failedAtCap ? 'failed' : 'requeued';
+}
+
+// Workers-A2 (D7): release a claim on graceful shutdown — delayMs 0, so a
+// surviving worker's very next poll can claim it (the whole point of the
+// graceful release vs. waiting out the 45m stale window). Like contention, the
+// cap still applies: a poison request crash-looping through shutdowns fails
+// terminally rather than bouncing forever.
+async function requeueShutdown(cr: CourseRequest): Promise<ProcessOutcome> {
+  const res = await requeueCourseRequest(cr.id, { delayMs: 0, reason: 'worker shutdown' });
+  log('course-worker.requeued-shutdown', { id: cr.id, topic: cr.topic, ...res });
+  return res.failedAtCap ? 'failed' : 'requeued';
+}
+
 // One worker tick: reclaim stale claims, then claim + process at most one request.
 // Returns true if it processed one (the loop keeps going), false if the queue was
 // empty (the loop sleeps). The CLI's --once mode is a single tickOnce().
-export async function tickOnce(): Promise<boolean> {
+// Workers-A2: workerId stamps the claim (D6, observability); shutdownSignal is the
+// CLI's SIGTERM controller (D7, graceful release).
+export async function tickOnce(opts: { workerId?: string; shutdownSignal?: AbortSignal } = {}): Promise<boolean> {
   await reclaimStaleClaims();
   // Backstop for Programs stranded in `building` (last-sibling hook failure or a
   // worker crash after finishCourseRequest) — reclaimStale doesn't re-trigger assembly.
   await sweepStuckPrograms();
-  const cr = await claimNextQueued();
+  const cr = await claimNextQueued(opts.workerId);
   if (!cr) return false;
-  await processCourseRequest(cr);
+  await processCourseRequest(cr, { shutdownSignal: opts.shutdownSignal });
   return true;
 }
 

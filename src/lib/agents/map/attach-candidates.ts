@@ -149,8 +149,14 @@ export async function attachCandidates(args: {
   // discovered via searchResources in the same run (its embedding lands post-commit).
   injected?: Map<string, SearchResult[]>;
   onTrace?: OnTrace;
+  // Workers-A2 (D7): the worker's per-job abort, checked at each chunk boundary —
+  // a released job stops within one judge round (~seconds) instead of fanning out
+  // over the remaining concepts. Not threaded into the per-concept search/judge
+  // calls (attachOneWithRetry deliberately swallows per-concept errors, and an
+  // abort mid-chunk is bounded by the chunk anyway).
+  abortSignal?: AbortSignal;
 }): Promise<ConceptAttachment[]> {
-  const { topic, concepts, injected, onTrace = () => {} } = args;
+  const { topic, concepts, injected, onTrace = () => {}, abortSignal } = args;
   // Search the topic ∪ its related topics (e.g. a javascript-react map draws on
   // javascript foundations), mirroring AR retrieval. A topic with no relations
   // is just itself.
@@ -164,6 +170,7 @@ export async function attachCandidates(args: {
   // Fan out per concept, bounded — each concept is one independent search + judge.
   const attachments: ConceptAttachment[] = [];
   for (let i = 0; i < concepts.length; i += MAP_JUDGE_CONCURRENCY) {
+    abortSignal?.throwIfAborted();
     const chunk = concepts.slice(i, i + MAP_JUDGE_CONCURRENCY);
     const settled = await Promise.allSettled(
       chunk.map((c) => attachOneWithRetry(topics, c, injected?.get(c.slug) ?? [], onTrace)),

@@ -182,10 +182,13 @@ async function failProgram(
 // slot's trackId and finalize the Program (ready | partial | failed). A no-op while
 // any sibling is still queued/running.
 //
-// Race-freedom rests on single-worker concurrency (same assumption as the queue
-// itself): one worker drains the queue, so no two children finalize concurrently.
-// The updateMany status guard still makes the finalize idempotent + safe against a
-// double call.
+// Workers-A2 concurrency note: under N workers, two workers finishing the LAST two
+// siblings can race — each reads the other's child as still `running` and both
+// skip. That's a latency wart, NOT a correctness bug: sweepStuckPrograms (every
+// worker tick) finds the stranded `building` Program and re-runs this assembler,
+// and the updateMany status guard below keeps a double/concurrent finalize
+// idempotent (exactly one caller flips the status and logs). Do not "fix" the race
+// here with a lock — the sweep is the designed recovery path.
 export async function maybeAssembleProgram(programId: string): Promise<void> {
   const siblings = await prisma.courseRequest.findMany({
     where: { programId },

@@ -81,6 +81,10 @@ export type ReviewSpineArgs = {
   subject?: string;
   spine: AuthoredSpine;
   onTrace?: OnTrace;
+  // Workers-A2 (D7): the worker's per-job abort, forwarded to the AI call (see
+  // AuthorSpineArgs.abortSignal). The caller already treats a thrown review as
+  // "no findings", so an abort here degrades gracefully.
+  abortSignal?: AbortSignal;
 };
 
 // Review a structurally-valid spine for semantic completeness. Returns findings;
@@ -88,7 +92,7 @@ export type ReviewSpineArgs = {
 // a thrown review (transient infra error) as "no findings" so a flaky critic call
 // never fails an otherwise-valid build — the spine is already structurally sound.
 export async function reviewSpine(args: ReviewSpineArgs): Promise<SpineReview> {
-  const { topic, subject, spine, onTrace = () => {} } = args;
+  const { topic, subject, spine, onTrace = () => {}, abortSignal } = args;
   const { model, temperature, maxOutputTokens, modelId } = getModel('mapSpineReviewer');
 
   onTrace({
@@ -104,6 +108,7 @@ export async function reviewSpine(args: ReviewSpineArgs): Promise<SpineReview> {
     output: Output.object({ schema: ReviewSchema }),
     system: SYSTEM_PROMPT,
     prompt: buildPrompt({ topic, subject, spine }),
+    abortSignal,
   });
 
   const review = result.experimental_output;

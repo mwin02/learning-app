@@ -40,6 +40,11 @@ export type EnsurePathMapResult = {
   // True when this call rebuilt over an existing non-self-healing Path (a `failed`
   // build, or a stale empty `building` claim that crashed before populate).
   reclaimed: boolean;
+  // Workers-A2 (D2): true when the claim returned an EXISTING Path that is
+  // plausibly another worker's build mid-flight (fresh empty `building` — between
+  // its tx1 and tx2). The worker requeues the request with backoff instead of
+  // building a Track on a not-ready Path. False on every other exit.
+  inFlight: boolean;
   // Spine-hole concept slugs (concepts with no qualifying `teaches` primary).
   // Empty for an existing Path returned without a rebuild.
   holes: string[];
@@ -66,6 +71,21 @@ export function isReclaimable(status: PathStatus, conceptCount: number, updatedA
   );
 }
 
+// Workers-A2 (D2): is an EXISTING, non-reclaimable Path plausibly another worker's
+// build mid-flight? A fresh empty `building` Path is exactly the between-tx1-and-tx2
+// window (isReclaimable already age-gates the crashed-claim case, so "empty
+// `building` but NOT reclaimable" means "not stale yet — someone may be authoring").
+// A `building` Path WITH concepts is a holey spine (remediation's job, not
+// contention), and every other status is settled. Pure so the derivation
+// unit-tests without a DB, mirroring isReclaimable.
+export function isBuildInFlight(status: PathStatus, conceptCount: number, updatedAt: Date): boolean {
+  return (
+    status === PathStatus.building &&
+    conceptCount === 0 &&
+    !isReclaimable(status, conceptCount, updatedAt)
+  );
+}
+
 export class PathMapError extends Error {
   constructor(message: string, readonly cause?: unknown) {
     super(message);
@@ -77,11 +97,12 @@ export async function ensurePathMap(args: {
   topic: string;
   subject?: string;
   onTrace?: OnTrace;
-  // H4: the worker's per-job deadline signal. Checked between the expensive
-  // phases below; forwarding into the deep author/attach call sites is
-  // opportunistic (the worker's deadline race is the backstop). An abort mid-
-  // build leaves the Path `building` with 0 concepts — exactly the crashed-claim
-  // state isReclaimable() already recovers after PATH_BUILD_STALE_MS.
+  // H4/Workers-A2: the worker's per-job abort (deadline or shutdown). Checked
+  // between the expensive phases below AND forwarded into buildSpine (its AI
+  // calls + per-attempt checkpoints) and attachCandidates (per-chunk checkpoints)
+  // — D7 needs a SIGTERM'd build to stop within seconds, not at stage boundaries
+  // minutes later. An abort mid-build lands in the catch below, which flips the
+  // Path to `failed`; the next claim reclaims and rebuilds it (isReclaimable).
   abortSignal?: AbortSignal;
 }): Promise<EnsurePathMapResult> {
   const { topic, subject, onTrace = () => {}, abortSignal } = args;
@@ -100,7 +121,12 @@ export async function ensurePathMap(args: {
     });
     if (existing) {
       if (!isReclaimable(existing.status, existing._count.concepts, existing.updatedAt)) {
-        return { path: { id: existing.id, status: existing.status }, created: false as const, reclaimed: false as const };
+        return {
+          path: { id: existing.id, status: existing.status },
+          created: false as const,
+          reclaimed: false as const,
+          inFlight: isBuildInFlight(existing.status, existing._count.concepts, existing.updatedAt),
+        };
       }
       // Rebuildable: reset the SAME row to `building` and fall through to author/
       // attach/populate. deleteMany is defensive — a reclaimable Path has no
@@ -109,7 +135,7 @@ export async function ensurePathMap(args: {
       // reference it (e.g. a terminal RemediationJob from a prior failed run).
       await tx.concept.deleteMany({ where: { pathId: existing.id } });
       await tx.path.update({ where: { id: existing.id }, data: { status: PathStatus.building } });
-      return { path: { id: existing.id, status: PathStatus.building }, created: true as const, reclaimed: true as const };
+      return { path: { id: existing.id, status: PathStatus.building }, created: true as const, reclaimed: true as const, inFlight: false as const };
     }
     const path = await tx.path.create({
       // A Path is now just { topic, status } + its concept-map relations — the
@@ -118,12 +144,12 @@ export async function ensurePathMap(args: {
       data: { topic, status: PathStatus.building },
       select: { id: true, status: true },
     });
-    return { path, created: true as const, reclaimed: false as const };
+    return { path, created: true as const, reclaimed: false as const, inFlight: false as const };
   });
 
   if (!claim.created) {
-    onTrace({ kind: 'info', label: 'path map exists', detail: { pathId: claim.path.id, status: claim.path.status } });
-    return { pathId: claim.path.id, status: claim.path.status, created: false, reclaimed: false, holes: [] };
+    onTrace({ kind: 'info', label: 'path map exists', detail: { pathId: claim.path.id, status: claim.path.status, inFlight: claim.inFlight } });
+    return { pathId: claim.path.id, status: claim.path.status, created: false, reclaimed: false, inFlight: claim.inFlight, holes: [] };
   }
 
   const pathId = claim.path.id;
@@ -138,7 +164,7 @@ export async function ensurePathMap(args: {
   let ready: boolean;
   try {
     abortSignal?.throwIfAborted();
-    const spine = await buildSpine({ topic, subject, onTrace });
+    const spine = await buildSpine({ topic, subject, onTrace, abortSignal });
     // Enforce "exactly one on-ramp" before attach + persist, so the on-ramp-aware
     // candidate sourcing (discriminating query + strict judge rubric) keys off a
     // single, well-defined concept.
@@ -162,7 +188,7 @@ export async function ensurePathMap(args: {
     }
 
     abortSignal?.throwIfAborted();
-    const attachments = await attachCandidates({ topic, concepts, injected, onTrace });
+    const attachments = await attachCandidates({ topic, concepts, injected, onTrace, abortSignal });
     const readiness = computeReadiness(attachments);
     holes = readiness.holes;
     ready = readiness.ready;
@@ -233,5 +259,5 @@ export async function ensurePathMap(args: {
   const status = ready ? PathStatus.spine_ready : PathStatus.building;
   onTrace({ kind: 'stage', label: 'path map built', detail: { pathId, status, holes, reclaimed: claim.reclaimed } });
   console.log('[map-ensure-path-map] built', { topic, pathId, status, holeCount: holes.length, reclaimed: claim.reclaimed });
-  return { pathId, status, created: true, reclaimed: claim.reclaimed, holes };
+  return { pathId, status, created: true, reclaimed: claim.reclaimed, inFlight: false, holes };
 }
