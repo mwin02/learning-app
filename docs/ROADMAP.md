@@ -379,3 +379,4 @@ Native mobile, certificates, spaced repetition, multi-seat, VARK personalization
 - Final monthly price (placeholder until then)
 - Whether to add Resend (email) for transactional emails — defer unless Stripe needs it
 - Whether to migrate hosting to Cloud Run before or after launch (currently: after)
+- **When to move course workers to the cloud.** The worker is containerized (`Dockerfile.worker`) and runs locally as N compose replicas (`docker compose --profile workers up`, workers-B/C); promoting it to always-on Cloud Run **worker pools** draining the production queue is scripted step-by-step in [docs/worker-deploy.md](worker-deploy.md). Trigger: real users waiting on builds the laptop workers can't be trusted with (always-on billing starts then).
