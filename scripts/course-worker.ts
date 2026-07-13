@@ -69,8 +69,14 @@ async function runWatch() {
     // reads as backlog-at-wakeup. H3 JSON → (at deploy) a Cloud Logging
     // log-based metric; locally, `docker compose logs worker | jq`. Emitted
     // even when 0/0 so the metric has a heartbeat and "no data" means "no
-    // worker", not "no work".
-    log('course-worker.queue-depth', { ...(await queueDepth()), workerId });
+    // worker", not "no work". Guarded: this is observability only, so a transient
+    // DB blip on the gauge query must not take down the work-processing loop
+    // (which otherwise treats a throw as fatal-and-restart).
+    await queueDepth()
+      .then((depth) => log('course-worker.queue-depth', { ...depth, workerId }))
+      .catch((err) =>
+        console.warn(`[course-worker ${workerId}] queue-depth gauge failed`, err),
+      );
     let cr;
     while (running && (cr = await claimNextQueued(workerId))) {
       // A 'requeued' outcome (contention) keeps draining: the bounced row is
