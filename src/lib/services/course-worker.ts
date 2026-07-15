@@ -26,6 +26,7 @@ import { addFrontierConcept } from '@/lib/agents/track/add-frontier-concept';
 import {
   COURSE_CONTENTION_REQUEUE_MS,
   COURSE_JOB_DEADLINE_MS,
+  COURSE_SHUTDOWN_GRACE_MS,
   MAX_FRONTIER_PER_TOPIC,
 } from '@/lib/config';
 import { log, logError, logWarn, runWithTrace, traceUsageSnapshot } from '@/lib/log';
@@ -64,6 +65,10 @@ export type ProcessOpts = PipelineStages & {
   assembleProgram?: (programId: string) => Promise<void>;
   deadlineMs?: number;
   shutdownSignal?: AbortSignal;
+  // Audit 2.3: how long a shutdown abort waits for the pipeline to settle before
+  // the claim is proactively requeued. Injectable (like deadlineMs) so tests can
+  // use a short grace against a non-observing stage.
+  shutdownGraceMs?: number;
 };
 
 // Reclaim both queues' dead-worker claims. Run once per poll cycle BEFORE claiming,
@@ -96,12 +101,37 @@ export async function processCourseRequest(cr: CourseRequest, opts: ProcessOpts 
     const deadlineMs = opts.deadlineMs ?? COURSE_JOB_DEADLINE_MS;
     const controller = new AbortController();
     // Workers-A2 (D7): a shutdown abort also aborts the per-job controller, so
-    // in-flight AI calls stop at their next checkpoint. The requeue-vs-fail
-    // decision itself lives in ONE place — the pipeline catch (and the deadline
-    // handler below) check shutdownSignal.aborted — so a shutdown never races a
-    // second guarded write against the pipeline's own finish.
+    // in-flight AI calls stop at their next checkpoint. Requeue-vs-fail stays a
+    // single idempotent target state: every path (pipeline catch, deadline
+    // handler, grace timer below) funnels through requeueShutdown, whose
+    // status='running' guard makes any later duplicate write a no-op.
+    //
+    // Audit 2.3: the graceful release must NOT depend on the in-flight stage
+    // observing the abort — the unthreaded stretches (remediation's per-hole
+    // loop, until Block 4) run minutes between checkpoints, and compose/Cloud
+    // Run SIGKILLs 30s after SIGTERM, which would strand the claim `running`
+    // for the full 45m stale window. So on shutdown we also start a short grace
+    // timer; if the pipeline hasn't settled when it expires, requeue the claim
+    // directly and let the race resolve — the zombie pipeline's own eventual
+    // requeue/finish no-ops on the guard.
     const shutdownSignal = opts.shutdownSignal;
-    const onShutdown = () => controller.abort(new Error('worker shutdown'));
+    const graceMs = opts.shutdownGraceMs ?? COURSE_SHUTDOWN_GRACE_MS;
+    let graceTimer: NodeJS.Timeout | undefined;
+    let settleGrace!: (outcome: ProcessOutcome) => void;
+    const shutdownGrace = new Promise<ProcessOutcome>((resolve) => {
+      settleGrace = resolve;
+    });
+    const onShutdown = () => {
+      controller.abort(new Error('worker shutdown'));
+      graceTimer = setTimeout(async () => {
+        logWarn('course-worker.shutdown-grace-expired', {
+          id: cr.id,
+          topic: cr.topic,
+          graceMs,
+        });
+        settleGrace(await requeueShutdown(cr).catch(() => 'requeued' as const));
+      }, graceMs);
+    };
     if (shutdownSignal?.aborted) onShutdown();
     else shutdownSignal?.addEventListener('abort', onShutdown, { once: true });
     let timer: NodeJS.Timeout | undefined;
@@ -126,9 +156,14 @@ export async function processCourseRequest(cr: CourseRequest, opts: ProcessOpts 
 
     let outcome: ProcessOutcome;
     try {
-      outcome = await Promise.race([processRequestPipeline(cr, opts, controller.signal), deadline]);
+      outcome = await Promise.race([
+        processRequestPipeline(cr, opts, controller.signal),
+        deadline,
+        shutdownGrace,
+      ]);
     } finally {
       clearTimeout(timer);
+      clearTimeout(graceTimer);
       shutdownSignal?.removeEventListener('abort', onShutdown);
     }
     // Workers-A2: only TERMINAL outcomes count toward Program assembly — a

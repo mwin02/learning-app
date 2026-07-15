@@ -136,6 +136,31 @@ describeDb('CourseRequest queue', () => {
     await prisma.courseRequest.deleteMany({ where: { id: { in: [old.id, fresh.id] } } });
   });
 
+  it('N CONCURRENT claims take N distinct rows, one attempt each (FOR UPDATE SKIP LOCKED)', async () => {
+    // Audit 2.11(a), pulled forward with Block 3: the sequential double-claim test
+    // above would also pass with a plain non-locking query — only genuinely
+    // concurrent claims pin the SKIP LOCKED property the N>1 rollout rests on.
+    // Drain any foreign queued rows first (quarantined + restored in afterAll) so
+    // the parallel claims can only land on our seeded rows.
+    while ((await claimMine()) !== null) { /* drained our own leftovers too, if any */ }
+
+    const rows = await Promise.all([makeRow('par-a'), makeRow('par-b'), makeRow('par-c')]);
+    const claimed = await Promise.all([
+      claimNextQueued('worker-par-1'),
+      claimNextQueued('worker-par-2'),
+      claimNextQueued('worker-par-3'),
+    ]);
+
+    const ids = claimed.map((c) => c?.id).sort();
+    expect(ids).toEqual(rows.map((r) => r.id).sort()); // 3 claims, 3 DISTINCT rows, none missed
+    for (const c of claimed) {
+      expect(c?.status).toBe(CourseRequestStatus.running);
+      expect(c?.attempts).toBe(1); // each row claimed exactly once — no double-increment
+    }
+
+    await prisma.courseRequest.deleteMany({ where: { id: { in: rows.map((r) => r.id) } } });
+  });
+
   // ——— Workers-A1 retry primitives ———
 
   it('claimNextQueued skips a row with a future nextAttemptAt, claims it once past due', async () => {

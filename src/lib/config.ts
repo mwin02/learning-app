@@ -389,22 +389,35 @@ export const COURSE_WORKER_POLL_MS = 5_000;
 
 // Phase 2.5g-3: a RemediationJob left `running` longer than this is treated as a
 // dead worker's abandoned claim and reclaimed (→ `failed`, freeing the
-// active-per-path unique index so the Path can be re-claimed). Generous: a
-// remediation run is up to MAX_REMEDIATION_PASSES of per-concept web sourcing +
-// re-judge, minutes of work. This is the "process died" threshold, not a per-pass
-// timeout. 15 minutes — a "worker died" claim-recovery threshold like
-// COURSE_REQUEST_STALE_MS, but independent of it (that one is 45m to clear the H4
-// COURSE_JOB_DEADLINE_MS; this one only needs to outlast a remediation run).
-export const REMEDIATION_JOB_STALE_MS = 15 * 60 * 1000;
+// active-per-path unique index so the Path can be re-claimed). This is the
+// "process died" threshold, not a per-pass timeout — and with N>1 workers, age is
+// the ONLY liveness signal, so it MUST stay LONGER than COURSE_JOB_DEADLINE_MS
+// (30m): the job deadline provably aborts a live-but-slow remediation before any
+// sibling worker's reclaim can mark it failed and start a duplicate (audit 2.1 —
+// at the old 15m, a 16-minute live remediation got reclaimed mid-run). And it
+// MUST stay SHORTER than COURSE_REQUEST_STALE_MS (45m): a dead worker's
+// CourseRequest reclaims at 45m, and its retry must find this job's slot already
+// freed or it just bounces `busy` off a corpse. 35 minutes — the cost of the
+// bump is slower crash recovery, not correctness. Ordering pinned in config.test.ts.
+export const REMEDIATION_JOB_STALE_MS = 35 * 60 * 1000;
 
 // Phase 2.5g-2: ensurePathMap reclaim. A `building` Path with zero concepts is a
 // claim that crashed before the lock-free populate phase (which runs ~30–60s after
 // the claim tx commits, writing nothing to Path until it finishes). Only reclaim/
 // rebuild such a Path once it's older than this, so a build that's legitimately
 // still in flight is never stolen. A `failed` Path is reclaimed immediately (its
-// builder is terminal), no age gate. 10 minutes — comfortably past a worst-case
-// cold-topic spine build (author + review repairs + candidate attach).
-export const PATH_BUILD_STALE_MS = 10 * 60 * 1000;
+// builder is terminal), no age gate. Same N>1 ordering constraint as
+// REMEDIATION_JOB_STALE_MS above (audit 2.1): MUST exceed COURSE_JOB_DEADLINE_MS
+// (30m) so the deadline fails a live-but-slow spine build before a sibling's claim
+// resets the Path under it (at the old 10m, a >10m live build got concurrently
+// rebuilt; the loser's @@unique([pathId, slug]) violation then flipped the
+// SUCCESSFUL build to `failed` — a rebuild loop), and MUST stay under
+// COURSE_REQUEST_STALE_MS (45m) so the dead builder's own retried request finds
+// the Path reclaimable. 35 minutes. Side effect worth knowing: same-topic requests
+// bouncing off a dead builder's Path (3m contention backoff per bounce) now wait
+// up to ~35m ≈ 11–12 of the 12 capped attempts — marginal by design; the real fix
+// is the attempts-regime split (audit 2.5, deferred). Ordering pinned in config.test.ts.
+export const PATH_BUILD_STALE_MS = 35 * 60 * 1000;
 
 // H4 (audit 1.3): overall per-job deadline for one worker pipeline run. The
 // single-concurrency loop AWAITS the pipeline, so one hung upstream call (LLM,
@@ -419,6 +432,20 @@ export const PATH_BUILD_STALE_MS = 10 * 60 * 1000;
 // H3's buildUsage/duration data says what real builds cost. MUST stay SHORTER
 // than COURSE_REQUEST_STALE_MS (below).
 export const COURSE_JOB_DEADLINE_MS = 30 * 60 * 1000;
+
+// Audit 2.3: how long a shutdown (SIGTERM/SIGINT) waits for the in-flight
+// pipeline to observe its abort before the worker requeues the claim ITSELF.
+// The D7 graceful release used to depend on the running stage noticing the
+// abort and throwing into the requeue catch — but the unthreaded stretches
+// (remediation's per-hole loop, until audit Block 4 threads them) can run
+// minutes between checkpoints, and compose/Cloud Run SIGKILLs at
+// stop_grace_period = 30s, stranding the claim `running` for the full
+// COURSE_REQUEST_STALE_MS. So processCourseRequest races the pipeline against
+// abort + this grace; on expiry it calls requeueShutdown directly (the
+// pipeline's own later write no-ops on the status='running' guard). 10s —
+// generous for a cooperative stage to unwind, comfortably inside the 30s
+// SIGKILL budget with margin for the process to exit.
+export const COURSE_SHUTDOWN_GRACE_MS = 10 * 1000;
 
 // Phase 2.5g-1: a CourseRequest left `running` longer than this is treated as a
 // dead worker's abandoned claim and reclaimed (→ `queued`) by the g-3 worker on

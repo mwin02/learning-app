@@ -232,6 +232,30 @@ describeDb('course-worker pipeline branches', () => {
     expect(row.error).toBeNull();
   });
 
+  it('shutdown during a NON-observing stage → the grace race releases without waiting for the deadline (audit 2.3)', async () => {
+    const cr = await seedRunning('shutdown-grace');
+    const shutdown = new AbortController();
+    const before = Date.now();
+    const outcome = await processCourseRequest(cr, {
+      // A stage that never observes any signal — the 2.3 gap: with the deadline
+      // far away (the real one is 30 MINUTES), only the proactive grace requeue
+      // can release the claim before the orchestrator's SIGKILL.
+      ensureMap: () => {
+        shutdown.abort(new Error('SIGTERM shutdown'));
+        return new Promise(() => {});
+      },
+      shutdownSignal: shutdown.signal,
+      deadlineMs: 60_000, // deliberately long — the grace must win, not the deadline
+      shutdownGraceMs: 100,
+    });
+    expect(outcome).toBe('requeued');
+    expect(Date.now() - before).toBeLessThan(10_000); // released via grace, not the 60s deadline
+    const row = await prisma.courseRequest.findUniqueOrThrow({ where: { id: cr.id } });
+    expect(row.status).toBe(CourseRequestStatus.queued); // released, not failed
+    expect(row.error).toBeNull();
+    expect(row.nextAttemptAt!.getTime()).toBeLessThanOrEqual(Date.now()); // delayMs 0, immediately claimable
+  });
+
   it('a deadline abort (no shutdown) still fails — the two aborts stay distinguishable', async () => {
     const cr = await seedRunning('deadline-vs-shutdown');
     const shutdown = new AbortController(); // present but never aborted
