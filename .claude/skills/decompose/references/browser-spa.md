@@ -82,10 +82,16 @@ const payload = JSON.parse(window.name);
 window.__r = null;
 fetch('/api/playground/decomposition-review', {
   method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload)
-}).then(async r => { window.__r = { status: r.status, body: (await r.text()).slice(0, 500) }; })
+}).then(async r => { window.__r = { status: r.status, body: (await r.text()).slice(0, 2000) }; })
   .catch(e => { window.__r = { err: e.message }; });
-// later evals: window.__r  → { status: 200, body: '{"status":"decomposed","childrenCreated":N}' }
+// later evals: window.__r  → { status: 200, body: '{"status":"decomposed","childrenCreated":N,"rejudge":{...}}' }
 ```
+
+The body also carries a **`rejudge`** field — the post-decomposition attach hook's
+result (`{ pairs, candidates, attachments: [...] }`); see Stage 3 in SKILL.md. Read
+it here for the Path attachments; **don't slice it off** (hence the 2000-char cap).
+If `window.__r` comes back null (the promise didn't survive a navigation),
+reconstruct the attachments from the DB.
 
 Do **not** re-fire while a request is in flight; poll. Verify from the DB too
 (`decomp-db.cjs verify <id>`). If it stays queued with `childCount: 0` and the dev

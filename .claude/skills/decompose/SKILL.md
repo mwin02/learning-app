@@ -102,10 +102,37 @@ queued with `childCount: 0`, the POST never landed (browser route: PNA block —
 the browser-spa reference) or 500'd (check the dev-server log), diagnose before
 moving on.
 
-Note: decomposition only creates library rows — it does **not** attach children to
-any existing Path (attachment happens at map build / remediation / `map-edit
-attach_resource`). Mention in the report when new children look highly relevant to
-an existing path so the operator can follow up.
+### Post-decomposition attach hook (rejudge-sourced-for)
+
+The review API runs a **`rejudgeForDemandingPaths` hook inline after every success
+shape** (`decompose`, `decompose_manual`, and `accept_atomic`) — see
+`src/lib/agents/decomposition/rejudge-sourced-for.ts`. It offers the now-pickable
+rows (a decomposition's atomic children, or the accepted row itself) back to the
+concepts of any Path that **demanded** the container, and the judge attaches the
+keepers as `ConceptResource` links (`role` ∈ `teaches` / `uses`). So decomposition
+**can and often does auto-attach children to existing Paths** — the old "only
+creates library rows" claim is wrong.
+
+- **Trigger & scope:** only fires when the container has `ResourceSourcedFor`
+  provenance (a path's demand sourced it). No provenance → clean no-op, 0
+  attachments. It is strictly demand-scoped: only paths that demanded the
+  container, never the whole library. Children route by pgvector distance to each
+  demanding path's **full** concept list (not just the sourcing concept), so a
+  child can attach to several concepts across a path.
+- **Best-effort:** the decomposition is already committed; a hook failure is
+  reported, not fatal. The API response carries the outcome in a **`rejudge`**
+  field: `{ pairs, candidates, attachments: [{ pathId, conceptSlug, routed,
+  attached }] }`. `attached: 0` with `routed > 0` means the judge saw candidates
+  but rejected them — normal, not a failure.
+- **Capture it:** the browser-spa route's `window.__r` is the response body — read
+  it after the POST resolves to see `rejudge`. If it comes back null (lost across
+  navigation), reconstruct from the DB: `ConceptResource` rows whose `resourceId`
+  is one of the parent's children, with `createdAt` matching the run. Report the
+  attachments (path topic + concept titles) alongside the decompose result.
+- **Watch for:** a mis-tagged or duplicate container (wrong `topic`, or a
+  near-duplicate of an already-decomposed course) will propagate that mistake into
+  a **live path attachment**, not just a stray library row — flag those for the
+  operator with extra weight now that attach is automatic.
 
 Output **only** a final table — no per-resource narration:
 
@@ -114,4 +141,6 @@ Output **only** a final table — no per-resource narration:
 
 `Triage` ∈ Accept atomic · Reject · Decompose · Skip. `Result` is the verified
 outcome (`decomposed 23/23 embedded`, `unsupported`, `atomic`, or the failure).
-After the table: a one-line tally and any borderline calls worth a second look.
+After the table: a one-line tally, **any Path attachments the rejudge hook made**
+(from the `rejudge` field / DB — path topic + concept, and the total), and any
+borderline calls worth a second look.
