@@ -37,10 +37,10 @@ function InertSlot({ track }: { track: ProgramTrackView }) {
           {track.title ?? titleCase(track.topic)}
         </span>
         <div className="mt-0.5 font-script text-xs text-script-dim">
+          {/* Audit 6.2: never render requestError (raw worker exception) —
+              the diagnostic stays operator-only on /playground/failed-builds. */}
           {state === 'failed'
-            ? track.requestError
-              ? `couldn’t build — ${track.requestError}`
-              : 'this course couldn’t be built'
+            ? 'this course couldn’t be built'
             : 'still being written — check back shortly'}
         </div>
       </div>

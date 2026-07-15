@@ -14,7 +14,7 @@ The product loop is complete end-to-end: a stranger lands on the notebook home p
 
 **1. Hardening pass (audit blocks, in this order):**
 
-- [ ] **Block 1 — read-layer authz + leak one-liners** (~30 LOC) — the only content-exposure hole; an afternoon.
+- [x] **Block 1 — read-layer authz + leak one-liners** (~30 LOC, PR [#240](https://github.com/mwin02/learning-app/pull/240)) — the only content-exposure hole; an afternoon.
 - [ ] **Block 3 — reclaim safety at N>1 workers** — a *today* bug: the multi-replica compose workers are already running, and the 15m/10m reclaims fire on live jobs under the 30m deadline (duplicate builds, double spend, good Paths flipped to `failed`). Core fix is config-only.
 - [ ] **Block 2 — cost-bleeder stamps** — the scariest bill scenario: one pathological topic on the public creation route re-runs the Pro sourcing ladder on every request, forever. Escalation cool-down → fast-fail.
 - [ ] **Block 4 — abort threading** — makes Block 3's shutdown race terminate quickly and stops zombie pipelines burning tokens past the deadline.
@@ -176,7 +176,7 @@ Non-security audit findings to address before real traffic. Full audit: [docs/cu
 
 All seven audit sections are done: [docs/audits/codebase-audit-2026-07.md](audits/codebase-audit-2026-07.md) (summary table at the top; the doc is the source of truth for finding detail). Its **[Prioritized action plan](audits/codebase-audit-2026-07.md#prioritized-action-plan)** groups the top findings into ten branch-sized fix blocks (<300 LOC each, ordered by severity × effort — cheapest high-impact first). Work them as normal feature blocks:
 
-- [ ] **Block 1 — Read-layer authz + leak one-liners** (6.1, 6.2, 1.6; ~30 LOC) — `getAuthorizedTrackView` on the /learn lesson page + `generateMetadata`; blank `requestError` in `sanitizeProgramView`; fixed string for the rejudge hook's error echo. The only content-exposure hole in the app.
+- [x] **Block 1 — Read-layer authz + leak one-liners** (6.1, 6.2, 1.6; ~30 LOC — PR [#240](https://github.com/mwin02/learning-app/pull/240)) — `getAuthorizedTrackView` on the /learn lesson page + `generateMetadata`; blank `requestError` in `sanitizeProgramView`; fixed string for the rejudge hook's error echo. The only content-exposure hole in the app.
 - [ ] **Block 2 — Cost-bleeder stamps** (3.1 High, 3.3; ~120 LOC) — persist Path escalation with a cool-down (stop re-running the full remediation sourcing ladder on every request for an uncoverable topic); `bankAttemptedAt` stamp so empty/failed concept banks stop re-paying a Pro call per request.
 - [ ] **Block 3 — Reclaim safety at N>1 workers** (2.1 High, 2.3, 2.9; ~80 LOC) — raise `REMEDIATION_JOB_STALE_MS` / `PATH_BUILD_STALE_MS` above the 30m job deadline; proactive `requeueShutdown` after a short grace race on SIGTERM; hoist signal wiring into `--once`. Fixes the sole High-severity correctness bug (duplicate concurrent builds).
 - [ ] **Block 4 — Abort threading** (2.2 + fetch-timeout inventory; ~60 LOC) — `abortSignal` into `sourceAndAttachConcept`/`splitConcept` + per-hole `throwIfAborted`; timeouts on the two googleapis fetch sites. Stops zombie pipelines burning tokens past deadline/shutdown.

@@ -54,3 +54,6 @@ next-env.d.ts
 
 # Local DB content snapshots (2.5h reset script)
 backups/
+
+# local audit working docs (deliberately untracked)
+/docs/audits/

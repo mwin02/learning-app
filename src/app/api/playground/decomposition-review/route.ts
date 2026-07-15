@@ -115,7 +115,9 @@ export const POST = withAdminAuth(async (req) => {
       return await rejudgeForDemandingPaths(resource.id);
     } catch (err) {
       console.error('[decomposition-review] rejudge hook failed', { resourceId: resource.id, err });
-      return { error: err instanceof Error ? err.message : String(err) };
+      // Audit 1.6: never echo the raw exception (route convention) — the full
+      // error is in the server log above.
+      return { error: 'rejudge failed' };
     }
   };
 

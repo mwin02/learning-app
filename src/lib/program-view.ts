@@ -68,6 +68,12 @@ export function sanitizeProgramView(view: ProgramView): ProgramView {
     background: null,
     antiList: [],
     error: null,
+    // Audit 6.2: per-slot requestError is the same class of raw worker
+    // diagnostic as `error` (Prisma/Vertex internals) — blank it too.
+    phases: view.phases.map((phase) => ({
+      ...phase,
+      tracks: phase.tracks.map((track) => ({ ...track, requestError: null })),
+    })),
   };
 }
 
