@@ -32,29 +32,15 @@ const workerId = `${process.env.CLOUD_RUN_INSTANCE_ID ?? os.hostname()}:${proces
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function runOnce() {
+async function runOnce(shutdownSignal: AbortSignal) {
   console.log(`[course-worker ${workerId}] --once: reclaim + claim + process one`);
-  const did = await tickOnce({ workerId });
+  const did = await tickOnce({ workerId, shutdownSignal });
   console.log(did ? `[course-worker ${workerId}] processed one request` : `[course-worker ${workerId}] queue empty, nothing to do`);
 }
 
-async function runWatch() {
-  let running = true;
-  // D7: one long-lived shutdown controller. Its abort propagates into the
-  // in-flight job (processCourseRequest aborts the per-job pipeline controller,
-  // AI calls stop at their next checkpoint, the claim is requeued) — so a signal
-  // exits within seconds, not after the current 30m-deadline job.
-  const shutdown = new AbortController();
-  const stop = (sig: string) => {
-    console.log(`[course-worker ${workerId}] ${sig} received — releasing in-flight claim, then exiting`);
-    running = false;
-    shutdown.abort(new Error(`${sig} shutdown`));
-  };
-  process.on('SIGINT', () => stop('SIGINT'));
-  process.on('SIGTERM', () => stop('SIGTERM'));
-
+async function runWatch(shutdownSignal: AbortSignal) {
   console.log(`[course-worker ${workerId}] --watch: polling every ${COURSE_WORKER_POLL_MS}ms (Ctrl-C to stop)`);
-  while (running) {
+  while (!shutdownSignal.aborted) {
     // Reclaim once per cycle, then drain the queue fully before sleeping.
     const reclaimed = await reclaimStaleClaims();
     if (reclaimed.courseRequests || reclaimed.remediationJobs) {
@@ -78,22 +64,40 @@ async function runWatch() {
         console.warn(`[course-worker ${workerId}] queue-depth gauge failed`, err),
       );
     let cr;
-    while (running && (cr = await claimNextQueued(workerId))) {
+    while (!shutdownSignal.aborted && (cr = await claimNextQueued(workerId))) {
       // A 'requeued' outcome (contention) keeps draining: the bounced row is
       // ineligible for COURSE_CONTENTION_REQUEUE_MS, so the claim loop moves on
       // to other work rather than self-spinning on it (asserted in the A1 queue
       // tests: a future nextAttemptAt row is unclaimable).
-      await processCourseRequest(cr, { shutdownSignal: shutdown.signal });
+      await processCourseRequest(cr, { shutdownSignal });
     }
-    if (running) await sleep(COURSE_WORKER_POLL_MS);
+    if (!shutdownSignal.aborted) await sleep(COURSE_WORKER_POLL_MS);
   }
   console.log(`[course-worker ${workerId}] stopped.`);
 }
 
 async function main() {
+  // D7: one long-lived shutdown controller. Its abort propagates into the
+  // in-flight job (processCourseRequest aborts the per-job pipeline controller,
+  // AI calls stop at their next checkpoint, the claim is requeued — proactively
+  // after COURSE_SHUTDOWN_GRACE_MS if the stage never observes the abort) — so a
+  // signal exits within seconds, not after the current 30m-deadline job.
+  // Audit 2.9: wired here in main, NOT inside runWatch, so --once gets the same
+  // graceful release — it's the documented external-scheduler mode, and
+  // schedulers kill overruns with SIGTERM; without a handler the default
+  // disposition killed the process mid-pipeline and stranded the claimed row
+  // `running` for the full 45m stale window.
+  const shutdown = new AbortController();
+  const stop = (sig: string) => {
+    console.log(`[course-worker ${workerId}] ${sig} received — releasing in-flight claim, then exiting`);
+    shutdown.abort(new Error(`${sig} shutdown`));
+  };
+  process.on('SIGINT', () => stop('SIGINT'));
+  process.on('SIGTERM', () => stop('SIGTERM'));
+
   const once = process.argv.slice(2).includes('--once');
-  if (once) await runOnce();
-  else await runWatch();
+  if (once) await runOnce(shutdown.signal);
+  else await runWatch(shutdown.signal);
   await prisma.$disconnect();
 }
 
