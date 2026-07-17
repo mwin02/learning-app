@@ -8,18 +8,48 @@ Mirrors the build order of the original spec (`learning-path-mvp-spec.md`, §9);
 
 The product loop is complete end-to-end: a stranger lands on the notebook home page, signs in with Google, chats (or fills the scratchpad) to describe a goal, the plan pass + worker fleet builds a multi-topic Program from 100%-curated sources, and they learn in the notebook UI with exercises and persisted progress — all metered by the free-tier quota.
 
-### ⭐ NEXT UP — Pre-Stripe hardening pass, then Stripe
+### ⭐ NEXT UP — Free public beta (ratings → GCP migration → observability → warm paths)
 
-**Decided 2026-07-14** off the [July codebase audit](audits/codebase-audit-2026-07.md#prioritized-action-plan): a short hardening pass on the audit blocks that are either live bugs today or share a blast radius with Stripe, then Stripe itself. Block details in the [Phase 3.1 checklist](#codebase-audit--july-2026--complete--fix-blocks-queued).
+**Decided 2026-07-18**, displacing Stripe: launch as a **free beta** first. Full block-by-block plan (locked decisions, codebase facts, open questions — written so each block is workable from a fresh conversation): **[docs/free-beta-plan.md](free-beta-plan.md)**.
 
-**1. Hardening pass (audit blocks, in this order):**
+**1. Feature A — resource ratings** (stacked chain; live before beta users arrive):
+
+- [ ] **A1 — schema + vote signal + trust recompute** (~120 LOC) — `ResourceRating` (resource-global ±1 per user), pure `voteSignal()` as one more `EvidenceSignal` into `computeTrustScore`, vote-time trust recompute.
+- [ ] **A2 — vote API + learn-UI thumbs** (~150 LOC).
+- [ ] **A3 — trust into track builds** (~80 LOC) — persisted candidates re-ranked with the attach-time coverage+trust blend in `loadComposerMap`/composers (today trust affects fresh judging only). Invariant: coverage gates, trust orders.
+- [ ] **A4 — automatic low-trust eviction** (~100 LOC) — threshold (low trust + min votes) → soft-reject via `applyPendingReview` (link removal/bank staleness/readiness for free); operator restore designed-for, built later.
+
+**2. Feature D — GCP migration** (compute to Cloud Run; **Supabase stays** for DB+auth; custom domain incoming):
+
+- [ ] **D1 — app Dockerfile** (~60 LOC) off the existing `output: 'standalone'`; `docs/app-deploy.md` drafted.
+- [ ] **D2 — Supabase schema deploy + library data migration** — `migrate deploy` (verify the two hand-written indexes), `scripts/migrate-library.ts` copying `Source`/`TopicAlias`/`Resource` local → Supabase (upserts, no embeddings — re-embed backfill after). Maps/Tracks/Programs deliberately not migrated (C rebuilds them).
+- [ ] **D3 — Cloud Run app service live** (ops) — Secret Manager env, domain mapping + Supabase OAuth cutover, Vercel decommissioned.
+- [ ] **D4 — Cloud Run worker pools live** (ops) — per [docs/worker-deploy.md](worker-deploy.md), against the Supabase queue.
+
+**3. Feature B — GCP-native error reporting** (post-D3):
+
+- [ ] **B1** (~80 LOC + console ops) — Cloud Logging `severity` mapping in `log.ts`, `/api/client-error` + global error boundary, Error Reporting alert policy. (Sentry rejected — moot once off Vercel.)
+
+**4. Feature C — warm-path campaign** (post-D4; the cloud workers' shakedown):
+
+- [ ] **C1 — `reset-maps` + `warm-paths` scripts** (~120 LOC) — wipe the inconsistent map/track layer (library/users kept), rebuild driver; `TOPIC_RELATIONS` additions.
+- [ ] **C2 — the campaign** (ops) — rebuild 12 warm topics (existing 8 minus `go`, plus `sql`, `data-structures-algorithms`, `precalculus`, `physics-mechanics`), `/decompose` + `/review-pending-resources` passes, re-remediate to `spine_ready`.
+
+**Beta exit criteria:** a stranger on the custom domain signs in, generates a program built by cloud workers from the warm library, learns and rates resources; errors reach Error Reporting; zero Vercel dependency.
+
+**Deferred behind the beta:** Stripe + audit Block 5 (Block 5 still lands first when Stripe restarts — see below); audit blocks 6–10; the rest of Phase 3.1 → 2.5k–l → Phases 4–6.
+
+<details>
+<summary>Completed pre-beta hardening pass (2026-07-14 → 2026-07-17)</summary>
 
 - [x] **Block 1 — read-layer authz + leak one-liners** (~30 LOC, PR [#240](https://github.com/mwin02/learning-app/pull/240)) — the only content-exposure hole; an afternoon.
 - [x] **Block 3 — reclaim safety at N>1 workers** (~80 LOC, PR [#241](https://github.com/mwin02/learning-app/pull/241)) — was a *today* bug: the multi-replica compose workers were running with the 15m/10m reclaims firing on live jobs under the 30m deadline (duplicate builds, double spend, good Paths flipped to `failed`). Core fix config-only; plus the SIGTERM grace race and `--once` signal wiring.
 - [x] **Block 2 — cost-bleeder stamps** (~120 LOC, PR [#242](https://github.com/mwin02/learning-app/pull/242)) — was the scariest bill scenario: one pathological topic on the public creation route re-ran the Pro sourcing ladder on every request, forever. Escalation cool-down (via the latest terminal RemediationJob) → fast-fail in <1s with zero model calls; `bankAttemptedAt` cool-down on empty/failed concept banks.
 - [x] **Block 4 — abort threading** (~190 LOC, PR [#243](https://github.com/mwin02/learning-app/pull/243)) — makes Block 3's shutdown race terminate quickly and stops zombie pipelines burning tokens past the deadline: per-hole `throwIfAborted` + signal threading down remediation's sourcing/split/judge calls, 10s timeouts on the four googleapis fetch sites, and a `zombie-finished` log so accumulation is observable.
 
-**2. Stripe (rest of Phase 3), with Block 5 landed first:**
+</details>
+
+**Stripe (rest of Phase 3), post-beta, with Block 5 landed first:**
 
 - [ ] **Block 5 — atomic metering** — rewrites the quota/burst/dedup checks in `program-limits.ts`, the exact file the paid gate flips inside. Land the advisory-lock helper first so tiering inherits atomicity instead of being built on the count-then-insert races.
 - [ ] `app/pricing/page.tsx` — single tier, placeholder price
@@ -28,8 +58,6 @@ The product loop is complete end-to-end: a stranger lands on the notebook home p
 - [ ] Stripe **test mode** in dev
 
 **Phase 3 exit criteria:** unauthenticated → Google sign-in → create a program (202 + programId; worker builds; visible in the notebook UI) → pricing → checkout (test card) → webhook unlocks paid features.
-
-**Consciously trailing behind Stripe:** audit blocks 6–8 (slot between Stripe test-mode and live-mode); Block 9 test pinning (pull the RemediationJob/parallel-claims tests forward with Blocks 3/5, let the rest trail); Block 10 dead-code sweep last. **Then:** the rest of Phase 3.1 (topic-registry hygiene, SSRF block, select/critic robustness) → 2.5k–l (content agent: notebooks + playground map — deferred, not dropped) → Phases 4–6.
 
 ## Locked decisions
 
@@ -164,9 +192,9 @@ A `Program` is a goal-driven plan composed of multiple single-topic Tracks. Chea
 
 - [x] Queue retry primitives + contention requeue + graceful shutdown; containerized worker (`Dockerfile.worker`); local multi-replica compose (`docker compose --profile workers up`); queue-depth gauge + alert/scaling docs. Cloud Run worker-pool promotion is scripted in [docs/worker-deploy.md](worker-deploy.md) — trigger: real users waiting on builds (always-on billing starts then).
 
-### Remaining — Stripe ⭐ NEXT UP
+### Remaining — Stripe (deferred behind the free beta)
 
-See the checklist at the top of this file.
+See the checklist at the top of this file — Stripe restarts post-beta, Block 5 first.
 
 ## Phase 3.1 — Launch readiness (curriculum-agent audit)
 
@@ -250,12 +278,12 @@ All seven audit sections are done: [docs/audits/codebase-audit-2026-07.md](audit
 
 ## Out of scope (post-launch)
 
-Native mobile, certificates, spaced repetition, multi-seat, VARK personalization. Cloud Run migration is post-launch (credit usage + 2nd-GCP-product story).
+Native mobile, certificates, spaced repetition, multi-seat, VARK personalization. ~~Cloud Run migration is post-launch~~ — pulled forward into the free-beta plan (Feature D, 2026-07-18).
 
 ## Open items to revisit
 
 - Final monthly price (placeholder until Stripe lands)
 - Whether to add Resend (email) for transactional emails — defer unless Stripe needs it; the "course ready" email also waits on this
-- Whether to migrate hosting to Cloud Run before or after launch (currently: after)
+- ~~Whether to migrate hosting to Cloud Run before or after launch~~ — decided 2026-07-18: before (free-beta plan, Feature D)
 - **Composer-agent cutover** — flip `TRACK_COMPOSER_MODE` default to `'agent'` and delete `'single'` once the parity/observability gate proves out (2.5e-8). Audit 3.6: the mode is a compile-time const, so the parity A/B can't actually run in a deployment — make it env-overridable first, and fix the agent's two tool errors that reference nonexistent tools.
-- **When to move course workers to the cloud** — containerized + compose-ready today; promotion to Cloud Run worker pools is scripted in [docs/worker-deploy.md](worker-deploy.md). Trigger: real users waiting on builds.
+- **When to move course workers to the cloud** — ~~trigger: real users waiting on builds~~ — decided 2026-07-18: scheduled as free-beta block D4 ([docs/free-beta-plan.md](free-beta-plan.md)), runbook in [docs/worker-deploy.md](worker-deploy.md).
