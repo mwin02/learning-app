@@ -90,6 +90,7 @@ const buildResult = (trackId: string): BuildTrackResult => ({
 
 const bankResult = (): BackfillConceptBanksResult => ({
   candidates: 0,
+  cooling: 0,
   generated: 0,
   empty: 0,
   failed: 0,

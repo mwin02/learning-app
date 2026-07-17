@@ -11,13 +11,24 @@
 // the discovery API (2.5h-5) surfaces them for operator authoring.
 //
 // Idempotent + backfillable: only concepts with ZERO questions are (re)generated,
-// so re-running is safe and picks up concepts added since the last pass. The
-// per-concept entry point doubles as the "regenerate this concept" hook.
+// so re-running is safe and picks up concepts added since the last pass. Audit 3.3
+// closes the empty/failed re-entry: those stamp Concept.bankAttemptedAt, and the
+// backfill skips stamps younger than CONCEPT_BANK_ATTEMPT_COOLDOWN_MS. The
+// per-concept entry point doubles as the "regenerate this concept" hook (and
+// ignores the stamp on purpose).
 
 import { prisma } from '@/lib/db';
 import { authorConceptBank } from '@/lib/agents/content/author-concept-bank';
-import { CONCEPT_BANK_GEN_CONCURRENCY } from '@/lib/config';
+import { CONCEPT_BANK_ATTEMPT_COOLDOWN_MS, CONCEPT_BANK_GEN_CONCURRENCY } from '@/lib/config';
 import type { OnTrace } from '@/lib/agents/agent-trace';
+
+// Audit 3.3: is this bankless concept inside the retry cool-down of a failed/empty
+// generation attempt? Backfill skips it (the concept stays on the operator
+// worklist); the per-concept entry point deliberately does NOT consult this — a
+// direct "regenerate this concept" call is an explicit operator decision.
+export function isBankAttemptCooling(bankAttemptedAt: Date | null, now: Date = new Date()): boolean {
+  return bankAttemptedAt !== null && now.getTime() - bankAttemptedAt.getTime() < CONCEPT_BANK_ATTEMPT_COOLDOWN_MS;
+}
 
 export type GenerateConceptBankResult = {
   conceptId: string;
@@ -67,17 +78,30 @@ export async function generateConceptBank(args: {
     return { conceptId, outcome: 'skipped', generated: 0 };
   }
 
-  const questions = await authorConceptBank({
-    topic: concept.path.topic,
-    conceptTitle: concept.title,
-    conceptSlug: concept.slug,
-    isOnRamp: concept.isOnRamp,
-    resources: concept.resources.map((r) => ({ title: r.resource.title, type: r.resource.type })),
-    onTrace,
-    abortSignal,
-  });
+  // Audit 3.3: an attempt that yields nothing persistable — the author threw, or
+  // returned nothing usable — stamps bankAttemptedAt so backfill stops re-paying
+  // the Pro call every request while the concept stays pathological. Best-effort:
+  // a failed stamp must not mask the author error (or fail an `empty` return).
+  let questions;
+  try {
+    questions = await authorConceptBank({
+      topic: concept.path.topic,
+      conceptTitle: concept.title,
+      conceptSlug: concept.slug,
+      isOnRamp: concept.isOnRamp,
+      resources: concept.resources.map((r) => ({ title: r.resource.title, type: r.resource.type })),
+      onTrace,
+      abortSignal,
+    });
+  } catch (err) {
+    // A deadline/shutdown abort says nothing about the concept — don't burn its
+    // retry window on a worker that was told to stop.
+    if (!abortSignal?.aborted) await stampBankAttempt(conceptId);
+    throw err;
+  }
 
   if (questions.length === 0) {
+    await stampBankAttempt(conceptId);
     return { conceptId, outcome: 'empty', generated: 0 };
   }
 
@@ -111,8 +135,23 @@ export async function generateConceptBank(args: {
   return { conceptId, outcome: 'generated', generated: added };
 }
 
+// Best-effort attempt stamp (audit 3.3): failing to record the attempt must never
+// replace or fail the outcome being reported — worst case is the pre-fix behavior
+// (the concept gets retried next request).
+async function stampBankAttempt(conceptId: string): Promise<void> {
+  try {
+    await prisma.concept.update({ where: { id: conceptId }, data: { bankAttemptedAt: new Date() } });
+  } catch (err) {
+    console.warn('[concept-bank] failed to stamp bankAttemptedAt (non-fatal)', {
+      conceptId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 export type BackfillConceptBanksResult = {
   candidates: number; // concepts that lacked a bank (eligible for generation)
+  cooling: number; // bankless concepts skipped: a failed/empty attempt is inside its cool-down (audit 3.3)
   generated: number; // concepts we authored + persisted a bank for
   empty: number; // concepts the author returned nothing usable for
   failed: number; // concepts whose generation threw
@@ -132,20 +171,27 @@ export async function backfillConceptBanks(args: {
 
   // Only concepts with no questions — the idempotent + backfill filter. On-ramp
   // concepts are excluded by design (no bank for the broad orientation concept;
-  // generateConceptBank guards this too, so a direct call is also safe).
-  const concepts = await prisma.concept.findMany({
+  // generateConceptBank guards this too, so a direct call is also safe). Audit 3.3:
+  // of those, skip concepts whose last failed/empty attempt is still cooling —
+  // they'd re-pay the Pro call just to fail the same way. They stay bankless (and
+  // on the operator worklist); once the stamp ages out, backfill retries them.
+  const bankless = await prisma.concept.findMany({
     where: { pathId, isOnRamp: false, questions: { none: {} } },
-    select: { id: true, slug: true },
+    select: { id: true, slug: true, bankAttemptedAt: true },
   });
+  const now = new Date();
+  const concepts = bankless.filter((c) => !isBankAttemptCooling(c.bankAttemptedAt, now));
+  const cooling = bankless.length - concepts.length;
 
   onTrace({
     kind: 'stage',
     label: 'concept bank backfill started',
-    detail: { pathId, candidates: concepts.length, concurrency: CONCEPT_BANK_GEN_CONCURRENCY },
+    detail: { pathId, candidates: concepts.length, cooling, concurrency: CONCEPT_BANK_GEN_CONCURRENCY },
   });
 
   const result: BackfillConceptBanksResult = {
     candidates: concepts.length,
+    cooling,
     generated: 0,
     empty: 0,
     failed: 0,
