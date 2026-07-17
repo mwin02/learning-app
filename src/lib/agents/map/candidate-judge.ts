@@ -59,8 +59,12 @@ export async function judgeCandidates(args: {
   // stricter rubric so a deep-dive on a downstream subtopic can't score as
   // `teaches` (the magnet behavior). See ON_RAMP_RUBRIC.
   isOnRamp?: boolean;
+  // Audit 2.2: the worker's per-job abort — forwarded by remediation's judge/attach
+  // tail so a zombie run aborts mid-call. The cold-build path (attach-candidates)
+  // deliberately stays on per-chunk checkpoints and passes nothing.
+  abortSignal?: AbortSignal;
 }): Promise<JudgedCandidate[]> {
-  const { conceptTitle, conceptSlug, candidates, isOnRamp = false } = args;
+  const { conceptTitle, conceptSlug, candidates, isOnRamp = false, abortSignal } = args;
   if (candidates.length === 0) return [];
 
   // Stable handle ↔ resource map for this call only.
@@ -75,6 +79,7 @@ export async function judgeCandidates(args: {
     output: Output.object({ schema: VerdictSchema }),
     system: isOnRamp ? `${SYSTEM_PROMPT}\n\n${ON_RAMP_RUBRIC}` : SYSTEM_PROMPT,
     prompt: buildPrompt(conceptTitle, byHandle),
+    abortSignal,
   });
 
   // TODO(observability): fold into the structured logger when it lands.

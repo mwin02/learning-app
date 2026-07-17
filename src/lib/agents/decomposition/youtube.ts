@@ -20,7 +20,17 @@
 
 import { deriveChildConcepts } from './concepts';
 import type { ChildInput } from './decompose';
-import { DECOMPOSITION_MAX_AUTO_CHILDREN } from '@/lib/config';
+import { DECOMPOSITION_MAX_AUTO_CHILDREN, GOOGLEAPIS_FETCH_TIMEOUT_MS } from '@/lib/config';
+
+// Audit block 4 (section-5 rows 5–6): every googleapis.com fetch gets a timeout —
+// a hung connection here previously stalled remediation/decompose with nothing to
+// abort it. Callers on the worker's signal-threaded path (youtube-search.ts) pass
+// their per-job abort so whichever fires first wins; the decompose path has no
+// threaded signal and gets the plain timeout.
+export function googleapisFetchSignal(abortSignal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(GOOGLEAPIS_FETCH_TIMEOUT_MS);
+  return abortSignal ? AbortSignal.any([abortSignal, timeout]) : timeout;
+}
 
 const API_BASE = 'https://www.googleapis.com/youtube/v3';
 const UNAVAILABLE_TITLES = new Set(['Private video', 'Deleted video']);
@@ -133,7 +143,7 @@ async function fetchPlaylistItems(
     url.searchParams.set('key', key);
     if (pageToken) url.searchParams.set('pageToken', pageToken);
 
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: googleapisFetchSignal() });
     if (res.status === 404) throw new PlaylistNotFound(playlistId);
     if (!res.ok) throw new Error(`HTTP ${res.status} ${await safeBody(res)}`);
     const json = (await res.json()) as YtPlaylistItemsResponse;
@@ -176,7 +186,7 @@ async function fetchDurations(videoIds: string[], key: string): Promise<Map<stri
     url.searchParams.set('id', batch.join(','));
     url.searchParams.set('key', key);
 
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: googleapisFetchSignal() });
     if (!res.ok) throw new Error(`HTTP ${res.status} ${await safeBody(res)}`);
     const json = (await res.json()) as YtVideosResponse;
     for (const v of json.items ?? []) {

@@ -53,8 +53,11 @@ type Lesson = z.infer<typeof LessonSchema>;
 export async function generateOnRampResource(args: {
   topic: string;
   concept: { slug: string; title: string };
+  // Audit 2.2: the worker's per-job abort, forwarded into both model passes. An
+  // abort THROWS (rather than degrading to null) so the caller's pipeline stops.
+  abortSignal?: AbortSignal;
 }): Promise<SearchResult | null> {
-  const { topic, concept } = args;
+  const { topic, concept, abortSignal } = args;
   const url = `generated://${topic}/${concept.slug}`;
 
   const existing = await prisma.resource.findUnique({ where: { url }, select: RESOURCE_SELECT });
@@ -69,16 +72,20 @@ export async function generateOnRampResource(args: {
   // after a second failure do we degrade to null and let the caller source instead.
   let lesson: Lesson;
   try {
-    lesson = await authorAndCritique(topic, concept.title);
+    lesson = await authorAndCritique(topic, concept.title, abortSignal);
   } catch (err) {
+    // An abort (deadline/shutdown) is NOT a transient author failure — rethrow
+    // instead of retrying (and then degrading to null) on a job we no longer own.
+    if (abortSignal?.aborted) throw err;
     console.warn('[onramp-gen] authoring failed, retrying once', {
       topic,
       concept: concept.slug,
       error: err instanceof Error ? err.message : String(err),
     });
     try {
-      lesson = await authorAndCritique(topic, concept.title);
+      lesson = await authorAndCritique(topic, concept.title, abortSignal);
     } catch (err2) {
+      if (abortSignal?.aborted) throw err2;
       console.error('[onramp-gen] authoring failed after retry; caller will fall back to sourcing', {
         topic,
         concept: concept.slug,
@@ -139,17 +146,18 @@ export async function generateOnRampResource(args: {
 
 // One full generation: author a draft, then accuracy-critique it. Wrapped so the
 // caller can retry the whole sequence on a transient model fault.
-async function authorAndCritique(topic: string, conceptTitle: string): Promise<Lesson> {
-  const draft = await authorLesson(topic, conceptTitle);
-  return critiqueLesson(topic, conceptTitle, draft);
+async function authorAndCritique(topic: string, conceptTitle: string, abortSignal?: AbortSignal): Promise<Lesson> {
+  const draft = await authorLesson(topic, conceptTitle, abortSignal);
+  return critiqueLesson(topic, conceptTitle, draft, abortSignal);
 }
 
-async function authorLesson(topic: string, conceptTitle: string): Promise<Lesson> {
+async function authorLesson(topic: string, conceptTitle: string, abortSignal?: AbortSignal): Promise<Lesson> {
   const { model, temperature, maxOutputTokens } = getModel('onRampAuthor');
   const result = await generateText({
     model,
     temperature,
     maxOutputTokens,
+    abortSignal,
     output: Output.object({ schema: LessonSchema }),
     system: AUTHOR_SYSTEM,
     prompt: `Topic: ${topic}\nOrientation concept: ${conceptTitle}\n\nWrite the orientation on-ramp lesson for this topic.`,
@@ -157,12 +165,13 @@ async function authorLesson(topic: string, conceptTitle: string): Promise<Lesson
   return result.experimental_output;
 }
 
-async function critiqueLesson(topic: string, conceptTitle: string, draft: Lesson): Promise<Lesson> {
+async function critiqueLesson(topic: string, conceptTitle: string, draft: Lesson, abortSignal?: AbortSignal): Promise<Lesson> {
   const { model, temperature, maxOutputTokens } = getModel('onRampCritic');
   const result = await generateText({
     model,
     temperature,
     maxOutputTokens,
+    abortSignal,
     output: Output.object({ schema: LessonSchema }),
     system: CRITIC_SYSTEM,
     prompt: [

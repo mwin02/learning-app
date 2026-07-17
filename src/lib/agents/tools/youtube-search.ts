@@ -21,7 +21,7 @@
 
 import type { Difficulty } from '@prisma/client';
 import { deriveChildConcepts } from '@/lib/agents/decomposition/concepts';
-import { isoDurationToMinutes } from '@/lib/agents/decomposition/youtube';
+import { googleapisFetchSignal, isoDurationToMinutes } from '@/lib/agents/decomposition/youtube';
 import { meetsYoutubeViewFloor } from '@/lib/curation/youtube-signal';
 
 const API_BASE = 'https://www.googleapis.com/youtube/v3';
@@ -65,8 +65,11 @@ export async function searchYouTubeForConcept(args: {
   // already has. The attach ceiling (MAX_ATTACHABLE_DURATION_MIN) still drops any
   // whole-course monster this returns.
   preferSubstantial?: boolean;
+  // Audit 2.2: the worker's per-job abort (deadline/shutdown), combined with the
+  // per-fetch googleapis timeout so whichever fires first cancels the call.
+  abortSignal?: AbortSignal;
 }): Promise<YoutubeSourcedResource[]> {
-  const { topic, conceptTitle, maxResults, difficulty = 'intermediate', denyUrls = [], preferSubstantial = false } = args;
+  const { topic, conceptTitle, maxResults, difficulty = 'intermediate', denyUrls = [], preferSubstantial = false, abortSignal } = args;
   const key = process.env.YOUTUBE_API_KEY?.trim();
   if (!key) {
     console.log('[youtube-search] YOUTUBE_API_KEY not set — prong skipped', { conceptTitle });
@@ -75,7 +78,7 @@ export async function searchYouTubeForConcept(args: {
 
   let videoIds: string[];
   try {
-    videoIds = await searchVideoIds(`${conceptTitle} ${topic}`, maxResults, key, preferSubstantial);
+    videoIds = await searchVideoIds(`${conceptTitle} ${topic}`, maxResults, key, preferSubstantial, abortSignal);
   } catch (err) {
     console.warn('[youtube-search] search.list failed — prong degraded to empty', {
       conceptTitle,
@@ -87,7 +90,7 @@ export async function searchYouTubeForConcept(args: {
 
   let details: VideoDetail[];
   try {
-    details = await fetchVideoDetails(videoIds, key);
+    details = await fetchVideoDetails(videoIds, key, abortSignal);
   } catch (err) {
     console.warn('[youtube-search] videos.list failed — prong degraded to empty', {
       conceptTitle,
@@ -142,7 +145,7 @@ export async function searchYouTubeForConcept(args: {
 
 const watchUrl = (videoId: string) => `https://www.youtube.com/watch?v=${videoId}`;
 
-async function searchVideoIds(query: string, maxResults: number, key: string, preferSubstantial = false): Promise<string[]> {
+async function searchVideoIds(query: string, maxResults: number, key: string, preferSubstantial = false, abortSignal?: AbortSignal): Promise<string[]> {
   const url = new URL(`${API_BASE}/search`);
   url.searchParams.set('part', 'snippet');
   url.searchParams.set('type', 'video');
@@ -154,7 +157,7 @@ async function searchVideoIds(query: string, maxResults: number, key: string, pr
   url.searchParams.set('q', query);
   url.searchParams.set('key', key);
 
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: googleapisFetchSignal(abortSignal) });
   if (!res.ok) throw new Error(`HTTP ${res.status} ${await safeBody(res)}`);
   const json = (await res.json()) as YtSearchResponse;
   const ids: string[] = [];
@@ -165,7 +168,7 @@ async function searchVideoIds(query: string, maxResults: number, key: string, pr
   return ids;
 }
 
-async function fetchVideoDetails(videoIds: string[], key: string): Promise<VideoDetail[]> {
+async function fetchVideoDetails(videoIds: string[], key: string, abortSignal?: AbortSignal): Promise<VideoDetail[]> {
   const out: VideoDetail[] = [];
   // videos.list accepts up to 50 ids/call; search.list caps us at 50, so one batch.
   for (let i = 0; i < videoIds.length; i += 50) {
@@ -175,7 +178,7 @@ async function fetchVideoDetails(videoIds: string[], key: string): Promise<Video
     url.searchParams.set('id', batch.join(','));
     url.searchParams.set('key', key);
 
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: googleapisFetchSignal(abortSignal) });
     if (!res.ok) throw new Error(`HTTP ${res.status} ${await safeBody(res)}`);
     const json = (await res.json()) as YtVideosResponse;
     for (const v of json.items ?? []) {

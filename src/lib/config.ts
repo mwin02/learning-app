@@ -391,6 +391,14 @@ export const TRACK_COMPOSER_MODE: 'single' | 'agent' = 'single';
 // generateFallbackFraming is the safety net for when the cap is still hit).
 export const TRACK_COMPOSER_MAX_STEPS = 60;
 
+// Audit block 4 (section-5 inventory rows 5–6): timeout for the googleapis.com
+// Data API fetches (youtube-search.ts, decomposition/youtube.ts). Fixed trusted
+// host, so this is hang-protection, not SSRF hardening — without it a hung
+// connection stalls remediation/decompose with nothing to abort it. 10s is
+// generous for an API round-trip; the paginated playlistItems loop pays it per
+// page, so a genuinely dead connection still fails fast.
+export const GOOGLEAPIS_FETCH_TIMEOUT_MS = 10_000;
+
 // Phase 2.5g-3: the course worker's poll interval — how long it sleeps after
 // draining the queue before checking again. Short enough that a freshly-enqueued
 // request starts promptly, long enough not to hammer the DB while idle. 5s.
