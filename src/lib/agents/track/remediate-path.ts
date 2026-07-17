@@ -25,9 +25,10 @@
 // embedding is written best-effort post-commit, so it would be invisible to a
 // semantic re-search in the same run. The insertedIds ARE the candidate set.
 
-import { ConceptResourceRole, PathStatus } from '@prisma/client';
+import { ConceptResourceRole, PathStatus, RemediationState } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { MAX_REMEDIATION_PASSES } from '@/lib/config';
+import { shouldFastFailEscalated } from '@/lib/agents/track/escalation-cooldown';
 import { recomputeReadiness } from '@/lib/agents/map/recompute-readiness';
 import { classifyHole, type HoleCandidate } from '@/lib/agents/track/classify-hole';
 import { splitConcept, type SliceEvidence } from '@/lib/agents/track/split-concept';
@@ -100,6 +101,35 @@ async function runRemediation(
   if (initial.holes.length === 0) {
     console.log('[remediate] no holes; already ready', { pathId, status: initial.status });
     return { outcome: 'ready', status: initial.status, holes: [], relaxedConceptSlugs: [], escalatedConceptSlugs: [] };
+  }
+
+  // Audit 3.1: a recent run already escalated these exact holes — nothing in the
+  // library changed underneath a cool-down, so re-running would re-pay the full
+  // per-hole sourcing ladder just to escalate identically. Fail fast WITHOUT
+  // claiming a job (no new terminal row per attempt either). --force bypasses.
+  if (!opts.force) {
+    const lastTerminal = await prisma.remediationJob.findFirst({
+      where: {
+        pathId,
+        state: { in: [RemediationState.succeeded, RemediationState.failed, RemediationState.escalated] },
+      },
+      orderBy: { updatedAt: 'desc' },
+      select: { state: true, updatedAt: true, escalatedConceptSlugs: true },
+    });
+    if (shouldFastFailEscalated(initial.holes, lastTerminal)) {
+      console.log('[remediate] recently escalated; fast-fail without sourcing (cool-down)', {
+        pathId,
+        holes: initial.holes,
+        escalatedAt: lastTerminal!.updatedAt,
+      });
+      return {
+        outcome: 'escalated',
+        status: initial.status,
+        holes: initial.holes,
+        relaxedConceptSlugs: [],
+        escalatedConceptSlugs: initial.holes,
+      };
+    }
   }
 
   const claim = await claimRemediationJob(pathId, initial.holes, { force: opts.force });

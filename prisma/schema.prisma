@@ -540,6 +540,13 @@ model Concept {
   // adds/removes this concept's ConceptResource rows should consider calling
   // markBankStale — see the note in mark-bank-stale.ts.
   bankStaleReason BankStaleReason?
+  // Audit 3.3: when the last bank-generation attempt for this (still bankless)
+  // concept yielded nothing — the author returned no usable questions, or threw.
+  // Backfill (generate-concept-bank.ts) skips stamped concepts for
+  // CONCEPT_BANK_ATTEMPT_COOLDOWN_MS so one pathological concept stops re-paying
+  // a Pro call per course request. Never consulted once questions exist; null for
+  // never-attempted concepts.
+  bankAttemptedAt DateTime?
   // Prereq edges in both directions: `prereqsOut` are edges where this concept
   // is the prerequisite; `prereqsIn` are edges where it is the dependent.
   prereqsOut ConceptPrereq[]   @relation("PrereqFrom")

@@ -93,6 +93,15 @@ export const REJUDGE_ROUTE_MAX_DISTANCE = 0.48;
 // no-holes or a no-progress pass; this caps pathological re-splitting regardless.
 export const MAX_REMEDIATION_PASSES = 3;
 
+// Audit 3.1: how long a terminal `escalated` RemediationJob suppresses re-running
+// remediation for the same holes. Without it, every CourseRequest for a topic with
+// an uncoverable spine hole re-pays the full sourcing ladder (~2 grounded Pro
+// discovery calls + validation + judge per hole) just to fail identically —
+// unbounded across requests. What could change the outcome is new library
+// resources (or an operator fix — which changes the hole set and bypasses the
+// suppression), so a daily retry is plenty. The manual driver's --force bypasses.
+export const REMEDIATION_ESCALATION_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
 // Phase 2.5-AR: `searchResources` only spends an embedding call to rank when a
 // topic's matching candidate set exceeds this size. At or below it, the set is
 // small enough to hand to the agent wholesale (today's load-all behavior), so
@@ -496,6 +505,15 @@ export const CONCEPT_BANK_TARGET_QUESTIONS = 5;
 // bounded, like MAP_JUDGE_CONCURRENCY, so a wide map doesn't open dozens of Vertex
 // calls at once.
 export const CONCEPT_BANK_GEN_CONCURRENCY = 4;
+
+// Audit 3.3: how long a failed/empty bank-generation attempt (Concept.bankAttemptedAt)
+// keeps a concept out of the backfill candidate set. Without it, one pathological
+// concept (author reliably returns nothing usable, or throws) re-pays a
+// 32k-maxOutputTokens Pro call on every course request for the topic, forever.
+// The concept stays bankless, so it remains on the operator worklist the discovery
+// API already surfaces; the direct generateConceptBank entry point ("regenerate
+// this concept") ignores the stamp on purpose.
+export const CONCEPT_BANK_ATTEMPT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 // Phase 2.5h-4: how many exercises to snapshot per Lesson at Track build, sampled
 // from the lesson's concept bank(s). The selection is stratified (≥1 per concept
