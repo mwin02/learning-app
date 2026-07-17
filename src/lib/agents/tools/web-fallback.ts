@@ -136,6 +136,7 @@ export async function sourceForConcept({
   targetCount = REMEDIATION_SOURCE_TARGET_COUNT,
   targetMastery,
   preferSubstantial = false,
+  abortSignal,
 }: {
   topic: string;
   concept: { slug: string; title: string };
@@ -152,8 +153,16 @@ export async function sourceForConcept({
   // the grounded prongs; videoDuration=long for the YouTube prong. The Block 0
   // attach ceiling still drops whole-course monsters this surfaces.
   preferSubstantial?: boolean;
+  // Audit 2.2: the worker's per-job abort (deadline/shutdown), threaded into the
+  // discovery AI calls + googleapis fetches and checked between iterations, so an
+  // aborted job stops mid-ladder instead of finishing minutes of grounded
+  // discovery + persistence it no longer owns.
+  abortSignal?: AbortSignal;
 }): Promise<WebFallbackResult> {
   const label = `${topic}::${concept.slug}`;
+  // Checked before the library rung too — searchNearbyResources pays a Vertex
+  // query-embedding call, and an already-aborted job shouldn't start even that.
+  abortSignal?.throwIfAborted();
   // The sourcing LADDER (replaces the old "same vague open-web query, repeated"):
   //   rung 0 — the EXISTING library: rows semantically near the concept (hard
   //     pgvector distance ceiling; trust alone can't qualify a row), minus ones
@@ -195,8 +204,9 @@ export async function sourceForConcept({
     maxIterations: REMEDIATION_MAX_DISCOVERY_ITERATIONS,
     discover: (oversample, denyList, iteration) =>
       iteration === 1
-        ? discoverAllowlisted(topic, concept.title, oversample, denyList, allowDomains, targetMastery, preferSubstantial)
-        : discoverForConcept(topic, concept.title, oversample, denyList, targetMastery, preferSubstantial),
+        ? discoverAllowlisted(topic, concept.title, oversample, denyList, allowDomains, targetMastery, preferSubstantial, abortSignal)
+        : discoverForConcept(topic, concept.title, oversample, denyList, targetMastery, preferSubstantial, abortSignal),
+    abortSignal,
   });
   const persisted = await persistDiscovered(topic, survivors, {
     label,
@@ -204,6 +214,7 @@ export async function sourceForConcept({
     totalDiscovered,
     targetCount: webTarget,
     sourcedForConceptId: conceptId ?? null,
+    abortSignal,
   });
   return { ...persisted, libraryCandidateIds };
 }
@@ -255,14 +266,16 @@ async function collectSurvivors(args: {
   // `iteration` is 1-based so the ladder can pick a rung (1 = allowlisted, 2+ =
   // open-web relaxation). The deny-list carries across rungs.
   discover: (oversample: number, denyList: string[], iteration: number) => Promise<SourcedResource[]>;
+  abortSignal?: AbortSignal;
 }): Promise<{ survivors: SourcedResource[]; iterations: number; totalDiscovered: number }> {
-  const { label, targetCount, oversample, maxIterations, discover } = args;
+  const { label, targetCount, oversample, maxIterations, discover, abortSignal } = args;
   const survivors = new Map<string, SourcedResource>();
   const denyList = new Set<string>();
   let iterations = 0;
   let totalDiscovered = 0;
 
   while (survivors.size < targetCount && iterations < maxIterations) {
+    abortSignal?.throwIfAborted();
     iterations += 1;
     const need = targetCount - survivors.size;
 
@@ -342,9 +355,13 @@ async function persistDiscovered(
     // Non-null when a Concept's demand drove this run — provenance pairs are
     // written for rows that park non-atomic (see recordSourcedFor below).
     sourcedForConceptId: string | null;
+    abortSignal?: AbortSignal;
   },
 ): Promise<PersistResult> {
-  const { label, iterations, totalDiscovered, targetCount, sourcedForConceptId } = meta;
+  const { label, iterations, totalDiscovered, targetCount, sourcedForConceptId, abortSignal } = meta;
+  // Audit 2.2: an aborted job must not start the decompose/canonicalize/upsert
+  // tail — that's both LLM spend and zombie WRITES racing a successor build.
+  abortSignal?.throwIfAborted();
   if (finalRows.length === 0) {
     console.log('[web-fallback] no survivors', { label, iterations, totalDiscovered });
     return { insertedCount: 0, skippedCount: 0, discoveredCount: totalDiscovered, iterations, insertedIds: [] };
@@ -377,8 +394,9 @@ async function persistDiscovered(
   const atomicRows = decomposed
     .filter((d) => d.result.status === 'atomic')
     .map((d) => d.row);
+  abortSignal?.throwIfAborted();
   const vocab = await loadTopicVocab(topic);
-  const canonical = await canonicalizeTags(atomicRows, vocab);
+  const canonical = await canonicalizeTags(atomicRows, vocab, abortSignal);
 
   // File each survivor under its home topic rather than blindly stamping the
   // request topic. Bounded to the request topic ∪ its related topics; a single
@@ -484,14 +502,19 @@ async function discoverAllowlisted(
   allowDomains: string[],
   targetMastery?: Difficulty,
   preferSubstantial = false,
+  abortSignal?: AbortSignal,
 ): Promise<SourcedResource[]> {
   const [ytRows, groundedRows] = await Promise.all([
-    searchYouTubeForConcept({ topic, conceptTitle, maxResults: oversample, difficulty: targetMastery, denyUrls: denyList, preferSubstantial })
+    searchYouTubeForConcept({ topic, conceptTitle, maxResults: oversample, difficulty: targetMastery, denyUrls: denyList, preferSubstantial, abortSignal })
       .catch((err) => {
+        // Degrade-to-empty must not swallow the job abort — the grounded prong's
+        // own abort throw still fails the Promise.all, so nothing is lost, but
+        // rethrowing keeps the failure attributed to the abort, not the prong.
+        if (abortSignal?.aborted) throw err;
         console.warn('[web-fallback] youtube prong failed', { conceptTitle, error: err instanceof Error ? err.message : String(err) });
         return [] as YoutubeSourcedResource[];
       }),
-    discoverForConceptScoped(topic, conceptTitle, oversample, denyList, allowDomains, targetMastery, preferSubstantial),
+    discoverForConceptScoped(topic, conceptTitle, oversample, denyList, allowDomains, targetMastery, preferSubstantial, abortSignal),
   ]);
   return [...ytRows.map(youtubeToSourced), ...groundedRows];
 }
@@ -508,6 +531,7 @@ async function discoverForConceptScoped(
   allowDomains: string[],
   targetMastery?: Difficulty,
   preferSubstantial = false,
+  abortSignal?: AbortSignal,
 ): Promise<SourcedResource[]> {
   if (allowDomains.length === 0) return [];
   const rows = await runDiscovery({
@@ -516,6 +540,7 @@ async function discoverForConceptScoped(
     denyListSize: denyList.length,
     system: CONCEPT_DISCOVERY_SYSTEM_PROMPT,
     prompt: buildScopedConceptDiscoveryPrompt(topic, conceptTitle, oversample, denyList, allowDomains, targetMastery, preferSubstantial),
+    abortSignal,
   });
   const allow = new Set(allowDomains);
   const onAllowlist = rows.filter((r) => {
@@ -563,6 +588,7 @@ async function discoverForConcept(
   denyList: string[],
   targetMastery?: Difficulty,
   preferSubstantial = false,
+  abortSignal?: AbortSignal,
 ): Promise<DiscoveredResource[]> {
   return runDiscovery({
     label: `${topic}::${conceptTitle}`,
@@ -570,6 +596,7 @@ async function discoverForConcept(
     denyListSize: denyList.length,
     system: CONCEPT_DISCOVERY_SYSTEM_PROMPT,
     prompt: buildConceptDiscoveryPrompt(topic, conceptTitle, oversample, denyList, targetMastery, preferSubstantial),
+    abortSignal,
   });
 }
 
@@ -582,6 +609,7 @@ async function runDiscovery(args: {
   denyListSize: number;
   system: string;
   prompt: string;
+  abortSignal?: AbortSignal;
 }): Promise<DiscoveredResource[]> {
   const { model, temperature, maxOutputTokens } = getModel('curriculumFallback');
 
@@ -592,6 +620,7 @@ async function runDiscovery(args: {
     tools: { google_search: vertex.tools.googleSearch({}) },
     system: args.system,
     prompt: args.prompt,
+    abortSignal: args.abortSignal,
   });
 
   recordUsage('web-fallback.discovery', result.usage);
@@ -726,6 +755,7 @@ function appendDenyList(lines: string[], denyList: string[]): void {
 async function canonicalizeTags(
   discovered: DiscoveredResource[],
   vocab: string[],
+  abortSignal?: AbortSignal,
 ): Promise<Map<string, { prerequisiteConcepts: string[]; conceptsTaught: string[] }>> {
   if (discovered.length === 0) return new Map();
   const { model, temperature, maxOutputTokens } = getModel('tagCanonicalizer');
@@ -752,6 +782,7 @@ async function canonicalizeTags(
       model,
       temperature,
       maxOutputTokens,
+      abortSignal,
       schema: CanonicalizedTagsSchema,
       system: CANON_SYSTEM_PROMPT,
       prompt: [
@@ -767,6 +798,9 @@ async function canonicalizeTags(
       map.set(r.url, { prerequisiteConcepts: r.prerequisiteConcepts, conceptsTaught: r.conceptsTaught });
     }
   } catch (err) {
+    // A job abort is NOT a canonicalization fault — rethrow instead of degrading
+    // to raw tags and letting the zombie run continue into the upsert loop.
+    if (abortSignal?.aborted) throw err;
     console.warn('[web-fallback] canonicalize failed, degrading to raw tags', {
       count: discovered.length,
       error: err instanceof Error ? err.message : String(err),

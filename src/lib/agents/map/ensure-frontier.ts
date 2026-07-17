@@ -43,8 +43,13 @@ export async function ensureFrontier(args: {
   pathId: string;
   subject?: string;
   onTrace?: OnTrace;
+  // Audit 2.2: the worker's per-job abort — checked up front and per sourced
+  // concept, forwarded into attach/sourcing. An abort throw lands in
+  // ensurePathMap's best-effort wrapper, which ships the spine-only map.
+  abortSignal?: AbortSignal;
 }): Promise<EnsureFrontierResult> {
-  const { pathId, subject, onTrace = () => {} } = args;
+  const { pathId, subject, onTrace = () => {}, abortSignal } = args;
+  abortSignal?.throwIfAborted();
 
   const path = await prisma.path.findUnique({ where: { id: pathId }, select: { topic: true } });
   if (!path) throw new Error(`No Path '${pathId}'.`);
@@ -101,7 +106,7 @@ export async function ensureFrontier(args: {
   });
 
   // --- resource: library first ------------------------------------------------
-  const attachments = await attachCandidates({ topic, concepts: plan.concepts, onTrace });
+  const attachments = await attachCandidates({ topic, concepts: plan.concepts, onTrace, abortSignal });
   const links = attachments.flatMap((a) =>
     a.candidates.map((c) => ({
       conceptId: idBySlug.get(a.conceptSlug)!,
@@ -120,6 +125,7 @@ export async function ensureFrontier(args: {
   });
   const toSource = unresourced.slice(0, FRONTIER_MAX_WEB_SOURCED);
   for (const c of toSource) {
+    abortSignal?.throwIfAborted();
     try {
       await sourceAndAttachConcept({
         pathId,
@@ -127,8 +133,12 @@ export async function ensureFrontier(args: {
         conceptId: idBySlug.get(c.slug)!,
         slug: c.slug,
         title: c.title,
+        abortSignal,
       });
     } catch (err) {
+      // A job abort is NOT a per-concept sourcing fault — rethrow instead of
+      // continuing the loop over concepts the job no longer owns.
+      if (abortSignal?.aborted) throw err;
       // One concept's sourcing failure shouldn't starve the rest of the cap.
       console.warn('[map-ensure-frontier] web sourcing failed', {
         pathId,

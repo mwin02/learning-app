@@ -48,10 +48,14 @@ export async function sourceAndAttachConcept(args: {
   // Budget-fill Block 2: bias discovery toward substantial (~20–90m) resources —
   // set for budget-thin concepts, where more short clips can't fill the tier.
   preferSubstantial?: boolean;
+  // Audit 2.2: the worker's per-job abort (deadline/shutdown), threaded down into
+  // the sourcing ladder's AI/web calls and the judge — remediation's per-hole
+  // loop is the single most expensive unthreaded stretch without it.
+  abortSignal?: AbortSignal;
 }): Promise<number> {
-  const { pathId, topic, conceptId, slug, title, targetMastery, isOnRamp = false, preferSubstantial = false } = args;
+  const { pathId, topic, conceptId, slug, title, targetMastery, isOnRamp = false, preferSubstantial = false, abortSignal } = args;
 
-  const sourced = await sourceForConcept({ topic, concept: { slug, title }, conceptId, targetMastery, preferSubstantial });
+  const sourced = await sourceForConcept({ topic, concept: { slug, title }, conceptId, targetMastery, preferSubstantial, abortSignal });
   // Rung-0 library hits first (already embedded + semantically ranked), then the
   // fresh web finds. Disjoint by construction: library ids are existing rows,
   // insertedIds are rows this run just created.
@@ -63,7 +67,7 @@ export async function sourceAndAttachConcept(args: {
   // cold build did manage to write). Prepended, deduped — the generated row is already
   // `active`, so the promote-on-attach updateMany in the attach tail no-ops for it.
   if (isOnRamp) {
-    const generated = await generateOnRampResource({ topic, concept: { slug, title } });
+    const generated = await generateOnRampResource({ topic, concept: { slug, title }, abortSignal });
     if (generated) candidateIds = [generated.id, ...candidateIds.filter((id) => id !== generated.id)];
   }
 
@@ -76,6 +80,7 @@ export async function sourceAndAttachConcept(args: {
     targetMastery,
     isOnRamp,
     reason: 'source-concept',
+    abortSignal,
   });
 }
 
@@ -101,8 +106,11 @@ export async function judgeAndAttachCandidates(args: {
   isOnRamp?: boolean;
   // For logs: which flow demanded this judge pass (remediation, decompose hook…).
   reason?: string;
+  // Audit 2.2: forwarded into the judge call; checked before the attach tx so an
+  // aborted job stops WRITING (ConceptResource attaches racing a successor build).
+  abortSignal?: AbortSignal;
 }): Promise<number> {
-  const { pathId, conceptId, slug, title, candidateIds, targetMastery, isOnRamp = false, reason = 'judge-attach' } = args;
+  const { pathId, conceptId, slug, title, candidateIds, targetMastery, isOnRamp = false, reason = 'judge-attach', abortSignal } = args;
 
   // Exclude rows already attached to this concept: they were judged when they
   // attached, and re-attaching is a createMany no-op anyway — spending judge
@@ -125,7 +133,7 @@ export async function judgeAndAttachCandidates(args: {
     return 0;
   }
 
-  const judged = await judgeCandidates({ conceptTitle: title, conceptSlug: slug, candidates: rows, isOnRamp });
+  const judged = await judgeCandidates({ conceptTitle: title, conceptSlug: slug, candidates: rows, isOnRamp, abortSignal });
   // Floor + cap the newly-judged set (Lever A) rather than attaching everything > 0.
   // Phase 2g-1: pass the concept's regime so re-sourced candidates get the same scope-
   // aware duration penalty as the cold-build path (strict for the on-ramp).
@@ -136,6 +144,7 @@ export async function judgeAndAttachCandidates(args: {
   }
 
   const keptIds = kept.map((k) => k.resourceId);
+  abortSignal?.throwIfAborted();
   await prisma.$transaction(async (tx) => {
     await tx.resource.updateMany({
       where: { id: { in: keptIds }, status: 'pending_review' },

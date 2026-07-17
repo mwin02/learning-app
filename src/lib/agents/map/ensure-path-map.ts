@@ -180,7 +180,7 @@ export async function ensurePathMap(args: {
     const injected = new Map<string, SearchResult[]>();
     const onRamp = concepts.find((c) => c.isOnRamp);
     if (onRamp) {
-      const generated = await generateOnRampResource({ topic, concept: { slug: onRamp.slug, title: onRamp.title } });
+      const generated = await generateOnRampResource({ topic, concept: { slug: onRamp.slug, title: onRamp.title }, abortSignal });
       if (generated) {
         injected.set(onRamp.slug, [generated]);
         onTrace({ kind: 'tool', label: 'generateOnRampResource', detail: { concept: onRamp.slug, durationMin: generated.durationMin } });
@@ -247,7 +247,7 @@ export async function ensurePathMap(args: {
   // `failed` — the spine is already persisted and the status already set, so we
   // degrade to a spine-only map (the backfill script can top it up later).
   try {
-    await ensureFrontier({ pathId, subject, onTrace });
+    await ensureFrontier({ pathId, subject, onTrace, abortSignal });
   } catch (err) {
     console.warn('[map-ensure-path-map] frontier pass failed; shipping spine-only map', {
       pathId,

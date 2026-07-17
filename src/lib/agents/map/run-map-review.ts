@@ -45,10 +45,14 @@ const ReviewSchema = z.object({
 // findings + how many were written so a caller/CLI can report them.
 export async function reviewAndPersistMap(
   pathId: string,
-  onTrace: OnTrace = () => {},
+  opts: { onTrace?: OnTrace; abortSignal?: AbortSignal } = {},
 ): Promise<{ findings: MapReviewFinding[]; written: number }> {
+  const { onTrace = () => {}, abortSignal } = opts;
+  // Audit 2.2: an aborted job skips the freeze review entirely — the caller's
+  // best-effort wrapper treats the throw as a non-fatal skipped review.
+  abortSignal?.throwIfAborted();
   const map = await loadAssembledMap(pathId);
-  const findings = await reviewMap(map, onTrace);
+  const findings = await reviewMap(map, onTrace, abortSignal);
   const { written } = await writePathReview(pathId, findings);
   return { findings, written };
 }
@@ -58,6 +62,7 @@ export async function reviewAndPersistMap(
 export async function reviewMap(
   map: AssembledMap,
   onTrace: OnTrace = () => {},
+  abortSignal?: AbortSignal,
 ): Promise<MapReviewFinding[]> {
   const hollow = detectHollowConcepts(map.concepts);
   const candidates = detectDuplicationCandidates(map.concepts, map.topic);
@@ -76,8 +81,11 @@ export async function reviewMap(
 
   let llmFindings: MapReviewFinding[] = [];
   try {
-    llmFindings = await callCritic(map, candidates);
+    llmFindings = await callCritic(map, candidates, abortSignal);
   } catch (err) {
+    // A job abort is NOT a critic fault — rethrow instead of degrading and
+    // letting the zombie run continue into the PathReview write.
+    if (abortSignal?.aborted) throw err;
     // A transient infra error (Vertex/network) must never fail the freeze — the
     // Path is already teachable. Degrade to the deterministic findings only.
     console.warn('[map-review] critic failed; using deterministic findings only', {
@@ -103,12 +111,14 @@ export async function reviewMap(
 async function callCritic(
   map: AssembledMap,
   candidates: DuplicationCandidate[],
+  abortSignal?: AbortSignal,
 ): Promise<MapReviewFinding[]> {
   const { model, temperature, maxOutputTokens, modelId } = getModel('mapReviewer');
   const result = await generateText({
     model,
     temperature,
     maxOutputTokens,
+    abortSignal,
     output: Output.object({ schema: ReviewSchema }),
     system: SYSTEM_PROMPT,
     prompt: buildPrompt(map, candidates),

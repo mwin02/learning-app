@@ -107,8 +107,8 @@ export async function processCourseRequest(cr: CourseRequest, opts: ProcessOpts 
     // status='running' guard makes any later duplicate write a no-op.
     //
     // Audit 2.3: the graceful release must NOT depend on the in-flight stage
-    // observing the abort — the unthreaded stretches (remediation's per-hole
-    // loop, until Block 4) run minutes between checkpoints, and compose/Cloud
+    // observing the abort — a stage hung inside a single call observes nothing
+    // (Block 4 threaded the checkpoints, not the hang itself), and compose/Cloud
     // Run SIGKILLs 30s after SIGTERM, which would strand the claim `running`
     // for the full 45m stale window. So on shutdown we also start a short grace
     // timer; if the pipeline hasn't settled when it expires, requeue the claim
@@ -154,17 +154,43 @@ export async function processCourseRequest(cr: CourseRequest, opts: ProcessOpts 
       }, deadlineMs);
     });
 
+    // Audit 2.2 observability: if the pipeline loses the race below, it keeps
+    // running as a zombie (the race can't kill it — only the threaded abort
+    // signal stops it at its next checkpoint/AI call). Log when it eventually
+    // settles so zombie accumulation — and how long each one outlived its job —
+    // is visible in the worker logs.
+    let pipelineSettled = false;
+    const pipeline = processRequestPipeline(cr, opts, controller.signal).finally(() => {
+      pipelineSettled = true;
+    });
+
     let outcome: ProcessOutcome;
     try {
-      outcome = await Promise.race([
-        processRequestPipeline(cr, opts, controller.signal),
-        deadline,
-        shutdownGrace,
-      ]);
+      outcome = await Promise.race([pipeline, deadline, shutdownGrace]);
     } finally {
       clearTimeout(timer);
       clearTimeout(graceTimer);
       shutdownSignal?.removeEventListener('abort', onShutdown);
+    }
+    if (!pipelineSettled) {
+      const lostAt = Date.now();
+      pipeline.then(
+        (zombieOutcome) =>
+          logWarn('course-worker.zombie-finished', {
+            id: cr.id,
+            topic: cr.topic,
+            outcome: zombieOutcome,
+            survivedMs: Date.now() - lostAt,
+          }),
+        (err) =>
+          logWarn('course-worker.zombie-finished', {
+            id: cr.id,
+            topic: cr.topic,
+            outcome: 'threw',
+            survivedMs: Date.now() - lostAt,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+      );
     }
     // Workers-A2: only TERMINAL outcomes count toward Program assembly — a
     // requeued child is still pending and must not trip the "all siblings

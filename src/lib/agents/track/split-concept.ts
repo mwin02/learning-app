@@ -60,8 +60,11 @@ export async function splitConcept(args: {
   subject?: string;
   concept: CoarseConcept;
   evidence: SliceEvidence[];
+  // Audit 2.2: the worker's per-job abort (deadline/shutdown), forwarded into the
+  // author call and the re-attach pass so a zombie remediation stops mid-call.
+  abortSignal?: AbortSignal;
 }): Promise<SplitResult> {
-  const { pathId, topic, subject, concept, evidence } = args;
+  const { pathId, topic, subject, concept, evidence, abortSignal } = args;
 
   // This operation is DESTRUCTIVE — it DELETEs the coarse concept — but that is
   // safe even on a Path that already has live Tracks (the spine-hole regression
@@ -74,7 +77,7 @@ export async function splitConcept(args: {
   // Path is mutable and ever-growing, so it heals — future Tracks built off it are
   // sound — while past snapshots stay as they were. So: NO guard against existing
   // Tracks; that would forbid exactly the regression-remediation this exists for.
-  const authored = await authorSplit({ concept, subject, evidence });
+  const authored = await authorSplit({ concept, subject, evidence, abortSignal });
   if (!authored.canSplit) {
     console.log('[split] author declined', { pathId, concept: concept.slug, reason: authored.reason });
     return { split: false, reason: authored.reason };
@@ -96,8 +99,11 @@ export async function splitConcept(args: {
   // Re-attach OUTSIDE the tx — search + judge are LLM/network work that must not
   // hold a DB transaction open. The finer nodes need not exist yet; attachment
   // keys on slug, resolved to ids when we persist below.
-  const attachments = await attachCandidates({ topic, concepts: finerConcepts });
+  const attachments = await attachCandidates({ topic, concepts: finerConcepts, abortSignal });
 
+  // Audit 2.2: last checkpoint before the DESTRUCTIVE tx (deletes the coarse
+  // concept) — a zombie split must not rewire a map a successor build now owns.
+  abortSignal?.throwIfAborted();
   const result = await prisma.$transaction(async (tx) => {
     // Capture the coarse concept's neighbours BEFORE deleting it (cascade drops
     // its edges). prereqsIn: P → C (P is a prerequisite of C). prereqsOut: C → D
@@ -211,14 +217,16 @@ async function authorSplit(args: {
   concept: CoarseConcept;
   subject?: string;
   evidence: SliceEvidence[];
+  abortSignal?: AbortSignal;
 }): Promise<z.infer<typeof SplitSchema>> {
-  const { concept, subject, evidence } = args;
+  const { concept, subject, evidence, abortSignal } = args;
   const { model, temperature, maxOutputTokens, modelId } = getModel('mapSpineAuthor');
 
   const result = await generateText({
     model,
     temperature,
     maxOutputTokens,
+    abortSignal,
     output: Output.object({ schema: SplitSchema }),
     system: SPLIT_SYSTEM_PROMPT,
     prompt: buildSplitPrompt(concept, subject, evidence),

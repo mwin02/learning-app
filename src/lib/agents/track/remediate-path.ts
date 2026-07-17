@@ -65,11 +65,12 @@ type HoleConcept = {
 // fails the freeze (the Path is already teachable). It is gated on the transition
 // (before ≠ spine_ready, after = spine_ready) so a no-op re-run on an
 // already-frozen Path — or an escalated/failed/busy run — does not re-review.
-// H4: `abortSignal` is the worker's per-job deadline signal, checked at each
-// remediation pass boundary (each pass can web-source per concept — the long
-// tail). An abort throw lands in runRemediation's catch, which fails the
-// RemediationJob and frees the active-per-path index. Deep forwarding into the
-// sourcing calls is opportunistic; the worker's deadline race is the backstop.
+// H4 + audit 2.2: `abortSignal` is the worker's per-job deadline/shutdown
+// signal, checked per PASS and per HOLE (each hole can cost minutes of grounded
+// discovery + judge calls — the long tail), and forwarded into splitConcept /
+// sourceAndAttachConcept down to their AI/web calls. An abort throw lands in
+// runRemediation's catch, which fails the RemediationJob and frees the
+// active-per-path index. The worker's deadline race is the backstop.
 export async function remediatePath(
   pathId: string,
   opts: { force?: boolean; abortSignal?: AbortSignal } = {},
@@ -79,7 +80,7 @@ export async function remediatePath(
 
   if (result.status === PathStatus.spine_ready && before?.status !== PathStatus.spine_ready) {
     try {
-      const { findings, written } = await reviewAndPersistMap(pathId);
+      const { findings, written } = await reviewAndPersistMap(pathId, { abortSignal: opts.abortSignal });
       console.log('[remediate] freeze review', { pathId, findings: findings.map((f) => f.kind), written });
     } catch (err) {
       console.error('[remediate] freeze review failed (non-fatal)', {
@@ -149,6 +150,9 @@ async function runRemediation(
 
       let progress = false;
       for (const hole of holes) {
+        // Audit 2.2: per-HOLE checkpoint — one pass over many holes previously ran
+        // minutes of sourcing/judge work after an abort before the per-pass check.
+        opts.abortSignal?.throwIfAborted();
         const cls = classifyHole(hole.candidates);
         console.log('[remediate] hole', { pathId, pass, concept: hole.slug, kind: cls.kind, reason: cls.reason });
 
@@ -158,6 +162,7 @@ async function runRemediation(
             topic,
             concept: { id: hole.conceptId, slug: hole.slug, title: hole.title },
             evidence: sliceEvidence(hole),
+            abortSignal: opts.abortSignal,
           });
           if (split.split) {
             progress = true;
@@ -175,6 +180,7 @@ async function runRemediation(
           slug: hole.slug,
           title: hole.title,
           isOnRamp: hole.isOnRamp,
+          abortSignal: opts.abortSignal,
         });
         if (attached > 0) progress = true;
       }
