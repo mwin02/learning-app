@@ -206,6 +206,10 @@ export async function upsertResource(
 export async function decomposeExisting(
   resourceId: string,
   decomposition: DecompositionResult,
+  // keepFragments: preserve child URL fragments (`<page>#<anchor>`) — the manual
+  // anchor-children route for one-page books. Only the decompose_manual API path
+  // sets it (after validateAnchorChildren); automated routes keep the F8 collapse.
+  opts: { keepFragments?: boolean } = {},
 ): Promise<{ status: DecompositionResult['status']; childrenCreated: number }> {
   const existing = await prisma.resource.findUnique({
     where: { id: resourceId },
@@ -260,6 +264,7 @@ export async function decomposeExisting(
         child,
         taken,
         embedTasks,
+        keepFragments: opts.keepFragments,
       });
     }
     // Raise the interactive-transaction timeout well above Prisma's 5s default:
@@ -346,12 +351,15 @@ async function createChild(
     child: ChildInput;
     taken: Set<string>;
     embedTasks: EmbedTask[];
+    // Preserve URL fragments (manual anchor children only — see decomposeExisting).
+    keepFragments?: boolean;
   },
 ): Promise<number> {
   const { topic, parentId, sourceId, trustScore, childStatus, child, taken, embedTasks } = args;
 
-  // F8: same canonical-URL dedup as the parent path (see upsertResource).
-  const url = normalizeResourceUrl(child.url);
+  // F8: same canonical-URL dedup as the parent path (see upsertResource) — except
+  // that anchor children keep their fragment (that IS the child's identity).
+  const url = normalizeResourceUrl(child.url, { keepFragment: args.keepFragments });
   const clash = await tx.resource.findUnique({
     where: { url },
     select: { id: true },
@@ -408,6 +416,7 @@ async function createChild(
       child: grandchild,
       taken,
       embedTasks,
+      keepFragments: args.keepFragments,
     });
   }
   return count;
