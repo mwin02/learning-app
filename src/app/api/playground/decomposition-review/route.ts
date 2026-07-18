@@ -26,6 +26,7 @@ import { withAdminAuth } from '@/lib/api/with-admin-auth';
 import { decompositionReviewSchema } from '@/lib/api/decomposition-review-schema';
 import { decompose } from '@/lib/agents/decomposition/decompose';
 import { decomposeManual } from '@/lib/agents/decomposition/manual';
+import { validateAnchorChildren } from '@/lib/agents/decomposition/normalize-url';
 import {
   decomposeExisting,
   markAtomic,
@@ -160,6 +161,22 @@ export const POST = withAdminAuth(async (req) => {
       }
 
       case 'decompose_manual': {
+        // Anchor children (one-page-book split): a child URL may keep a fragment
+        // (`<page>#<chapter>`), but only onto the parent's own page, and each
+        // anchor at most once. Reject a bad harvest up front as a 400 — before
+        // the concept-derivation LLM calls — instead of the catch-all 500.
+        const anchorIssues = validateAnchorChildren(
+          resource.url,
+          input.children.map((c) => c.url),
+        );
+        if (anchorIssues.crossPage.length > 0 || anchorIssues.duplicates.length > 0) {
+          return errorResponse(
+            400,
+            'INVALID_INPUT',
+            'Invalid anchor children: fragment URLs must target the parent page, each anchor at most once.',
+            anchorIssues,
+          );
+        }
         // No oversize gate / no classify() — the list is operator/agent-vouched.
         // Build children (concepts derived, defaults applied) and persist through
         // the same decomposeExisting() sink as the scrape-based routers.
@@ -169,10 +186,13 @@ export const POST = withAdminAuth(async (req) => {
           difficulty: resource.difficulty,
           parentConcepts: resource.conceptsTaught,
         });
-        const { status, childrenCreated } = await decomposeExisting(resource.id, {
-          status: 'decomposed',
-          children,
-        });
+        const { status, childrenCreated } = await decomposeExisting(
+          resource.id,
+          { status: 'decomposed', children },
+          // Manual is the only route that may keep child URL fragments — the
+          // guard above has already vouched they anchor onto the parent page.
+          { keepFragments: true },
+        );
         return Response.json({ resourceId: resource.id, status, childrenCreated, rejudge: await rejudge() });
       }
     }

@@ -77,6 +77,7 @@ Pick the **first** matching route:
 |---|---|---|
 | YouTube **playlist** URL (`list=` param) — parked only because it tripped the oversize gate (> 50 auto children) | **force** | `curl -s -XPOST "$B" -H 'content-type: application/json' -d '{"resourceId":"<id>","action":"decompose","force":true}'` — the automatic router knows how; no extraction needed. |
 | Single long YouTube **video** with timestamp chapters in its description | **video-chapters** | Node script via the YouTube Data API; children are `&t=NNNs` URLs with real per-chapter durations. See [references/video-chapters.md](references/video-chapters.md). |
+| A real **multi-chapter work on a single page** whose own TOC is in-page fragment links (`href="#…"`) — the one-page book (typical for `book` rows parked as "book kept whole by doc-TOC") | **anchor-toc** | Node fetch → harvest the TOC anchors → slice text between them for real durations → POST `decompose_manual` with `<page>#<anchor>` children. See [references/anchor-toc.md](references/anchor-toc.md). |
 | Lesson links present in the **static HTML** (verify: `curl -s <url> \| grep` a known lesson href). Includes **hub pages** whose lesson list lives one section deeper — find the subpage (e.g. OCW `pages/lecture-notes/`) and extract from *there*. | **node-toc** | Node fetch + regex → POST `decompose_manual`. See [references/node-toc.md](references/node-toc.md). |
 | Client-rendered SPA (Khan Academy, etc.) — `curl` HTML has no lesson links but the rendered page does | **browser-spa** | Chrome harvest, `window.name` bridge, POST from a localhost tab. See [references/browser-spa.md](references/browser-spa.md). |
 
@@ -88,6 +89,10 @@ Route notes:
 - Extraction hygiene (all routes): keep only true atomic lessons — exclude
   exercises/quizzes/nav/login/legal/"edit on GitHub"/in-page anchors and the page's
   own URL; dedup by URL; decode entities; preserve document order; clean titles.
+  (Exception: on the **anchor-toc** route, same-page fragment links are the
+  children by design — the API accepts `<parent-page>#<anchor>` URLs from
+  `decompose_manual` only, and 400s any fragment onto a *different* page or a
+  repeated anchor.)
 - Node routes POST from Node with a long `AbortSignal.timeout` (expect minutes for
   100+ children). The POST returns `{ status, childrenCreated }` synchronously.
 - The whole operation is **slow & local-only** (exceeds serverless limits) — that's

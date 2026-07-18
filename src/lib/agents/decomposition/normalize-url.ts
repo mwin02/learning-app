@@ -25,7 +25,10 @@ const TRACKING_PARAMS = new Set([
   'igshid',
 ]);
 
-export function normalizeResourceUrl(raw: string): string {
+export function normalizeResourceUrl(
+  raw: string,
+  opts: { keepFragment?: boolean } = {},
+): string {
   const trimmed = raw.trim();
   let u: URL;
   try {
@@ -37,8 +40,11 @@ export function normalizeResourceUrl(raw: string): string {
   }
 
   // Scheme + host are case-insensitive; the URL parser already lowercases them and drops
-  // a default port. Drop the fragment (never addresses a distinct resource for us).
-  u.hash = '';
+  // a default port. Drop the fragment (never addresses a distinct resource for us) —
+  // EXCEPT for manual anchor children (whole-book split), where `<page>#<chapter>` IS
+  // the child's identity. Only the decompose_manual path sets keepFragment; every
+  // automated route keeps the F8 collapse.
+  if (!opts.keepFragment) u.hash = '';
 
   // Strip known tracking params, preserving the order of the rest.
   for (const key of [...u.searchParams.keys()]) {
@@ -51,4 +57,32 @@ export function normalizeResourceUrl(raw: string): string {
   }
 
   return u.toString();
+}
+
+// Guard for manual anchor children: a fragment child is only valid on its own
+// parent's page (an anchor onto a different page is a harvest mistake), and two
+// children with the same anchor would collide on the Resource.url unique key.
+// Compares canonical (bare) forms, so trailing-slash / tracking-param / host-case
+// variants of the parent page still count as the same page. Non-fragment children
+// pass through untouched — cross-page plain URLs stay legal in the same batch.
+export function validateAnchorChildren(
+  parentUrl: string,
+  childUrls: string[],
+): { crossPage: string[]; duplicates: string[] } {
+  const parentBare = normalizeResourceUrl(parentUrl);
+  const seenFragmentUrls = new Set<string>();
+  const crossPage: string[] = [];
+  const duplicates: string[] = [];
+  for (const raw of childUrls) {
+    const kept = normalizeResourceUrl(raw, { keepFragment: true });
+    const bare = normalizeResourceUrl(raw);
+    if (kept === bare) continue; // no meaningful fragment — not an anchor child
+    if (bare !== parentBare) {
+      crossPage.push(raw);
+      continue;
+    }
+    if (seenFragmentUrls.has(kept)) duplicates.push(raw);
+    else seenFragmentUrls.add(kept);
+  }
+  return { crossPage, duplicates };
 }
