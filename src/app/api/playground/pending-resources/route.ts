@@ -7,8 +7,10 @@
 // GET  — list the queue (top-level pending_review resources + their direct
 //        children). Shared, machine-readable view for a curator UI or an
 //        autonomous reviewer.
-// POST — apply one decision: { resourceId, action, cascade? }. See
-//        pending-review-schema.ts for the contract.
+// POST — apply one decision: { resourceId, action, cascade? }. Actions:
+//        approve / reject (status axis) and decompose (re-route a misclassified
+//        atomic row to the decomposition queue). See pending-review-schema.ts
+//        for the contract.
 //
 // Admin/operator-gated via withAdminAuth (NOT the user-auth withAuth): never
 // reachable by a signed-in customer. Designed for both humans and agents — the
@@ -70,6 +72,21 @@ export const POST = withAdminAuth(async (req) => {
     switch (result.kind) {
       case 'not_found':
         return errorResponse(404, 'NOT_FOUND', `Resource ${input.resourceId} not found.`);
+      case 'not_atomic':
+        return errorResponse(
+          409,
+          'INVALID_STATE',
+          `Resource decomposition is '${result.decompositionStatus}', not atomic — only a misclassified atomic row can be sent to the decompose queue.`,
+        );
+      case 'queued_decompose':
+        return Response.json({
+          resourceId: result.resourceId,
+          action: 'decompose',
+          decompositionStatus: 'pending',
+          conceptLinksRemoved: result.conceptLinksRemoved,
+          pathsRecomputed: result.pathsRecomputed,
+          pathsRegressed: result.pathsRegressed,
+        });
       case 'blocked':
         return errorResponse(
           409,

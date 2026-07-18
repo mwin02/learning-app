@@ -18,7 +18,7 @@
 // Track immutability note in schema.prisma.
 
 import { PathStatus, BankStaleReason } from '@prisma/client';
-import type { ResourceStatus, DecompositionStatus, DeprecationSeverity } from '@prisma/client';
+import type { Prisma, ResourceStatus, DecompositionStatus, DeprecationSeverity } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { recomputeReadiness } from '@/lib/agents/map/recompute-readiness';
 import { markBankStale } from '@/lib/agents/content/mark-bank-stale';
@@ -120,13 +120,28 @@ export type ApplyResult =
       // reopened a spine hole; the worker refills it on the next request).
       pathsRegressed: number;
     }
+  // decompose: the row was re-routed to the decomposition queue (atomic →
+  // 'pending'); it now shows as blocked here until that axis resolves. Its
+  // candidate links get the same cleanup as reject (see dropCandidateLinks),
+  // with the same counters.
+  | {
+      kind: 'queued_decompose';
+      resourceId: string;
+      conceptLinksRemoved: number;
+      pathsRecomputed: number;
+      pathsRegressed: number;
+    }
   | { kind: 'not_found' }
   | { kind: 'blocked'; decompositionStatus: DecompositionStatus }
+  // decompose on a non-atomic row: containers are already decomposed and
+  // pending/human_review rows are already queued — nothing to flip.
+  | { kind: 'not_atomic'; decompositionStatus: DecompositionStatus }
   | { kind: 'raced' };
 
 export type ApplyInput =
   | { action: 'approve'; resourceId: string; cascade: boolean }
-  | { action: 'reject'; resourceId: string; cascade: boolean; severity: DeprecationSeverity };
+  | { action: 'reject'; resourceId: string; cascade: boolean; severity: DeprecationSeverity }
+  | { action: 'decompose'; resourceId: string };
 
 // All ids in the decomposition subtree rooted at `rootId` (inclusive). A
 // recursive CTE so arbitrarily-deep container-of-container trees collapse in one
@@ -144,6 +159,47 @@ async function subtreeIds(rootId: string): Promise<string[]> {
   return rows.map((row) => row.id);
 }
 
+// Path-side candidate cleanup shared by reject and decompose — both remove the
+// row(s) from the pickable pool, so both must drop their ConceptResource links.
+// recomputeReadiness trusts each link's stored coverage and does NOT re-check
+// resource pickability, so the link MUST be deleted for a reopened spine hole
+// to surface — otherwise the map would keep reporting spine_ready off a
+// resource the composer should never place (deprecated, or a container-to-be).
+// Capture affected Paths BEFORE deleting (the join is gone afterwards).
+//
+// Phase 2.5i: removing candidate links makes any reviewed bank grounded in them
+// stale. A dropped `teaches` link is primary_changed; the rest are
+// resource_removed. markBankStale's no-downgrade rule means a concept losing
+// both kinds lands on primary_changed regardless of order, so the two groups
+// can be flagged independently.
+async function dropCandidateLinks(
+  tx: Prisma.TransactionClient,
+  ids: string[],
+): Promise<{ conceptLinksRemoved: number; pathsRecomputed: number; pathsRegressed: number }> {
+  const links = await tx.conceptResource.findMany({
+    where: { resourceId: { in: ids } },
+    select: { conceptId: true, role: true, concept: { select: { pathId: true } } },
+  });
+  const affectedPathIds = [...new Set(links.map((l) => l.concept.pathId))];
+
+  const primaryConcepts = [...new Set(links.filter((l) => l.role === 'teaches').map((l) => l.conceptId))];
+  const removedConcepts = [...new Set(links.filter((l) => l.role !== 'teaches').map((l) => l.conceptId))];
+  await markBankStale(tx, removedConcepts, BankStaleReason.resource_removed);
+  await markBankStale(tx, primaryConcepts, BankStaleReason.primary_changed);
+
+  const { count: conceptLinksRemoved } = await tx.conceptResource.deleteMany({
+    where: { resourceId: { in: ids } },
+  });
+
+  let pathsRegressed = 0;
+  for (const pathId of affectedPathIds) {
+    const { status } = await recomputeReadiness(pathId, tx);
+    if (status === PathStatus.building) pathsRegressed++;
+  }
+
+  return { conceptLinksRemoved, pathsRecomputed: affectedPathIds.length, pathsRegressed };
+}
+
 // Apply an approve/reject decision. Conditional updateMany re-asserts the status
 // guard at write time, so a concurrent decision that won the race surfaces as
 // `raced` (a no-op single-target update) rather than silently clobbering.
@@ -153,6 +209,34 @@ export async function applyPendingReview(input: ApplyInput): Promise<ApplyResult
     select: { id: true, decompositionStatus: true },
   });
   if (!root) return { kind: 'not_found' };
+
+  // decompose is a shape-axis re-route, not an approval decision: it flips a
+  // misclassified atomic row into the decomposition queue. The UNRESOLVED guard
+  // below doesn't apply (an unresolved row is exactly what this produces) — the
+  // only precondition is that the row is currently atomic. Conditional
+  // updateMany re-asserts that at write time, same racing rule as approve.
+  //
+  // The row leaves the pickable pool for good — post-decomposition it's a
+  // container, and only its children become pickable — so its candidate links
+  // get the same cleanup as reject (dropped + readiness recomputed, in one
+  // transaction). The reopened spine hole is refilled by remediation; the
+  // decomposed children re-enter through normal attachment. Links are NOT
+  // migrated to children (attachment is a fresh pickable-only search).
+  if (input.action === 'decompose') {
+    if (root.decompositionStatus !== 'atomic') {
+      return { kind: 'not_atomic', decompositionStatus: root.decompositionStatus };
+    }
+    return prisma.$transaction(async (tx) => {
+      const { count } = await tx.resource.updateMany({
+        where: { id: root.id, decompositionStatus: 'atomic' },
+        data: { decompositionStatus: 'pending' },
+      });
+      if (count === 0) return { kind: 'raced' as const };
+      const cleanup = await dropCandidateLinks(tx, [root.id]);
+      return { kind: 'queued_decompose' as const, resourceId: root.id, ...cleanup };
+    });
+  }
+
   if (UNRESOLVED.includes(root.decompositionStatus)) {
     return { kind: 'blocked', decompositionStatus: root.decompositionStatus };
   }
@@ -181,44 +265,7 @@ export async function applyPendingReview(input: ApplyInput): Promise<ApplyResult
     });
     if (!input.cascade && count === 0) return { kind: 'raced' as const };
 
-    // Path-side candidate-deprecation. recomputeReadiness trusts each link's stored
-    // coverage and does NOT re-check resource pickability, so the link MUST be
-    // deleted for a reopened spine hole to surface — otherwise the map would keep
-    // reporting spine_ready off a deprecated resource. Capture affected Paths
-    // BEFORE deleting (the join is gone afterwards).
-    const links = await tx.conceptResource.findMany({
-      where: { resourceId: { in: ids } },
-      select: { conceptId: true, role: true, concept: { select: { pathId: true } } },
-    });
-    const affectedPathIds = [...new Set(links.map((l) => l.concept.pathId))];
-
-    // Phase 2.5i: deprecation removes these candidate links, so any reviewed bank
-    // grounded in them goes stale. A dropped `teaches` link is primary_changed; the
-    // rest are resource_removed. markBankStale's no-downgrade rule means a concept
-    // losing both a teaches and a non-teaches link lands on primary_changed
-    // regardless of order, so we can flag the two groups independently.
-    const primaryConcepts = [...new Set(links.filter((l) => l.role === 'teaches').map((l) => l.conceptId))];
-    const removedConcepts = [...new Set(links.filter((l) => l.role !== 'teaches').map((l) => l.conceptId))];
-    await markBankStale(tx, removedConcepts, BankStaleReason.resource_removed);
-    await markBankStale(tx, primaryConcepts, BankStaleReason.primary_changed);
-
-    const { count: conceptLinksRemoved } = await tx.conceptResource.deleteMany({
-      where: { resourceId: { in: ids } },
-    });
-
-    let pathsRegressed = 0;
-    for (const pathId of affectedPathIds) {
-      const { status } = await recomputeReadiness(pathId, tx);
-      if (status === PathStatus.building) pathsRegressed++;
-    }
-
-    return {
-      kind: 'rejected' as const,
-      resourceId: root.id,
-      deprecated: count,
-      conceptLinksRemoved,
-      pathsRecomputed: affectedPathIds.length,
-      pathsRegressed,
-    };
+    const cleanup = await dropCandidateLinks(tx, ids);
+    return { kind: 'rejected' as const, resourceId: root.id, deprecated: count, ...cleanup };
   });
 }

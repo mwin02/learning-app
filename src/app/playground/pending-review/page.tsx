@@ -2,7 +2,8 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { requireAdminPage } from '@/lib/auth/viewer';
 import { listPendingReview, type PendingReviewRoot } from '@/lib/curation/pending-review';
-import { ReviewActions, CONTAINER_BUTTONS, ROW_BUTTONS } from './review-actions';
+import { ReviewActions } from './review-actions';
+import { CONTAINER_BUTTONS, ROW_BUTTONS, DECOMPOSE_BUTTON } from './buttons';
 
 export const dynamic = 'force-dynamic';
 
@@ -64,8 +65,15 @@ function ChildList({ items }: { items: PendingReviewRoot['children'] }) {
           </div>
           {/* Per-child approve/reject (cascade=false). A child shown as
               `approved` (active) keeps a Reject button so a later-found-broken
-              child can be pulled from existing paths. */}
-          <ReviewActions resourceId={c.id} buttons={ROW_BUTTONS} />
+              child can be pulled from existing paths. An atomic child also gets
+              "Send to decompose" — a misclassified leaf (a nested TOC page)
+              re-routes to the decomposition queue instead of being approved. */}
+          <ReviewActions
+            resourceId={c.id}
+            buttons={
+              c.decompositionStatus === 'atomic' ? [...ROW_BUTTONS, DECOMPOSE_BUTTON] : ROW_BUTTONS
+            }
+          />
         </li>
         ))}
       </ul>
@@ -86,10 +94,18 @@ function QueueList({ roots }: { roots: PendingReviewRoot[] }) {
             </Link>
             <ResourceMeta root={root} />
             {/* A container approves/rejects its whole subtree; an atomic
-                resource acts on itself. */}
+                resource acts on itself and can also be re-routed to the
+                decomposition queue ("Send to decompose") when it's really an
+                undecomposed container — a course TOC, a whole book. */}
             <ReviewActions
               resourceId={root.id}
-              buttons={isContainer ? CONTAINER_BUTTONS : ROW_BUTTONS}
+              buttons={
+                isContainer
+                  ? CONTAINER_BUTTONS
+                  : root.decompositionStatus === 'atomic'
+                    ? [...ROW_BUTTONS, DECOMPOSE_BUTTON]
+                    : ROW_BUTTONS
+              }
             />
             {isContainer && <ChildList items={root.children} />}
           </li>
@@ -139,7 +155,9 @@ export default async function PendingReviewPage() {
           <strong>Approve</strong> lifts that gate (→ <code>active</code>). <strong>Reject</strong>{' '}
           deprecates the resource and drops it from any path it already appears in. For a container,{' '}
           <strong>Approve all / Reject all</strong> applies to the whole subtree; use the per-child
-          buttons to act on a single lesson.
+          buttons to act on a single lesson. <strong>Send to decompose</strong> re-routes a
+          misclassified atomic row (really a container — a course TOC, a whole book) to the
+          decomposition queue instead of deciding it here.
         </p>
       </section>
 

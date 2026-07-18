@@ -18,6 +18,17 @@
 //             reject reaches the Path side only — immutable Track snapshots are not
 //             touched and may keep pointing at the deprecated row.
 //
+//   decompose — atomic → decompositionStatus 'pending': the reviewer judged an
+//             "atomic" row is really a container (a course TOC, a whole book)
+//             that discovery failed to decompose — e.g. its corrected duration
+//             sits over the attach ceiling. Routes it to the decomposition
+//             queue (blocked from approval; retried by the decompose machinery
+//             / Human review) AND drops its ConceptResource candidate links
+//             with readiness recomputed, same as reject — the row leaves the
+//             pickable pool for good (containers are never pickable; only their
+//             future children are). Per-row only — it targets a misclassified
+//             leaf, never a subtree.
+//
 // `cascade` walks the whole decomposition subtree (multi-level: containers can
 // hold container children), so "approve all children of this container" /
 // "reject this entire tree" is one call. cascade=false acts on the single id —
@@ -35,6 +46,7 @@ export const pendingReviewSchema = z.discriminatedUnion('action', [
     cascade: z.boolean().default(false),
     severity: z.enum(['soft', 'hard']).default('soft'),
   }),
+  z.object({ action: z.literal('decompose'), resourceId }),
 ]);
 
 export type PendingReviewInput = z.infer<typeof pendingReviewSchema>;

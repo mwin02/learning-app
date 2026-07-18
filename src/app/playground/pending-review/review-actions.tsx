@@ -1,9 +1,11 @@
 'use client';
 
-// Approve/reject buttons for the pending-review (status-approval) queue. Thin
-// client over POST /api/playground/pending-resources: it owns no decision logic
-// — it sends the action and refreshes the server-rendered list so a decided row
-// drops out (or, for a cascade, the whole tree does).
+// Action buttons for the pending-review (status-approval) queue. Thin client
+// over POST /api/playground/pending-resources: it owns no decision logic — it
+// sends the action and refreshes the server-rendered list so a decided row
+// drops out (or, for a cascade, the whole tree does; a decomposed one moves to
+// the blocked section). Button definitions live in buttons.ts (a plain module)
+// so the server page can compose per-row variants.
 //
 // `cascade` distinguishes the two granularities the queue needs: a container's
 // "Approve all / Reject all" walks the whole subtree, while a per-row Approve /
@@ -12,41 +14,7 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-
-type Action = 'approve' | 'reject';
-type Severity = 'soft' | 'hard';
-
-// `severity` only applies to reject: soft = quality downgrade (future runs
-// only), hard = broken/dead link (also lets a future Track layer flag in-flight
-// learners). The API defaults to soft, but the UI is explicit so the reviewer's
-// intent is recorded on the row.
-type Button = {
-  label: string;
-  action: Action;
-  cascade: boolean;
-  severity?: Severity;
-  className: string;
-};
-
-const APPROVE_CLASS = 'border-green-600 text-green-700 hover:bg-green-50';
-const REJECT_SOFT_CLASS = 'border-red-600 text-red-700 hover:bg-red-50';
-const REJECT_HARD_CLASS = 'border-red-900 text-red-900 hover:bg-red-50';
-
-// Buttons per row variant. A container offers subtree-wide actions; an atomic
-// resource or a single child offers per-row actions. Reject splits by severity:
-// "quality" (soft) for a working-but-weak resource, "broken" (hard) for a dead
-// link.
-export const CONTAINER_BUTTONS: Button[] = [
-  { label: 'Approve all', action: 'approve', cascade: true, className: APPROVE_CLASS },
-  { label: 'Reject all (quality)', action: 'reject', cascade: true, severity: 'soft', className: REJECT_SOFT_CLASS },
-  { label: 'Reject all (broken)', action: 'reject', cascade: true, severity: 'hard', className: REJECT_HARD_CLASS },
-];
-
-export const ROW_BUTTONS: Button[] = [
-  { label: 'Approve', action: 'approve', cascade: false, className: APPROVE_CLASS },
-  { label: 'Reject (quality)', action: 'reject', cascade: false, severity: 'soft', className: REJECT_SOFT_CLASS },
-  { label: 'Reject (broken)', action: 'reject', cascade: false, severity: 'hard', className: REJECT_HARD_CLASS },
-];
+import type { Button } from './buttons';
 
 export function ReviewActions({ resourceId, buttons }: { resourceId: string; buttons: Button[] }) {
   const router = useRouter();
@@ -66,7 +34,7 @@ export function ReviewActions({ resourceId, buttons }: { resourceId: string; but
         body: JSON.stringify({
           resourceId,
           action: b.action,
-          cascade: b.cascade,
+          ...(b.action !== 'decompose' ? { cascade: b.cascade } : {}),
           ...(b.severity ? { severity: b.severity } : {}),
         }),
       });
@@ -76,6 +44,7 @@ export function ReviewActions({ resourceId, buttons }: { resourceId: string; but
         return;
       }
       const parts: string[] = [];
+      if (data.action === 'decompose') parts.push('queued for decomposition');
       if (typeof data.approved === 'number') parts.push(`approved ${data.approved}`);
       if (typeof data.deprecated === 'number') parts.push(`rejected ${data.deprecated}`);
       if (typeof data.conceptLinksRemoved === 'number' && data.conceptLinksRemoved > 0) {
