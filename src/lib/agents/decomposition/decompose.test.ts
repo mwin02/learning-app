@@ -58,6 +58,33 @@ describe('decompose — attachable duration gate on atomic outcomes', () => {
     expect(res.children.length).toBe(1);
   });
 
+  it('book atomic reroute parks regardless of duration (Block 1: durations lowball whole books)', async () => {
+    vi.mocked(decomposeDocToc).mockResolvedValueOnce({
+      ok: false,
+      outcome: 'atomic',
+      reason: 'no lesson links found',
+    } as never);
+    const res = await decompose({ ...base, url: 'https://example.com/book', type: 'book', durationMin: 60 });
+    expect(res.status).toBe('human_review');
+    expect(res.children).toEqual([]);
+    expect(res.reason).toMatch(/book kept whole/);
+  });
+
+  it('a book that decomposes is untouched by the book gate', async () => {
+    vi.mocked(decomposeDocToc).mockResolvedValueOnce({
+      ok: true,
+      children: [{ url: 'https://example.com/book/ch1' }],
+    } as never);
+    const res = await decompose({ ...base, url: 'https://example.com/book', type: 'book', durationMin: 60 });
+    expect(res.status).toBe('decomposed');
+    expect(res.children.length).toBe(1);
+  });
+
+  it('non-book atomic under the ceiling is NOT parked by the book gate', async () => {
+    const res = await decompose({ ...base, url: 'https://example.com/a', type: 'article', durationMin: 60 });
+    expect(res.status).toBe('atomic');
+  });
+
   it("doc-toc's non-atomic failure outcomes pass through ungated", async () => {
     vi.mocked(decomposeDocToc).mockResolvedValueOnce({
       ok: false,
