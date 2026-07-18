@@ -53,7 +53,7 @@ browser (`get_page_text`, then `read_page` if empty) before calling it dead.
 
 | Verdict | When | API action |
 |---|---|---|
-| **Accept atomic** | Genuinely ONE lesson/article/video (the router's container guess was wrong) and `durationMin` ≤ 300 (`MAX_ATTACHABLE_DURATION_MIN`). Over-ceiling accepts are a deliberate operator override — justify in the report. | `accept_atomic` |
+| **Accept atomic** | Genuinely ONE lesson/article/video (the router's container guess was wrong) and `durationMin` ≤ 300 (`MAX_ATTACHABLE_DURATION_MIN`). Over-ceiling accepts are a deliberate operator override — justify in the report. Also the right verdict for `book` rows parked with reason "book kept whole by doc-TOC …" when the page really is ONE chapter/section mistyped as `book` — decompose() parks every atomic book outcome regardless of duration (text durations are unverified LLM guesses that lowball whole books), so a genuine single chapter lands here and just needs your confirmation. A book that IS an entire work is `reject` (monolithic, no per-unit URLs) or stage-2 decompose. | `accept_atomic` |
 | **Reject** | Paywalled / login-gated (free-but-signup counts), dead/parked, non-teaching (marketing, link aggregator), or **structurally undecomposable**: a real multi-unit work whose site exposes no per-unit URLs — e.g. a book page offering only one monolithic PDF, or a chapterless multi-hour video. Also: content whose concepts are out of scope for its `topic`. | `reject` |
 | **Decompose** | A real container — ordered multi-unit course/tutorial/book/playlist — whose units have harvestable distinct URLs (a `?t=` timestamp variant counts). | stage 2 |
 | **Skip** | Genuinely unsure, or needs a browser that isn't connected. No POST; flag it. | — |
