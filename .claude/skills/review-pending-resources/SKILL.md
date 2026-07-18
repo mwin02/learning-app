@@ -22,13 +22,15 @@ Number of queue **roots** to process this run: **$ARGUMENTS** (default 10 if emp
 1. **Live & renders** — loads to real content, not a 404/410/parked/error page. (If `get_page_text` is empty, the page may be a JS-rendered SPA — confirm with `read_page` before calling it dead.)
 2. **No access barrier** — main content readable/watchable without creating an account, logging in, or paying. Free-but-signup (e.g. email-gated videos) still fails this.
 3. **Teaches directly** — the page itself teaches the topic; not a listicle, link aggregator, marketing/sales/signup landing page.
-4. **Metadata accuracy** — page matches the stored title / type / difficulty / conceptsTaught.
+4. **Metadata accuracy** — page matches the stored title / type / difficulty / conceptsTaught. **Scope match for `type='book'` rows:** confirm the URL lands on the stated chapter/section, not the entire work — a whole-work landing page (front matter, full table of contents) under a chapter-scoped title misrepresents its scope → **reject soft**.
+5. **Duration sanity** — while the page is open, estimate real consumption time: visible video length; article word count ÷ ~200 wpm; PDF page count × ~2 min/page. Stored `durationMin` for text resources is an unverified discovery-time LLM guess, and real gates trust it (the 300-min attach ceiling, duration ranking, the track time allocator). If the stored value is off by more than ~2× in either direction, **PATCH the correction first** (see the resources API below), *then* make the approve/reject decision. If the corrected value exceeds 300 min on an atomic row, do **not** approve — the PATCH response returns a `warning` signalling exactly this; reject (soft), or skip and flag "over ceiling — needs decompose". YouTube rows are exact (Data API) and never need this check.
 
 ### Decision mapping
 
 - All pass → **approve** (atomic root) or **approve cascade** (container — promotes the whole subtree).
 - Fails #1, broken/dead/removed → **reject hard**.
 - Fails #2/#3/#4, page works but violates a quality rule or is misrepresented → **reject soft**.
+- Fails #5 with a corrected duration **over 300 min on an atomic row** → after PATCHing the correction, **reject soft** (or **skip** and flag "over ceiling — needs decompose" if the content itself is good and worth decomposing). Never approve. A correction that stays ≤300 doesn't change the decision — fix it and grade normally.
 - `blocked: true` in the queue (decompositionStatus `pending`/`human_review`) → **skip**, flag "resolve in Human review first" (the API 409s on these anyway).
 - **Flat decomposition** (a `decomposed` container whose subtree is a single flat layer — its direct `children` are *all* `atomic`, none nested `decomposed` — yet one or more of those "leaves" is itself a chapter-index / intro / table-of-contents page that links to sibling units) → **skip** and flag **"re-decompose: index pages exposed as atomic siblings"**. Do **not** approve-cascade: it would publish the chapter-index pages as pickable duplicates of the very units they list (a pre-multi-layer decomposition artifact). Hand to Human review / the `decompose` skill to rebuild the nested tree first.
 - Genuinely unsure → **skip** and flag it; do not guess. We accept the residual risk and act on broken resources retroactively from user feedback.
@@ -56,6 +58,14 @@ Number of queue **roots** to process this run: **$ARGUMENTS** (default 10 if emp
    curl -s -XPOST "$B" -H 'content-type: application/json' -d '{"resourceId":"<id>","action":"reject","severity":"soft"}'
    ```
    Skip blocked/unsure rows — issue no POST. (Optionally `... pending-review-db.cjs state <id>` to confirm a decision landed.)
+
+   **Metadata corrections** (rubric #5, or any observed title/summary/difficulty error) go through the resources API *before* the approve/reject POST:
+   ```sh
+   # correct a bad duration guess (any of durationMin / title / summary / difficulty; whitelist-only)
+   curl -s -XPATCH localhost:3000/api/playground/resources -H 'content-type: application/json' \
+     -d '{"resourceId":"<id>","fields":{"durationMin":540}}'
+   ```
+   The response echoes the updated row plus flags: `embeddingStale: true` means a title/summary edit will be re-embedded by the backfill (no action needed); a `warning` means the row now sits over the attachable ceiling — apply the decision-mapping rule above (never approve it).
 
 ## Parallelize where possible
 
