@@ -31,6 +31,7 @@ import { TIME_WEIGHTS, type TimeWeight, type DepthTier } from '@/lib/agents/trac
 import { DEPTH_TIER_CORE_SIZE } from '@/lib/agents/track/composer';
 import { buildPrereqIndex, computeInclusion } from '@/lib/agents/track/composition-core';
 import type { OrderEdge } from '@/lib/agents/map/order';
+import { selectionScore } from '@/lib/agents/map/attach-candidates';
 import type {
   ComposerResult,
   ComposerInputConcept,
@@ -100,7 +101,7 @@ export async function composeTrackAgent(args: {
   const byHandle = new Map<string, { conceptSlug: string; resourceId: string }>();
   const handlesByConcept = new Map<string, { handle: string; title: string; type: string; difficulty: string; durationMin: number; role: string }[]>();
   // Flat view of every candidate (with its owning concept + coverage) for search_candidates.
-  type FlatCandidate = { handle: string; conceptSlug: string; conceptTitle: string; title: string; type: string; difficulty: string; durationMin: number; role: string; coverageScore: number };
+  type FlatCandidate = { handle: string; conceptSlug: string; conceptTitle: string; title: string; type: string; difficulty: string; durationMin: number; role: string; coverageScore: number; trustScore?: number };
   const allCandidates: FlatCandidate[] = [];
   let n = 0;
   for (const c of concepts) {
@@ -109,7 +110,7 @@ export async function composeTrackAgent(args: {
       byHandle.set(handle, { conceptSlug: c.slug, resourceId: cand.resourceId });
       allCandidates.push({
         handle, conceptSlug: c.slug, conceptTitle: c.title,
-        title: cand.title, type: cand.type, difficulty: cand.difficulty, durationMin: cand.durationMin, role: cand.role, coverageScore: cand.coverageScore,
+        title: cand.title, type: cand.type, difficulty: cand.difficulty, durationMin: cand.durationMin, role: cand.role, coverageScore: cand.coverageScore, trustScore: cand.trustScore,
       });
       return { handle, title: cand.title, type: cand.type, difficulty: cand.difficulty, durationMin: cand.durationMin, role: cand.role };
     });
@@ -182,7 +183,8 @@ export async function composeTrackAgent(args: {
           .filter((c) => (difficulty ? c.difficulty === difficulty : true))
           .filter((c) => (conceptSlug ? c.conceptSlug === conceptSlug : true))
           .filter((c) => (q ? `${c.title} ${c.conceptTitle}`.toLowerCase().includes(q) : true))
-          .sort((a, b) => b.coverageScore - a.coverageScore)
+          // A3: rank by the shared selection blend, matching the input order.
+          .sort((a, b) => selectionScore(b, false) - selectionScore(a, false))
           .slice(0, limit ?? 15);
         trace('search_candidates', { query: q, role, difficulty, conceptSlug, results: matches.length });
         return { results: matches };
