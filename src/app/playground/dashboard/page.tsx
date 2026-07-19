@@ -187,7 +187,7 @@ export default async function DashboardPage() {
             count={brokenTracks}
           />
           <ActionCard
-            href="/playground/paths"
+            href="/playground/map-review"
             label="Map review findings"
             count={openFindings.length}
             detail={
@@ -195,18 +195,6 @@ export default async function DashboardPage() {
             }
           />
         </div>
-        {findingsByPath.size > 0 && (
-          <ul className="flex flex-col gap-1 text-sm">
-            {[...findingsByPath.entries()].map(([pathId, e]) => (
-              <li key={pathId}>
-                <Link href={`/playground/paths/${pathId}`} className="underline">
-                  {e.topic}
-                </Link>{' '}
-                <span className="text-gray-500">— {e.kinds.join(', ')}</span>
-              </li>
-            ))}
-          </ul>
-        )}
       </section>
 
       <section className="flex flex-col gap-3">

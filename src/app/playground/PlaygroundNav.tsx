@@ -12,6 +12,7 @@ const TABS = [
   { href: '/playground/pending-review', label: 'Pending review' },
   { href: '/playground/failed-builds', label: 'Failed builds' },
   { href: '/playground/broken-tracks', label: 'Broken tracks' },
+  { href: '/playground/map-review', label: 'Map review' },
   { href: '/playground/queue', label: 'Queue' },
   { href: '/playground/paths', label: 'Paths' },
   { href: '/playground/programs', label: 'Programs' },
