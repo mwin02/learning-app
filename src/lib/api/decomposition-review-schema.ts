@@ -1,7 +1,7 @@
 // Zod schema for POST /api/playground/decomposition-review — the internal
 // curation API that applies a review decision to a queued container resource.
 // Lives in its own file so the route handler imports a validated body type
-// without the schema leaking elsewhere (mirrors generate-path-schema.ts).
+// without the schema leaking elsewhere.
 //
 // A discriminated union on `action` so each action carries exactly its own
 // fields — and so an agent (the intended non-human caller) gets a precise,

@@ -160,7 +160,7 @@ export default async function TrackDetailPage({
     <main className="p-6 flex flex-col gap-6">
       <section>
         <Link
-          href={`/playground/concept-maps/${track.path.id}`}
+          href={`/playground/paths/${track.path.id}`}
           className="text-sm text-gray-600 underline"
         >
           ← {track.path.topic} concept map

@@ -1,6 +1,6 @@
 // DB integration tests for the CourseRequest queue primitives (Phase 2.5g-1;
-// retry primitives Workers-A1): enqueueCourseRequest / claimNextQueued /
-// finishCourseRequest / requeueCourseRequest / reclaimStale. Real DB, no LLM.
+// retry primitives Workers-A1): claimNextQueued / finishCourseRequest /
+// requeueCourseRequest / reclaimStale. Real DB, no LLM.
 // Self-cleaning: rows are marked with a __verify_queue__ topic prefix and
 // deleted in before/after hooks. Added in R3.
 //
@@ -13,7 +13,6 @@ import { beforeAll, afterAll, it, expect } from 'vitest';
 import { CourseRequestStatus, type CourseRequest } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import {
-  enqueueCourseRequest,
   claimNextQueued,
   finishCourseRequest,
   requeueCourseRequest,
@@ -70,14 +69,6 @@ describeDb('CourseRequest queue', () => {
     }
     quarantined.length = 0;
     await cleanup();
-  });
-
-  it('enqueueCourseRequest inserts a queued row', async () => {
-    const { id } = await enqueueCourseRequest({ topic: `${MARK}enq`, goal: 'g' });
-    const row = await prisma.courseRequest.findUniqueOrThrow({ where: { id } });
-    expect(row.status).toBe(CourseRequestStatus.queued);
-    expect(row.claimedAt).toBeNull();
-    await prisma.courseRequest.delete({ where: { id } });
   });
 
   it('claimNextQueued takes the oldest first, running, with no double-claim; null when empty', async () => {

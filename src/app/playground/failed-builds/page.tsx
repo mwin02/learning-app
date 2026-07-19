@@ -15,7 +15,8 @@ export const dynamic = 'force-dynamic';
 //      the failure lives on Program.error, not any request.
 //   2. Grouped by program  — failed child builds under their parent Program
 //      (a `partial` Program is exactly "some children failed").
-//   3. Standalone builds   — failed /generate-path requests (no programId).
+//   3. Standalone builds   — failed CourseRequests with no programId (the
+//      retired /api/generate-path route; prewarm/worker paths don't enqueue).
 // Read-only for now; retry/delete land in Block 3.
 
 // Cap each scan. This is an internal force-dynamic triage page, not paginated —
@@ -89,7 +90,7 @@ function DiagnosisPanel({ diag }: { diag: Diagnosis }) {
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-gray-600">
       <span className="flex items-center gap-1">
         <span className="text-gray-400">Path</span>
-        <Link href={`/playground/concept-maps/${path.id}`} className="underline">
+        <Link href={`/playground/paths/${path.id}`} className="underline">
           <span className={`rounded px-1.5 py-0.5 font-medium ${PATH_STATUS_STYLE[path.status] ?? 'bg-gray-100 text-gray-700'}`}>
             {path.status}
           </span>

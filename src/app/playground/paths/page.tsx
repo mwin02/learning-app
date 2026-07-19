@@ -27,7 +27,7 @@ export default async function ConceptMapsPage() {
   return (
     <main className="p-6 flex flex-col gap-6">
       <section>
-        <h1 className="text-2xl font-bold mb-2">Concept maps</h1>
+        <h1 className="text-2xl font-bold mb-2">Paths</h1>
         <p className="text-sm text-gray-600 max-w-2xl">
           Each <strong>Path</strong> is an input-agnostic concept map for a whole topic — a spine of{' '}
           <code>Concept</code> nodes, a prerequisite DAG between them, and per-concept candidate
@@ -37,14 +37,14 @@ export default async function ConceptMapsPage() {
       </section>
 
       {paths.length === 0 ? (
-        <p className="text-sm text-gray-600">No concept maps built yet.</p>
+        <p className="text-sm text-gray-600">No paths built yet.</p>
       ) : (
         <ul className="flex flex-col gap-2">
           {paths.map((p) => {
             const style = STATUS_STYLE[p.status] ?? 'bg-gray-100 text-gray-700';
             return (
               <li key={p.id} className="border rounded p-3 text-sm flex items-center gap-3">
-                <Link href={`/playground/concept-maps/${p.id}`} className="font-medium underline">
+                <Link href={`/playground/paths/${p.id}`} className="font-medium underline">
                   {p.topic}
                 </Link>
                 <span className={`rounded px-2 py-0.5 text-xs font-medium ${style}`}>

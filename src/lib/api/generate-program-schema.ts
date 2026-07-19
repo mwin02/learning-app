@@ -9,7 +9,7 @@ import { z } from 'zod';
 export const generateProgramInputSchema = z.object({
   goal: z.string().trim().min(1).max(2000),
   background: z.string().trim().max(2000).optional(),
-  // Capped at 40 (matching the per-topic hoursPerWeek ceiling on /generate-path):
+  // Capped at 40 (the historical per-topic hoursPerWeek ceiling):
   // 40 h/wk is already full-time study, and it keeps each child topic's split within
   // the per-topic budget norm even when the whole budget lands on one topic.
   totalHoursPerWeek: z.number().int().min(1).max(40),

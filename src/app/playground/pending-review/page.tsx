@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
 // `pending_review` — usable in the run that found them, but hidden from future
 // runs once the topic library fills up (PENDING_REVIEW_GATE). Approving lifts
 // that gate; rejecting deprecates the row and pulls it from any path it leaked
-// into. This is a DIFFERENT axis from Human review (which curates a resource's
+// into. This is a DIFFERENT axis from Decomposition review (which curates a resource's
 // container/atomic shape) — a row can be queued on both.
 
 function ResourceMeta({ root }: { root: PendingReviewRoot }) {
@@ -127,8 +127,8 @@ function BlockedList({ roots }: { roots: PendingReviewRoot[] }) {
           <ResourceMeta root={root} />
           <p className="mt-2 text-xs text-gray-500">
             Decomposition is <code>{root.decompositionStatus}</code> — resolve it in{' '}
-            <Link href="/playground/human-review" className="underline">
-              Human review
+            <Link href="/playground/decomposition-review" className="underline">
+              Decomposition review
             </Link>{' '}
             before approving.
           </p>

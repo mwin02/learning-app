@@ -1,8 +1,9 @@
 // Phase 2.5g-1: the CourseRequest queue primitives — the durable handoff between
-// the fire-and-forget route (enqueue + ack) and the out-of-band worker (claim →
-// ensurePathMap → remediate → buildTrack → finish). Callers land later:
-//   - enqueueCourseRequest  → the repointed /api/generate-path route (g-4)
-//   - claimNextQueued / finishCourseRequest / reclaimStale → the worker (g-3)
+// the enqueue side and the out-of-band worker (claim → ensurePathMap → remediate →
+// buildTrack → finish). Enqueue happens inside the program fan-out's transaction
+// (src/lib/services/program.ts); claimNextQueued / finishCourseRequest /
+// reclaimStale belong to the worker (g-3). (The standalone enqueueCourseRequest
+// helper left with its only caller, /api/generate-path, in the playground revamp.)
 //
 // CourseRequest is intentionally NOT single-flighted (unlike RemediationJob): each
 // learner request is its own row → its own per-learner Track snapshot. The
@@ -10,38 +11,10 @@
 // RemediationJob active-per-path index), so concurrent requests for the same
 // building topic serialize there, not here.
 
-import { CourseRequestStatus, Difficulty, Prisma, type CourseRequest } from '@prisma/client';
+import { CourseRequestStatus, Prisma, type CourseRequest } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { COURSE_REQUEST_MAX_ATTEMPTS, COURSE_REQUEST_STALE_MS } from '@/lib/config';
 import { log, logWarn, type UsageSnapshot } from '@/lib/log';
-
-export type EnqueueInput = {
-  topic: string;
-  userId?: string | null;
-  priorKnowledge?: string | null;
-  goal?: string | null;
-  timeframeWeeks?: number | null;
-  hoursPerWeek?: number | null;
-  targetMastery?: Difficulty | null;
-};
-
-// Insert a `queued` request. The route calls this with the canonical (post
-// topic-gate) slug + the learner's Track inputs, then acks immediately.
-export async function enqueueCourseRequest(input: EnqueueInput): Promise<{ id: string }> {
-  const row = await prisma.courseRequest.create({
-    data: {
-      topic: input.topic,
-      userId: input.userId ?? null,
-      priorKnowledge: input.priorKnowledge ?? null,
-      goal: input.goal ?? null,
-      timeframeWeeks: input.timeframeWeeks ?? null,
-      hoursPerWeek: input.hoursPerWeek ?? null,
-      targetMastery: input.targetMastery ?? null,
-    },
-    select: { id: true },
-  });
-  return { id: row.id };
-}
 
 // Atomically claim the oldest ELIGIBLE queued request → `running`, or return null
 // if none. Eligible = queued AND (nextAttemptAt is null or past due) — a requeued

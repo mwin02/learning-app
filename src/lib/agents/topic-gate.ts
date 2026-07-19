@@ -1,4 +1,5 @@
-// Topic-validity gate. Runs at the HTTP boundary (POST /api/generate-path)
+// Topic-validity gate. Runs inside the program plan pass (POST
+// /api/generate-program → decomposeProgram, gating each proposed child topic)
 // to keep junk and out-of-domain topics from reaching the curriculum agent —
 // and, more importantly, from triggering web fallback that would otherwise
 // stuff garbage Resources into the library.
@@ -82,8 +83,8 @@ const SYSTEM_PROMPT = [
 // The real tier-3 classifier: Gemini Flash with structured output, grounded on the
 // slugs already in use. Retried once — Gemini structured output occasionally returns
 // unparseable/truncated JSON (`No object generated`), a transient hiccup that must not
-// hard-fail the caller (a single flaky response would otherwise 500 a standalone
-// /api/generate-path request). A second failure propagates. (Mirrors decomposeProgram.)
+// hard-fail the caller (a single flaky response would otherwise fail a whole
+// generate-program plan pass). A second failure propagates. (Mirrors decomposeProgram.)
 const defaultClassify: TopicClassifier = async (normalized, canonicals) => {
   const { model, temperature, maxOutputTokens } = getModel('topicGate');
   const prompt = [

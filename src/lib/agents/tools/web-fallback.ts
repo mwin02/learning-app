@@ -775,7 +775,7 @@ async function canonicalizeTags(
   // capping mid-JSON on a large batch, which surfaces as AI_JSONParseError
   // ("Unterminated string in JSON") from generateObject — must therefore
   // degrade to raw tags, NOT crash the whole cold-topic fallback flow and
-  // bubble a 500 out of POST /api/generate-path. Return whatever we got
+  // fail the worker's remediation run. Return whatever we got
   // (empty on total failure); the raw-tag default covers the rest.
   try {
     const result = await generateObject({

@@ -3,15 +3,18 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
+// Ordered operator-first: the dashboard, then the action queues (things waiting
+// on a human decision), then the monitors/browsers. Resource detail pages
+// (/playground/resource/[id]) are reached via the dashboard's ID lookup, not a tab.
 const TABS = [
-  { href: '/playground/path-generation', label: 'Path generation' },
-  { href: '/playground/programs', label: 'Programs' },
-  { href: '/playground/failed-builds', label: 'Failed builds' },
-  { href: '/playground/queue', label: 'Queue' },
-  { href: '/playground/concept-maps', label: 'Concept maps' },
-  { href: '/playground/resource', label: 'Resource' },
-  { href: '/playground/human-review', label: 'Human review' },
+  { href: '/playground/dashboard', label: 'Dashboard' },
+  { href: '/playground/decomposition-review', label: 'Decomposition review' },
   { href: '/playground/pending-review', label: 'Pending review' },
+  { href: '/playground/failed-builds', label: 'Failed builds' },
+  { href: '/playground/broken-tracks', label: 'Broken tracks' },
+  { href: '/playground/queue', label: 'Queue' },
+  { href: '/playground/paths', label: 'Paths' },
+  { href: '/playground/programs', label: 'Programs' },
 ] as const;
 
 export function PlaygroundNav() {

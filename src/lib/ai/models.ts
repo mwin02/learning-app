@@ -265,8 +265,8 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // Cheap, deterministic; runs at the HTTP boundary for off-library topics.
     // The verdict object itself is tiny, but Flash 2.5 spends output tokens on
     // internal thinking FIRST — a 512 ceiling could cap mid-object before the
-    // JSON is emitted (NoObjectGeneratedError → an unhandled throw that 500s a
-    // standalone /api/generate-path). 2048 leaves ample thinking headroom for a
+    // JSON is emitted (NoObjectGeneratedError → an unhandled throw that fails
+    // the generate-program plan pass). 2048 leaves ample thinking headroom for a
     // one-shot classification while staying far cheaper than the decomposer tier.
     modelId: 'gemini-2.5-flash',
     temperature: 0,

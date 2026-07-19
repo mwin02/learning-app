@@ -57,8 +57,7 @@ export const POST = withAdminAuth(async (req) => {
 
   // Always collect the build trace on this admin-only inspector route — it's the
   // window into the composer agent's tool calls (search_candidates, add_lesson, …) and
-  // is cheap/ephemeral. (Unlike generate-path, which gates trace behind TRACE_RESPONSE
-  // because it's the customer-facing enqueue path.)
+  // is cheap/ephemeral.
   const { onTrace, events } = createTraceCollector();
   try {
     const result = await buildTrack({ ...input, onTrace });
