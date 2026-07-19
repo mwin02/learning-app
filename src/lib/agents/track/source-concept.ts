@@ -171,10 +171,28 @@ export async function judgeAndAttachCandidates(args: {
     // candidates. Deleting a ConceptResource is Path-side only (the reject pipeline
     // already does it); immutable Track snapshots reference LessonResource, never
     // these links.
-    const links = await tx.conceptResource.findMany({
-      where: { conceptId },
-      select: { id: true, role: true, coverageScore: true },
-    });
+    // A3: join the resource's live trustScore + durationMin so the cap ranks by
+    // the full selection blend — a vote-damaged resource loses the cap fight it
+    // would lose at fresh attach. (Before A3 this select was coverage-only and
+    // capCandidates fell back to pure coverage here.) Still ordering-only: the
+    // cap's primary retention stays a coverage gate.
+    const links = (
+      await tx.conceptResource.findMany({
+        where: { conceptId },
+        select: {
+          id: true,
+          role: true,
+          coverageScore: true,
+          resource: { select: { trustScore: true, durationMin: true } },
+        },
+      })
+    ).map((l) => ({
+      id: l.id,
+      role: l.role,
+      coverageScore: l.coverageScore,
+      trustScore: l.resource.trustScore,
+      durationMin: l.resource.durationMin,
+    }));
     if (links.length > MAP_MAX_CANDIDATES_PER_CONCEPT) {
       const keepIds = new Set(capCandidates(links).map((l) => l.id));
       const dropped = links.filter((l) => !keepIds.has(l.id));

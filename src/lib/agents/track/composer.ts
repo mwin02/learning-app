@@ -41,6 +41,11 @@ export type ComposerCandidate = {
   resourceId: string;
   role: ConceptResourceRole;
   coverageScore: number;
+  // Free-beta A3: the resource's current trustScore (vote- and engagement-driven),
+  // carried so validate-composition and the agent's search tool rank by the same
+  // coverage+trust+duration selectionScore as attach time. Optional so fixtures
+  // and older callers fall back to pure coverage.
+  trustScore?: number;
   title: string;
   type: string;
   difficulty: string;
@@ -53,7 +58,8 @@ export type ComposerCandidate = {
   isGenerated?: boolean;
 };
 
-// One concept of the map, with its candidates sorted coverage-desc. Concepts are
+// One concept of the map, with its candidates sorted selection-score-desc
+// (coverage+trust+duration — see attach-candidates.selectionScore). Concepts are
 // passed in continuity-first teaching order (each builds on the previous) so the
 // model's grouping keys off real adjacency. The model follows this order within a
 // thread; its emission order matters only at branch points, where it breaks the tie
