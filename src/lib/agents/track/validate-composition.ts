@@ -32,6 +32,7 @@
 
 import { ConceptResourceRole } from '@prisma/client';
 import type { OrderEdge } from '@/lib/agents/map/order';
+import { selectionScore } from '@/lib/agents/map/attach-candidates';
 import type { TimeWeight } from '@/lib/agents/track/allocate';
 import {
   buildPrereqIndex,
@@ -278,9 +279,10 @@ function resolveResources(
 
   const mandatorySet = new Set(mandatory);
   const optional = dedupe(g.optionalResourceIds.filter((id) => accept.has(id)), mandatorySet);
-  // Freeze every remaining candidate as a substitute, highest coverage first.
+  // Freeze every remaining candidate as a substitute, best selection score first
+  // (coverage+trust+duration — A3; matches the composer input's ranking).
   const taken = new Set([...mandatory, ...optional]);
-  for (const cand of [...pool].sort((a, b) => b.coverageScore - a.coverageScore)) {
+  for (const cand of [...pool].sort((a, b) => selectionScore(b, false) - selectionScore(a, false))) {
     if (taken.has(cand.resourceId)) continue;
     taken.add(cand.resourceId);
     optional.push(cand.resourceId);
@@ -288,12 +290,14 @@ function resolveResources(
   return { mandatoryResourceIds: mandatory, optionalResourceIds: optional };
 }
 
-// Highest-coverage `teaches`; else the highest-coverage candidate of any role.
+// Best `teaches` by selection score; else the best candidate of any role. The
+// teaches-first preference is the (coverage-derived) primary rule; within each
+// tier the A3 blend orders, so equal-coverage candidates fall back by trust.
 function chooseFallback(pool: ComposerCandidate[]): ComposerCandidate | null {
   if (pool.length === 0) return null;
   const teaches = pool
     .filter((c) => c.role === ConceptResourceRole.teaches)
-    .sort((a, b) => b.coverageScore - a.coverageScore);
+    .sort((a, b) => selectionScore(b, false) - selectionScore(a, false));
   if (teaches.length > 0) return teaches[0];
-  return [...pool].sort((a, b) => b.coverageScore - a.coverageScore)[0];
+  return [...pool].sort((a, b) => selectionScore(b, false) - selectionScore(a, false))[0];
 }

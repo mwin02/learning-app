@@ -1,7 +1,14 @@
 // Unit tests for validateComposition + the composition-core primitives (Phase 2.5e-2).
 // Deterministic invariants only — no LLM, no DB. Migrated from Part 1 of
 // scripts/verify-composer.ts (R2); the live composer half stays in that script.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+// A3: validate-composition now imports attach-candidates (selectionScore), which
+// transitively pulls tools/search-resources → @/lib/db + @/lib/ai/models — both
+// throw at module-eval without env. The code under test is pure; stub the leaves
+// (CLAUDE.md § module-eval gotcha).
+vi.mock('@/lib/db', () => ({ prisma: {} }));
+vi.mock('@/lib/ai/models', () => ({ getModel: () => ({ model: {}, temperature: 0, maxOutputTokens: 0 }) }));
 import { ConceptMembership, ConceptResourceRole, TrackIntent } from '@prisma/client';
 import { validateComposition } from '@/lib/agents/track/validate-composition';
 import {
@@ -282,5 +289,40 @@ describe('composition-core — buildPrereqIndex / computeInclusion / order / ass
     expect(groups.length).toBe(2);
     expect(groups[1].conceptSlugs).toEqual(['f']);
     expect(warns.some((w) => w.includes("'f'") && w.includes('synthesized'))).toBe(true);
+  });
+});
+
+// Free-beta A3: trust participates in ORDERING at composition time — the
+// fallback primary pick and the frozen substitute order use the shared
+// selectionScore blend, so equal-coverage candidates resolve by trust.
+describe('validateComposition — trust ordering (A3)', () => {
+  const trustConcepts: ComposerInputConcept[] = [
+    {
+      slug: 'a', title: 'A', membership: ConceptMembership.spine, prerequisiteSlugs: [],
+      candidates: [
+        { resourceId: 'r-lo', role: ConceptResourceRole.teaches, coverageScore: 0.8, trustScore: 0.2, title: 'low trust', type: 'article', difficulty: 'beginner', durationMin: 30 },
+        { resourceId: 'r-hi', role: ConceptResourceRole.teaches, coverageScore: 0.8, trustScore: 0.9, title: 'high trust', type: 'article', difficulty: 'beginner', durationMin: 30 },
+        { resourceId: 'r-mid', role: ConceptResourceRole.uses, coverageScore: 0.8, trustScore: 0.5, title: 'mid trust uses', type: 'article', difficulty: 'beginner', durationMin: 30 },
+      ],
+    },
+  ];
+
+  it('fallback primary = the higher-trust of two equal-coverage teaches', () => {
+    // Composer supplied no usable mandatory (unknown handle) → chooseFallback runs.
+    const out = validateComposition({
+      composition: comp({ lessons: [L(['a'], 'r-unknown')] }),
+      concepts: trustConcepts, edges: [],
+    });
+    expect(out.lessons[0].mandatoryResourceIds).toEqual(['r-hi']);
+  });
+
+  it('substitute pool freezes in trust order behind the core', () => {
+    const out = validateComposition({
+      composition: comp({ lessons: [L(['a'], 'r-hi')] }),
+      concepts: trustConcepts, edges: [],
+    });
+    // Remaining pool: r-lo (teaches, trust .2) vs r-mid (uses, trust .5) — equal
+    // coverage, so the blend puts the higher-trust one first.
+    expect(out.lessons[0].optionalResourceIds).toEqual(['r-mid', 'r-lo']);
   });
 });

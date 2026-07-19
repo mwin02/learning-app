@@ -16,12 +16,13 @@ import { ConceptResourceRole } from '@prisma/client';
 vi.mock('@/lib/db', () => ({ prisma: {} }));
 vi.mock('@/lib/ai/models', () => ({ getModel: () => ({ model: {}, temperature: 0, maxOutputTokens: 0 }) }));
 
-import { capCandidates, selectAttachable } from '@/lib/agents/map/attach-candidates';
+import { capCandidates, selectAttachable, selectionScore } from '@/lib/agents/map/attach-candidates';
 import {
   MAP_MAX_CANDIDATES_PER_CONCEPT,
   MAP_ATTACH_MIN_COVERAGE,
   MAP_DURATION_RANKING,
   MAX_ATTACHABLE_DURATION_MIN,
+  TRUST_SELECTION_WEIGHT,
 } from '@/lib/config';
 
 type Cand = {
@@ -200,5 +201,32 @@ describe('attachable duration ceiling (Block 0 — admission drop in selectAttac
   it('capCandidates does NOT drop over-ceiling rows (re-cap never re-litigates admission)', () => {
     const out = capCandidates([teach('monster', 0.95, { durationMin: over })]);
     expect(ids(out)).toEqual(['monster']);
+  });
+});
+
+// Free-beta A3: selectionScore is exported as THE shared ranking formula (track
+// build + validators reuse it). Pin its contract directly.
+describe('selectionScore (exported, A3)', () => {
+  it('equal coverage → higher trust scores higher', () =>
+    expect(selectionScore({ coverageScore: 0.8, trustScore: 0.9 }, false)).toBeGreaterThan(
+      selectionScore({ coverageScore: 0.8, trustScore: 0.3 }, false),
+    ));
+  it('no trustScore → exactly coverage (back-compat for trust-less rows)', () =>
+    expect(selectionScore({ coverageScore: 0.73 }, false)).toBe(0.73));
+  it('blend = (1-w)*coverage + w*trust at healthy duration', () =>
+    expect(selectionScore({ coverageScore: 0.8, trustScore: 0.4, durationMin: 30 }, false)).toBeCloseTo(
+      (1 - TRUST_SELECTION_WEIGHT) * 0.8 + TRUST_SELECTION_WEIGHT * 0.4,
+      10,
+    ));
+  it('trust NEVER lifts a sub-floor teaches into the retained primary slot', () => {
+    // Sub-floor coverage + max trust vs qualifying coverage + min trust, under cap
+    // pressure: the qualifying one is retained (coverage gate, not blend).
+    const cands = [
+      teach('subfloor-hi-trust', MAP_ATTACH_MIN_COVERAGE - 0.01, { trustScore: 0.99 }),
+      teach('qualifying-lo-trust', 0.75, { trustScore: 0.1 }),
+      ...Array.from({ length: CAP + 2 }, (_, i) => use(`u${i}`, 0.95, { trustScore: 0.95 })),
+    ];
+    const kept = capCandidates(cands);
+    expect(ids(kept)).toContain('qualifying-lo-trust');
   });
 });

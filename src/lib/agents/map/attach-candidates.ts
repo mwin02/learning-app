@@ -53,12 +53,18 @@ function durationFactor(durationMin: number | undefined, isOnRamp: boolean): num
 }
 
 // Phase 2.5h + 2g-1: ranking score = coverage gated; trust + duration ordering.
-// coverageScore decides relevance; trustScore (when carried — fresh judge output)
-// breaks ties so a higher-trust resource ranks above an equally-relevant lower-trust
-// one; the durationFactor then demotes over-broad (over-long) resources. Rows without
-// a trustScore/durationMin (e.g. the re-cap over DB links in source-concept) fall back
-// to pure coverage, preserving prior behavior there.
-function selectionScore(c: { coverageScore: number; trustScore?: number; durationMin?: number }, isOnRamp: boolean): number {
+// coverageScore decides relevance; trustScore (when carried) breaks ties so a
+// higher-trust resource ranks above an equally-relevant lower-trust one; the
+// durationFactor then demotes over-broad (over-long) resources. Rows without a
+// trustScore/durationMin fall back to pure coverage.
+//
+// Exported since free-beta A3: this is THE candidate-ranking formula, used at
+// attach time (here) and at track build (loadComposerMap's candidate order, the
+// composer-agent's search tool, validate-composition's substitute/fallback
+// ordering) — so vote-driven trust changes re-rank persisted candidates the same
+// way they'd rank if freshly judged. Ordering only: admission and the primary
+// floor stay pure coverage gates.
+export function selectionScore(c: { coverageScore: number; trustScore?: number; durationMin?: number }, isOnRamp: boolean): number {
   const blend =
     c.trustScore == null
       ? c.coverageScore

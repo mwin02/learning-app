@@ -85,6 +85,7 @@ model Resource {
   lessonResources      LessonResource[]
   conceptResources     ConceptResource[]
   sourcedFor           ResourceSourcedFor[]
+  ratings              ResourceRating[]
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 
@@ -93,6 +94,27 @@ model Resource {
   @@index([sourceId])
   @@index([parentResourceId])
   @@unique([parentResourceId, orderInParent])
+}
+
+// Free-beta A1: learner up/down votes on resources. RESOURCE-GLOBAL by design —
+// a dislike means "bad resource", not "bad fit for this concept" (per-concept fit
+// stays the judge's coverageScore), so one vote per user per resource, ±1,
+// changeable/clearable. Raw rows persist (never aggregated away, never deleted on
+// eviction) so trustScore stays recomputable: vote counts feed voteSignal
+// (src/lib/curation/vote-signal.ts) as one more EvidenceSignal into
+// computeTrustScore via recomputeResourceTrust.
+model ResourceRating {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resourceId String
+  resource   Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  value      Int // +1 like, -1 dislike
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([userId, resourceId])
+  @@index([resourceId])
 }
 
 // Phase 2.5-AR (AR-5): persisted topic canonicalization registry. The topic
@@ -225,6 +247,7 @@ model User {
   courseRequests CourseRequest[]
   programs       Program[]
   intakeSessions IntakeSession[]
+  ratings        ResourceRating[]
 }
 
 enum UserRole {

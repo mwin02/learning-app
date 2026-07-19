@@ -25,6 +25,7 @@
 import { ConceptResourceRole, Difficulty, DeliveryMode, LessonResourceRole, PathStatus, TrackStatus } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { continuityOrder, type OrderEdge } from '@/lib/agents/map/order';
+import { selectionScore } from '@/lib/agents/map/attach-candidates';
 import {
   composeTrack,
   type ComposerInputConcept,
@@ -542,9 +543,11 @@ export async function loadComposerMap(
           role: true,
           coverageScore: true,
           resource: {
-            select: { id: true, title: true, type: true, difficulty: true, durationMin: true, origin: true },
+            select: { id: true, title: true, type: true, difficulty: true, durationMin: true, origin: true, trustScore: true },
           },
         },
+        // Stable DB pre-sort; the real ranking (coverage+trust+duration
+        // selectionScore, free-beta A3) is applied in JS below.
         orderBy: { coverageScore: 'desc' },
       },
     },
@@ -564,16 +567,23 @@ export async function loadComposerMap(
       title: c.title,
       membership: c.membership,
       prerequisiteSlugs: c.prereqsIn.map((e) => e.from.slug),
-      candidates: c.resources.map((r) => ({
-        resourceId: r.resource.id,
-        role: r.role,
-        coverageScore: r.coverageScore,
-        title: r.resource.title,
-        type: r.resource.type,
-        difficulty: r.resource.difficulty,
-        durationMin: r.resource.durationMin,
-        isGenerated: r.resource.origin === 'generated',
-      })),
+      // Free-beta A3: candidates ordered by the attach-time selection blend
+      // (coverage+trust+duration), not raw coverage — so learner votes re-rank
+      // persisted candidates at track build. Ordering only; primary floors and
+      // admission stayed coverage-pure upstream.
+      candidates: c.resources
+        .map((r) => ({
+          resourceId: r.resource.id,
+          role: r.role,
+          coverageScore: r.coverageScore,
+          trustScore: r.resource.trustScore,
+          title: r.resource.title,
+          type: r.resource.type,
+          difficulty: r.resource.difficulty,
+          durationMin: r.resource.durationMin,
+          isGenerated: r.resource.origin === 'generated',
+        }))
+        .sort((a, b) => selectionScore(b, false) - selectionScore(a, false)),
     }))
     .sort((a, b) => (pos.get(a.slug) ?? 0) - (pos.get(b.slug) ?? 0));
 
