@@ -31,8 +31,8 @@ export default async function ResourceDetailPage({
   return (
     <main className="p-6 flex flex-col gap-6">
       <div>
-        <Link href="/playground/resource" className="text-sm underline">
-          ← back to resource search
+        <Link href="/playground/dashboard" className="text-sm underline">
+          ← back to dashboard
         </Link>
       </div>
 

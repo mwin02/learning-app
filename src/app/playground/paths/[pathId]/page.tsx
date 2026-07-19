@@ -130,8 +130,8 @@ export default async function ConceptMapDetailPage({
   return (
     <main className="p-6 flex flex-col gap-6">
       <section>
-        <Link href="/playground/concept-maps" className="text-sm text-gray-600 underline">
-          ← All concept maps
+        <Link href="/playground/paths" className="text-sm text-gray-600 underline">
+          ← All paths
         </Link>
         <h1 className="text-2xl font-bold mt-2 flex items-center gap-3">
           {path.topic}

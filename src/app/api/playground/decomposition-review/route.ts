@@ -36,7 +36,7 @@ import { rejudgeForDemandingPaths, type RejudgeResult } from '@/lib/agents/decom
 
 // A force-decompose of a large container runs YouTube paging / doc fetch + chunked
 // concept-derivation LLM calls and can exceed Vercel's 60s cap — those are a
-// Cloud-Run-era operation (same limit generate-path documents). Fine locally.
+// Cloud-Run-era operation. Fine locally.
 export const maxDuration = 60;
 
 // Prisma + the decomposition routers (Vertex SDK, fetch) need Node, not Edge.

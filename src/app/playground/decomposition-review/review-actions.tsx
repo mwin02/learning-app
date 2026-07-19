@@ -1,6 +1,6 @@
 'use client';
 
-// Per-row curation buttons for the human-review queue. Thin client over POST
+// Per-row curation buttons for the decomposition-review queue. Thin client over POST
 // /api/playground/decomposition-review (2.5b-6): it owns no decision logic — it
 // just sends the action and reflects the API's response, then refreshes the
 // server-rendered list so a decided row drops out of the queue.

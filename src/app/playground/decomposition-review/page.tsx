@@ -95,7 +95,7 @@ export default async function HumanReviewPage() {
   return (
     <main className="p-6 flex flex-col gap-6">
       <section>
-        <h1 className="text-2xl font-bold mb-2">Human review</h1>
+        <h1 className="text-2xl font-bold mb-2">Decomposition review</h1>
         <p className="text-sm text-gray-600 max-w-2xl">
           Container resources the decomposition pipeline could not (or chose not to) explode into
           atomic children. They are <strong>not pickable</strong> by the curriculum agent until

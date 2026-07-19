@@ -1,8 +1,8 @@
 // POST /api/generate-program — HTTP boundary for Programs (Phase 2.75d).
 //
-// Mirrors /api/generate-path's shape, one level up. The SYNCHRONOUS part here is the
-// plan pass (decompose → gate → deterministic budget), the analog of generate-path's
-// synchronous topic gate: it's bounded (one Gemini decomposition + ≤N topic-gate
+// Fire-and-forget, like the retired /api/generate-path was. The SYNCHRONOUS part
+// here is the plan pass (decompose → gate → deterministic budget), kept inline
+// because it's bounded (one Gemini decomposition + ≤N topic-gate
 // calls, most cached) and produces the plan we persist. Only the per-topic BUILDS are
 // async — enqueueProgram fans them onto the existing CourseRequest queue and the
 // worker drains them, exactly as a standalone request. The caller gets a programId to
@@ -128,7 +128,7 @@ export const POST = withAuth(async (req, session) => runWithTrace(crypto.randomU
   if (result.status === 'failed') {
     if (result.failureKind === 'internal') {
       // An LLM/DB exception during the plan or fan-out — a server fault, not the
-      // client's. Mirror generate-path: generic 500, never echo the raw exception
+      // client's. Generic 500, never echo the raw exception
       // (result.error) which can carry internal detail. The failed Program is still
       // persisted and its id returned so the failure is inspectable.
       logError('generate-program.plan-failed', {
