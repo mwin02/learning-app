@@ -45,6 +45,24 @@ export const YT_SIGNAL_WEIGHT = 0.6; // EvidenceSignal.weight — engagement nud
 // just filter out bad content" decision; real quality is the soft trust signal.
 export const YT_MIN_VIEWS = 1_000;
 
+// Free-beta A1: learner votes → EvidenceSignal knobs (curation/vote-signal.ts).
+// Calibrated against the YouTube block above: a deliberate on-platform vote from
+// one of our own learners is worth vastly more per unit than a passive off-platform
+// view, so confidence saturates in single-digit counts (vs ~1M views) and the
+// signal's weight sits ABOVE YouTube's 0.6 — first-party "did this teach me"
+// beats third-party popularity.
+//   value      = (likes + 1) / (n + 2)            (Laplace-smoothed like share:
+//                1👍 0👎 → 0.67, not certainty; no votes → signal is null)
+//   confidence = n / (n + TRUST_VOTES_CONF_HALF)  (n = likes + dislikes)
+//   weight     = TRUST_VOTES_WEIGHT
+// There is no separate minimum-vote knob: smoothing + low confidence tame a lone
+// vote (one dislike moves a 0.8-prior resource to ~0.76), and drive-by protection
+// for the dangerous action lives in A4's TRUST_EVICT_MIN_VOTES, not here. Worked
+// asymptote for A4: unanimous dislikes on a 0.8 prior floor out near 0.47
+// (base/(1+weight)), so the evict floor must sit around ~0.5.
+export const TRUST_VOTES_CONF_HALF = 5; // vote count at which confidence reaches 0.5
+export const TRUST_VOTES_WEIGHT = 0.7; // EvidenceSignal.weight — votes outrank YT engagement
+
 // Phase 2.5f: targeted per-concept sourcing (sourceForConcept) budgets — the
 // thickener's spine-hole remediation. Deliberately smaller than the topic-level
 // FALLBACK_* above: a single narrow concept has far fewer good resources on the
