@@ -13,11 +13,13 @@ import type { TrackExerciseView } from '@/lib/track-view';
 import type { LessonViewModel, LessonNavLesson, LessonNextLesson } from '@/app/learn/_components/LessonView';
 import { useCourse } from '@/app/learn/_components/course-context';
 import { IndexCard, PctDone } from '@/components/notebook/primitives';
-import { NotebookResourcePane, TypeIcon } from './NotebookResourcePane';
+import { NotebookResourcePane, TypeIcon, type MyVotes } from './NotebookResourcePane';
 
 const TYPE_LABEL = { video: 'video', embed: 'embed', link: 'reading' } as const;
 
-export function NotebookLessonView({ model }: { model: LessonViewModel }) {
+// `myVotes`: the viewer's own resource votes (free-beta A2), hydrated by the
+// lesson page server-side and passed through to the resource pane's thumbs.
+export function NotebookLessonView({ model, myVotes }: { model: LessonViewModel; myVotes?: MyVotes }) {
   const { model: course, basePath, isComplete, toggleComplete } = useCourse();
   const done = isComplete(model.id);
 
@@ -41,7 +43,7 @@ export function NotebookLessonView({ model }: { model: LessonViewModel }) {
         </span>
       </div>
 
-      <NotebookResourcePane resources={model.resources} />
+      <NotebookResourcePane resources={model.resources} myVotes={myVotes} />
 
       {model.summary && (
         <p className="mb-5 mt-6 max-w-[660px] text-lg leading-[34px]">{model.summary}</p>

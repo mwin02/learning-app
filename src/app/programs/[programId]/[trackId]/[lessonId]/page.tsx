@@ -6,7 +6,9 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { getProgramTrackAccess } from '@/lib/auth/program-track-access';
+import { getViewer } from '@/lib/auth/viewer';
 import { buildLessonViewModel } from '@/lib/lesson-view-model';
+import { loadViewerVotes } from '@/lib/rating-db';
 import { Sheet } from '@/components/notebook/Sheet';
 import { NotebookLessonView } from '@/app/programs/_components/NotebookLessonView';
 
@@ -37,9 +39,18 @@ export default async function ProgramLessonPage({
   const model = buildLessonViewModel(access.track, lessonId);
   if (!model) notFound();
 
+  // Free-beta A2: the viewer's own votes on this lesson's resources, keyed by
+  // Resource id. getViewer is cache()'d (shared with the access check), so this
+  // adds one small ResourceRating query per render. Enrolled viewers always have
+  // a real userId; the empty map covers the dev-bypass/anonymous edge.
+  const viewer = await getViewer();
+  const myVotes = viewer.userId
+    ? await loadViewerVotes(viewer.userId, model.resources.map((r) => r.resource.id))
+    : {};
+
   return (
     <Sheet>
-      <NotebookLessonView model={model} />
+      <NotebookLessonView model={model} myVotes={myVotes} />
     </Sheet>
   );
 }

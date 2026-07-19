@@ -18,6 +18,18 @@ import { hostOf, resourceTypeKind, toEmbedSrc } from '@/lib/resource-embed';
 import { Markdown } from '@/app/learn/_components/Markdown';
 import { EmbedIcon, LinkIcon, PlayIcon } from '@/app/learn/_components/icons';
 import type { LessonTypeKind } from '@/lib/course-home-model';
+import type { VoteValue } from '@/lib/rating-db';
+import { RatingButtons } from './RatingButtons';
+
+// Free-beta A2: the viewer's own votes, keyed by Resource id (NOT LessonResource
+// id — ratings are resource-global). Hydrated server-side by the lesson page.
+export type MyVotes = Record<string, VoteValue>;
+
+// Every rendering (core card, alternate row) of the same resource shares one
+// vote — the thumbs pair reads its initial state from the map.
+function voteOf(myVotes: MyVotes, r: TrackResourceView): VoteValue | null {
+  return myVotes[r.resource.id] ?? null;
+}
 
 export function TypeIcon({ type, size = 16 }: { type: LessonTypeKind; size?: number }) {
   if (type === 'video') return <PlayIcon size={size} />;
@@ -35,7 +47,13 @@ function Tape() {
   );
 }
 
-export function NotebookResourcePane({ resources }: { resources: TrackResourceView[] }) {
+export function NotebookResourcePane({
+  resources,
+  myVotes = {},
+}: {
+  resources: TrackResourceView[];
+  myVotes?: MyVotes;
+}) {
   // Cores each render full-size; alternates list below. Defensive: if a lesson
   // somehow has no primary row, promote the first resource so something plays.
   let cores = resources.filter((r) => r.role === 'primary');
@@ -58,20 +76,22 @@ export function NotebookResourcePane({ resources }: { resources: TrackResourceVi
       <div className="flex flex-col gap-7">
         {cores.map((r) =>
           r.resource.content != null ? (
-            <Handout key={r.id} resource={r} />
+            <Handout key={r.id} resource={r} vote={voteOf(myVotes, r)} />
           ) : r.deliveryMode === 'embed' ? (
-            <TapedPlayer key={r.id} resource={r} />
+            <TapedPlayer key={r.id} resource={r} vote={voteOf(myVotes, r)} />
           ) : (
-            <OpenCard key={r.id} resource={r} />
+            <OpenCard key={r.id} resource={r} vote={voteOf(myVotes, r)} />
           )
         )}
       </div>
-      {alternates.length > 0 && <OtherResources resources={alternates} />}
+      {alternates.length > 0 && <OtherResources resources={alternates} myVotes={myVotes} />}
     </div>
   );
 }
 
-function TapedPlayer({ resource }: { resource: TrackResourceView }) {
+type CoreProps = { resource: TrackResourceView; vote: VoteValue | null };
+
+function TapedPlayer({ resource, vote }: CoreProps) {
   const { url, title } = resource.resource;
   const src = toEmbedSrc(resource);
   // 16:9 for actual video; the taller 16:10 better suits embedded articles/widgets.
@@ -90,11 +110,14 @@ function TapedPlayer({ resource }: { resource: TrackResourceView }) {
           isVideo ? 'aspect-video' : 'aspect-[16/10]'
         }`}
       />
-      <figcaption className="mt-2 font-script text-xs text-script-faint">
-        {hostOf(url)} — some sites block embedding; if this stays blank,{' '}
-        <a href={url} target="_blank" rel="noopener noreferrer" className="text-pen">
-          open it in a new tab ↗
-        </a>
+      <figcaption className="mt-2 flex items-center gap-3 font-script text-xs text-script-faint">
+        <span className="min-w-0 flex-1">
+          {hostOf(url)} — some sites block embedding; if this stays blank,{' '}
+          <a href={url} target="_blank" rel="noopener noreferrer" className="text-pen">
+            open it in a new tab ↗
+          </a>
+        </span>
+        <RatingButtons resourceId={resource.resource.id} initial={vote} />
       </figcaption>
     </figure>
   );
@@ -102,13 +125,14 @@ function TapedPlayer({ resource }: { resource: TrackResourceView }) {
 
 // A generated lesson body: printed page taped into the notebook. font-sans +
 // .lesson-prose keep the long-form typography of the old design on purpose.
-function Handout({ resource }: { resource: TrackResourceView }) {
+function Handout({ resource, vote }: CoreProps) {
   const { title, content } = resource.resource;
   return (
     <article className="relative rounded-[3px] border border-note-edge bg-card p-6 shadow-[0_6px_14px_rgba(0,0,0,.1)] sm:p-8">
       <Tape />
-      <div className="mb-3 font-script text-2xs uppercase tracking-[1px] text-script-dim">
-        printed handout
+      <div className="mb-3 flex items-center justify-between gap-3 font-script text-2xs uppercase tracking-[1px] text-script-dim">
+        <span>printed handout</span>
+        <RatingButtons resourceId={resource.resource.id} initial={vote} />
       </div>
       <div className="font-sans">
         <h2 className="mb-4 text-2xl font-bold tracking-[-0.5px] text-ink">{title}</h2>
@@ -118,7 +142,7 @@ function Handout({ resource }: { resource: TrackResourceView }) {
   );
 }
 
-function OpenCard({ resource }: { resource: TrackResourceView }) {
+function OpenCard({ resource, vote }: CoreProps) {
   const { url, title, type } = resource.resource;
   const kind = resourceTypeKind(resource);
   return (
@@ -138,12 +162,15 @@ function OpenCard({ resource }: { resource: TrackResourceView }) {
         </div>
         <div className="truncate font-hand text-[24px] font-bold leading-none text-script">{title}</div>
       </div>
+      {/* Sits inside the card's <a>; RatingButtons preventDefault/stopPropagation
+          keep a vote from following the link. */}
+      <RatingButtons resourceId={resource.resource.id} initial={vote} />
       <span className="btn-ink flex-none px-4 py-1 text-[19px]">Open ↗</span>
     </a>
   );
 }
 
-function OtherResources({ resources }: { resources: TrackResourceView[] }) {
+function OtherResources({ resources, myVotes }: { resources: TrackResourceView[]; myVotes: MyVotes }) {
   return (
     <div className="mt-6">
       <div className="mb-2 flex items-baseline gap-2.5">
@@ -156,7 +183,11 @@ function OtherResources({ resources }: { resources: TrackResourceView[] }) {
             key={r.id}
             className="max-w-[640px] rounded-[3px] border-2 border-dashed border-rule bg-card px-3.5"
           >
-            {r.resource.content != null ? <GeneratedAlternate resource={r} /> : <ExternalAlternate resource={r} />}
+            {r.resource.content != null ? (
+              <GeneratedAlternate resource={r} vote={voteOf(myVotes, r)} />
+            ) : (
+              <ExternalAlternate resource={r} vote={voteOf(myVotes, r)} />
+            )}
           </li>
         ))}
       </ul>
@@ -176,7 +207,7 @@ function AlternateLabel({ r }: { r: TrackResourceView }) {
   );
 }
 
-function ExternalAlternate({ resource: r }: { resource: TrackResourceView }) {
+function ExternalAlternate({ resource: r, vote }: { resource: TrackResourceView; vote: VoteValue | null }) {
   return (
     <a
       href={r.resource.url}
@@ -188,13 +219,14 @@ function ExternalAlternate({ resource: r }: { resource: TrackResourceView }) {
         <TypeIcon type={resourceTypeKind(r)} size={15} />
       </span>
       <AlternateLabel r={r} />
+      <RatingButtons resourceId={r.resource.id} initial={vote} />
       <span className="flex-none font-hand text-[19px] font-bold text-pen">Open ↗</span>
     </a>
   );
 }
 
 // A generated alternate has no external page — it expands inline as a handout.
-function GeneratedAlternate({ resource: r }: { resource: TrackResourceView }) {
+function GeneratedAlternate({ resource: r, vote }: { resource: TrackResourceView; vote: VoteValue | null }) {
   return (
     <details className="group [&_summary::-webkit-details-marker]:hidden">
       <summary className="flex cursor-pointer list-none items-center gap-3 py-2.5">
@@ -202,6 +234,7 @@ function GeneratedAlternate({ resource: r }: { resource: TrackResourceView }) {
           <LinkIcon size={15} />
         </span>
         <AlternateLabel r={r} />
+        <RatingButtons resourceId={r.resource.id} initial={vote} />
         <span className="flex-none font-hand text-[19px] font-bold text-pen group-open:hidden">Read ↓</span>
         <span className="hidden flex-none font-hand text-[19px] font-bold text-pen group-open:inline">Hide ↑</span>
       </summary>
