@@ -83,6 +83,20 @@ export const TRUST_VOTES_WEIGHT = 0.7; // EvidenceSignal.weight — votes outran
 export const TRUST_EVICT_FLOOR = 0.5;
 export const TRUST_EVICT_MIN_VOTES = 5;
 
+// Free-beta A5: the vote route's per-user burst cap (services/rating-limits.ts).
+// NOT an anti-manipulation control — the @@unique([userId, resourceId]) constraint
+// already caps a single account at one vote per resource, so one user can neither
+// swing a resource's trust nor drive an eviction (that needs TRUST_EVICT_MIN_VOTES
+// DISTINCT users). This is purely a DB-write-load guard against a signed-in client
+// hammering the endpoint (each POST = 2 reads + 1 write + a possible eviction txn).
+// Counts the user's ResourceRating rows touched (updatedAt) inside the window, so
+// it bounds fan-out across resources; deliberately generous — a genuine learner
+// voting through a track lands well under 100/hour, while a script is capped by
+// orders of magnitude. Same soft-limit race caveat as PROGRAM_BURST_* (a couple of
+// concurrent requests can both read just-under-limit); harmless at this stake.
+export const RATING_BURST_PER_HOUR = 100;
+export const RATING_BURST_WINDOW_MS = 60 * 60 * 1000;
+
 // Phase 2.5f: targeted per-concept sourcing (sourceForConcept) budgets — the
 // thickener's spine-hole remediation. Deliberately smaller than the topic-level
 // FALLBACK_* above: a single narrow concept has far fewer good resources on the

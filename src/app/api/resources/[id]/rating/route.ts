@@ -16,6 +16,7 @@ import { withAuth } from '@/lib/api/with-auth';
 import { prisma } from '@/lib/db';
 import { recomputeResourceTrust } from '@/lib/curation/recompute-trust';
 import { maybeEvictLowTrust } from '@/lib/curation/evict-low-trust';
+import { ratingBurst } from '@/lib/services/rating-limits';
 
 export const runtime = 'nodejs';
 
@@ -51,6 +52,22 @@ export const POST = withAuth<Ctx>(async (req, session, ctx) => {
       );
     }
     throw err;
+  }
+
+  // A5: per-user burst cap — a DB-write-load guard against hammering (the unique
+  // vote constraint already blocks single-account manipulation). Checked after
+  // validation (a malformed body should say so, not hit a confusing 429) and
+  // before the resource lookup/write, so a rate-limited caller spends nothing.
+  const burst = await ratingBurst(session.userId);
+  if (!burst.allowed) {
+    return Response.json(
+      {
+        error: 'Too many rating changes recently — try again in a bit.',
+        code: 'RATE_LIMITED',
+        details: { used: burst.used, limit: burst.limit },
+      },
+      { status: 429 }
+    );
   }
 
   const { id: resourceId } = await ctx.params;
