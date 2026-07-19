@@ -8,13 +8,14 @@
 // progress (a vote needs an owner). Unknown resource id → non-enumerable 404.
 // No aggregate counts in the response (locked: plain toggles for beta — no
 // herding); the viewer's own vote hydrates server-side via loadViewerVotes.
-// Recompute runs sync in the request: it's two small queries + one update, and
-// A4's eviction check will hang off its return value in this same spot.
+// Recompute runs sync in the request: it's two small queries + one update. Its
+// return value feeds A4's eviction check (evict-low-trust.ts) right after.
 
 import { z, ZodError } from 'zod';
 import { withAuth } from '@/lib/api/with-auth';
 import { prisma } from '@/lib/db';
 import { recomputeResourceTrust } from '@/lib/curation/recompute-trust';
+import { maybeEvictLowTrust } from '@/lib/curation/evict-low-trust';
 
 export const runtime = 'nodejs';
 
@@ -74,6 +75,10 @@ export const POST = withAuth<Ctx>(async (req, session, ctx) => {
     });
   }
 
-  await recomputeResourceTrust(resourceId);
+  const recomputed = await recomputeResourceTrust(resourceId);
+  // A4: sustained negative consensus evicts (soft reject → link cleanup +
+  // readiness recompute). Sync — rare by construction, one transaction. The
+  // voter's response doesn't change either way (no aggregate leakage).
+  if (recomputed) await maybeEvictLowTrust(resourceId, recomputed);
   return Response.json({ ok: true, value: body.value });
 });

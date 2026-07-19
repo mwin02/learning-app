@@ -63,6 +63,26 @@ export const YT_MIN_VIEWS = 1_000;
 export const TRUST_VOTES_CONF_HALF = 5; // vote count at which confidence reaches 0.5
 export const TRUST_VOTES_WEIGHT = 0.7; // EvidenceSignal.weight — votes outrank YT engagement
 
+// Free-beta A4: automatic low-trust eviction (curation/evict-low-trust.ts).
+// A vote-time policy, not a cron: after the vote route recomputes trust, a
+// still-active resource with enough votes and a sub-floor score is soft-rejected
+// through applyPendingReview (deprecation + candidate-link cleanup + readiness
+// recompute — the 2.5g-5 machinery, no new removal path).
+//
+// Calibration against the A1 signal shape (weight .7, confidence n/(n+5)):
+//   - 0.8 prior (reputable source): unanimous dislikes reach 0.53 at n=20 and
+//     floor at 0.47 = base/(1+weight) — crossing 0.5 takes ~45 unanimous
+//     dislikes, so high-prior resources are effectively demote-only (A3 ranks
+//     them down long before eviction is on the table). Deliberate.
+//   - 0.5 prior (unseeded channel): 5 unanimous dislikes → 0.41 → evicted.
+//     This is where eviction should bite: unvetted sources with real consensus.
+//   - MIN_VOTES is the drive-by guard: without it, 2 lone dislikes would drag a
+//     0.5-prior to 0.46 < floor. At n≥5 a drive-by pair is harmless.
+// The floor sits far above TRUST_FLOOR (0.1 — the recompute clamp), so it can
+// actually fire; keep that ordering if either moves.
+export const TRUST_EVICT_FLOOR = 0.5;
+export const TRUST_EVICT_MIN_VOTES = 5;
+
 // Phase 2.5f: targeted per-concept sourcing (sourceForConcept) budgets — the
 // thickener's spine-hole remediation. Deliberately smaller than the topic-level
 // FALLBACK_* above: a single narrow concept has far fewer good resources on the
