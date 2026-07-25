@@ -24,7 +24,7 @@ first, <300 LOC per block, one branch per block, verification gate before commit
 | D4 | GCP: Cloud Run worker pools live | ops | D2, D3 |
 | B1 | Observability: GCP-native error reporting | code + ops | D3 (verified on Cloud Run) |
 | C1 | Warm campaign: `reset-maps` + `warm-paths` scripts | code | — |
-| C2 | Warm campaign: rebuild the 12 warm topics + review passes | ops | A*, D4, C1 |
+| C2 | Warm campaign: rebuild the 12 warm topics + review passes | ops | A*, D4, C1, **topic-filing T4** |
 
 Rationale for the order: ratings are platform-independent code and should be live before
 beta users arrive; the migration lands **before** the warm campaign so beta traffic and the
@@ -347,7 +347,35 @@ concurrency; the CourseRequest queue is for real learner requests. Verify agains
 
 ### C2 — the campaign itself (ops; no code)
 
-Runs **after D4** (cloud workers + Supabase library) — it is the shakedown run.
+Runs **after D4** (cloud workers + Supabase library) **and after topic-filing T4**
+(`docs/topic-filing-plan.md`) — it is the shakedown run for both.
+
+> ⚠️ **Added dependency on topic-filing T4 (2026-07-25).** Measured on the dev DB while
+> verifying C1: **933 of 1,927 resources (~48%) are unreachable by the warm set.** The warm
+> topic `statistics` has **0** rows while `probability-and-statistics` — a different,
+> agent-minted canonical with no relation edge — holds **456**; `discrete-mathematics` (276),
+> `calculus-for-machine-learning` (188), `differential-equations` (12) and `differentiation`
+> (1) are reachable from no warm topic at all. `data-structures-algorithms` and
+> `physics-mechanics` have 0 rows each, and the DSA curated slug has a drifted `TopicAlias`
+> twin (`data-structures-and-algorithms`) that its C1 relation edges don't key onto.
+>
+> Running C2 before T4 would web-source `statistics` from scratch and build a parallel
+> duplicate of an existing 456-row pool — wasted spend and a worse Path — then freeze the
+> mis-filing into 12 warm Paths. T4's bulk reclassification + drift merge is what makes the
+> library reachable; C2 should consume that, not race it.
+>
+> **OPEN, and it determines `WARM_TOPICS`:** which slug is canonical for the stats pool —
+> curated `statistics`, or agent-minted `probability-and-statistics`? T4 step 2 merges
+> `probability` → `probability-and-statistics` but does not reconcile it with the curated
+> slug. `WARM_TOPICS` derives from `TOPIC_SLUGS`, so `warm-paths.ts` follows whichever way
+> this is settled — but it must be settled in T4, not here.
+>
+> A second C1 measurement worth carrying in: warming `precalculus` cold reached 76
+> calculus-filed resources through the new relation edge and **skipped web discovery
+> entirely**, because the library rung counts raw hits rather than judged-`teaches`
+> survivors (locked tradeoff, `web-fallback.ts:171-173`). Three spine concepts relaxed to
+> hollow. Expect the same shape on any warm topic whose shelf is mostly borrowed — step 5
+> below should check for `relaxed`/hollow concepts, not just `spine_ready`.
 
 1. `reset-maps` against Supabase (should be near-empty of maps anyway post-D2).
 2. New topics need sources: check `data/seed-sources.ts` coverage for `sql`,
@@ -362,6 +390,9 @@ Runs **after D4** (cloud workers + Supabase library) — it is the shakedown run
    containers, `/review-pending-resources` batches (rejects self-propagate — fact 1).
 5. Re-remediate any Paths the rejects regressed (`scripts/remediate.ts`) until all 12 are
    `spine_ready`; spot-build one Track per topic and skim it in the notebook UI.
+   `spine_ready` is necessary but NOT sufficient — also check each Path for
+   `Concept.primaryRelaxed` rows and the map review's `hollow` findings, which is where a
+   borrowed-shelf topic hides its gaps (see the C1 precalculus measurement above).
 6. Record per-topic outcomes (sources used, trust distribution, holes escalated) in the
    campaign conversation for the beta announcement's honesty.
 
