@@ -86,6 +86,7 @@ model Resource {
   conceptResources     ConceptResource[]
   sourcedFor           ResourceSourcedFor[]
   ratings              ResourceRating[]
+  topics               ResourceTopic[]
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
 
@@ -94,6 +95,56 @@ model Resource {
   @@index([sourceId])
   @@index([parentResourceId])
   @@unique([parentResourceId, orderInParent])
+}
+
+// Topic filing T1 — a Resource's membership in a topic. Membership is genuinely
+// many-to-many (a Khan "Functions" unit is both algebra material and a discrete-math
+// prerequisite); the old scalar `Resource.topic` recorded the topic that was SEARCHED,
+// not the topic the resource is about. See docs/topic-filing-plan.md.
+//
+// `Resource.topic` SURVIVES as a denormalized mirror of the primary membership — every
+// existing read keeps working and now means "primary topic". The mirror is maintained by
+// exactly one writer: setPrimaryTopic (src/lib/curation/resource-topics.ts). Nothing else
+// may write `isPrimary` or `Resource.topic`, or the mirror rots.
+model ResourceTopic {
+  id         String            @id @default(cuid())
+  resourceId String
+  resource   Resource          @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  topic      String
+  // Classifier confidence / k-NN purity at filing time. Retrieval may gate on this
+  // (`minRelevance`, T4) and ranking may blend it — neither does yet. 1.0 on
+  // `inherited` backfill rows means "unknown", NOT "certain": any future threshold
+  // must be origin-aware or it gates verified memberships while letting unverified
+  // legacy labels through.
+  relevance  Float             @default(1.0)
+  origin     TopicFilingOrigin @default(classifier)
+  // Exactly one true per resource; mirrored to Resource.topic. Enforced by the
+  // setPrimaryTopic seam (which locks the Resource row, so concurrent refiles
+  // serialize) + the backfill assertion + an integration test + the differential
+  // harness's drift check — deliberately NOT a partial unique index, which Prisma
+  // can't model and which would become a third permanent entry in AGENTS.md's
+  // never-drop table. Escalate to the index only if a violation shows up in
+  // practice, and update AGENTS.md in the same PR.
+  isPrimary  Boolean           @default(false)
+  // Filing uncertainty lives HERE, not on Resource.status — quality review and filing
+  // confidence are orthogonal axes (and discovery rows are already born
+  // `pending_review`, which retrieval admits, so a status flip carries no signal).
+  // Contested SECONDARIES are excluded from retrieval; a contested PRIMARY stays
+  // retrievable, so parking a doubt never orphans a row.
+  contested  Boolean           @default(false)
+  createdAt  DateTime          @default(now())
+
+  @@unique([resourceId, topic])
+  // Covers the retrieval EXISTS subquery: `topic IN (…)` then the correlated join key.
+  @@index([topic, resourceId])
+}
+
+enum TopicFilingOrigin {
+  inherited // T1 backfill from the legacy scalar
+  discovery // request topic; classifier skipped or unavailable
+  classifier // proposed by classify-topic and cleared the guardrail
+  collision // a second topic's discovery hit the same URL (T3)
+  review // a human set it via the review/curation surface
 }
 
 // Free-beta A1: learner up/down votes on resources. RESOURCE-GLOBAL by design —

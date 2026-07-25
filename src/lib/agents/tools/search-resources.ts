@@ -109,10 +109,31 @@ export function buildConditions(params: SearchParams): Prisma.Sql[] {
     excludeGenerated = false,
   } = params;
   const conds: Prisma.Sql[] = [];
-  if (topics && topics.length > 0) {
-    conds.push(Prisma.sql`topic IN (${Prisma.join(topics)})`);
-  } else if (topic) {
-    conds.push(Prisma.sql`topic = ${topic}`);
+  // Topic filing T1: topic membership is many-to-many (ResourceTopic), so scoping is a
+  // semi-join against the membership table rather than a test of the scalar mirror.
+  //
+  // ⚠️ EXISTS, never JOIN — load-bearing, not stylistic. A plain JOIN against a
+  // multi-row membership table multiplies result rows whenever a resource matches two
+  // of the requested topics, and every query in this module selects ${COLS} with no
+  // DISTINCT: a `javascript-react` search (two topics) would hand the judge duplicate
+  // candidates, double-counting them in ranking and in the fast path's wholesale
+  // return. EXISTS is a semi-join — at most one row out, short-circuiting on first match.
+  //
+  // The raw queries reference bare column names against FROM "Resource", so the
+  // correlation must be qualified ("Resource".id) to stay unambiguous next to `rt`.
+  //
+  // `(isPrimary OR NOT contested)` is the uncertainty rule: a PRIMARY membership always
+  // admits the row (parking a filing doubt must never orphan a resource), a SECONDARY
+  // only when it isn't contested. Another uncontested membership can still admit a row
+  // whose secondary here is contested — the test is per-membership, by design.
+  const wanted = topics && topics.length > 0 ? topics : topic ? [topic] : [];
+  if (wanted.length > 0) {
+    conds.push(Prisma.sql`EXISTS (
+      SELECT 1 FROM "ResourceTopic" rt
+      WHERE rt."resourceId" = "Resource".id
+        AND rt.topic IN (${Prisma.join(wanted)})
+        AND (rt."isPrimary" OR NOT rt.contested)
+    )`);
   }
   if (difficulty) conds.push(Prisma.sql`difficulty::text = ${difficulty}`);
   if (types && types.length > 0) {
