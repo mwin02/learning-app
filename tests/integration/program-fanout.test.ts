@@ -4,6 +4,10 @@
 // scripts/verify-program-fanout.ts (R3).
 //
 // Skips cleanly when DATABASE_URL is unset (describeDb). Run with the worker stopped.
+// The child CourseRequests this file leaves in `queued` are claimable by anything that
+// scans the whole queue — a live worker, or course-request-queue.test.ts running at the
+// same time (which flips them to `running` and breaks the `status === 'queued'` assert
+// below). The integration project therefore runs files serially; see vitest.config.ts.
 import { beforeAll, afterAll, it, expect } from 'vitest';
 import { ProgramStatus, CourseRequestStatus } from '@prisma/client';
 import { prisma } from '@/lib/db';
