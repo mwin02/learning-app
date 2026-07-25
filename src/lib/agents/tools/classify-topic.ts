@@ -1,19 +1,27 @@
-// Phase 2.5 (Block 2a): discovery-time topic classification.
+// Phase 2.5 (Block 2a) — discovery-time topic classification.
+// Topic filing T2b — reopened from a CLOSED to an OPEN vocabulary.
 //
-// Web discovery is scoped to a single requesting topic, and the pre-2a behavior
-// stamped that request topic onto every find — so a generic JavaScript tutorial
-// discovered while building a `javascript-react` path was permanently filed
-// under `javascript-react` and invisible to a `javascript` path. This files
-// each discovered resource under its true home topic instead.
+// Web discovery is scoped to a single requesting topic, and the pre-2a behavior stamped
+// that request topic onto every find — so a generic JavaScript tutorial discovered while
+// building a `javascript-react` path was permanently filed under `javascript-react` and
+// invisible to a `javascript` path. This files each discovered resource under its true
+// home topic instead.
 //
-// The choice is CLOSED and BOUNDED: a resource may only be filed under the
-// request topic or one of its related topics (relatedTopics(requestTopic)) —
-// never an unrelated subject. That bound is the "subject ceiling": a calculus
-// find can never be relabeled to linear-algebra because they share no relation.
-// When the candidate set has a single member (the common case — only the JS
-// pair has a relation today), there is nothing to decide and the caller skips
-// this entirely. Any failure or out-of-set answer degrades to the request topic
-// (no worse than the pre-2a behavior), mirroring the canonicalizer's resilience.
+// ⚠️ What changed in T2b. The 2a design bounded the choice to
+// `relatedTopics(requestTopic)` — the "subject ceiling", meant to stop a calculus find
+// being relabelled linear-algebra. The bound was the wrong instrument: TOPIC_RELATIONS
+// has five keys, so the ceiling also excluded every CORRECT topic that merely lacked an
+// edge or did not exist yet, and for topics with no edges the classifier was skipped
+// outright — 1,152 of 1,926 rows (60%) were filed with no classification at all.
+//
+// The vocabulary is now every canonical (`listCanonicals()`), and the ceiling moved to
+// EVIDENCE: src/lib/curation/topic-knn.ts tests each proposal against the resource's
+// embedding neighbourhood before it becomes a membership. So this function's job shrank
+// — it PROPOSES, ranked, and no longer decides. A wrong proposal is caught downstream;
+// a proposal that is merely unusual is no longer impossible.
+//
+// Degradation is unchanged: any failure, or an out-of-vocabulary answer, leaves the url
+// out of the map, and the caller files under the request topic exactly as before.
 
 import { generateObject } from 'ai';
 import { z } from 'zod';
@@ -26,24 +34,44 @@ export type ClassifiableResource = {
   conceptsTaught: string[];
 };
 
+// Ranked, most confident first. The guardrail takes the head as the proposed primary and
+// tests the tail for secondary memberships, so ORDER is the confidence signal — no
+// separate score is asked for, because nothing consumes it: `relevance` is measured k-NN
+// purity, not the model's self-assessment.
+const MAX_PROPOSALS = 3;
+
 const ClassificationSchema = z.object({
-  results: z.array(z.object({ url: z.string().url(), topic: z.string() })),
+  results: z.array(
+    z.object({
+      url: z.string().url(),
+      topics: z.array(z.string()).min(1).max(MAX_PROPOSALS),
+    }),
+  ),
 });
 
-// Returns url -> filed topic for the resources it could confidently place.
-// A url absent from the map (or any failure) means the caller should fall back
-// to the request topic. Topics outside `candidates` are dropped, not trusted.
+// Returns url -> ranked candidate topics. A url absent from the map (or any failure)
+// means the caller should fall back to the request topic. Topics outside `candidates`
+// are dropped, not trusted — the model is grounded on the vocabulary, but a hallucinated
+// slug would mint a shelf nothing else can reach.
 export async function classifyDiscoveryTopics(
   resources: ClassifiableResource[],
   candidates: string[],
   fallback: string,
-): Promise<Map<string, string>> {
-  const map = new Map<string, string>();
-  // Nothing to decide: a single candidate (or none) means every resource is the
-  // request topic. Callers already guard on this, but keep the function honest.
-  if (resources.length === 0 || candidates.length <= 1) return map;
+): Promise<Map<string, string[]>> {
+  const map = new Map<string, string[]>();
+  // An empty vocabulary has nothing to propose from. (The old `candidates.length <= 1`
+  // early return is deliberately gone: with the full canonical list there is always
+  // something to decide, and that guard — plus its caller-side twin — is exactly what
+  // made the classifier a no-op for 60% of the library.)
+  if (resources.length === 0 || candidates.length === 0) return map;
 
-  const allowed = new Set(candidates);
+  // The fallback is trusted even when it is outside the vocabulary — it is the caller's
+  // own request topic, not something the model invented, and a topic can legitimately be
+  // un-canonicalized (measured 2026-07-25: a `rust` discovery run, where none of the 20
+  // canonicals fit). Without this, an explicit "none of these fit" verdict is
+  // indistinguishable from the model failing, and the guardrail logs `no-evidence` for
+  // what was actually a deliberate answer.
+  const allowed = new Set([...candidates, fallback]);
   const { model, temperature, maxOutputTokens } = getModel('topicClassifier');
 
   const input = resources.map((r) => ({
@@ -61,9 +89,9 @@ export async function classifyDiscoveryTopics(
       schema: ClassificationSchema,
       system: CLASSIFY_SYSTEM_PROMPT,
       prompt: [
-        'Candidate topics (choose exactly one per resource, by slug):',
+        'Candidate topics (use these slugs exactly):',
         JSON.stringify(candidates),
-        `If a resource does not clearly fit a more specific topic, choose "${fallback}".`,
+        `If a resource does not clearly fit any candidate, return "${fallback}" alone.`,
         '',
         'Resources to file:',
         JSON.stringify(input, null, 2),
@@ -71,14 +99,13 @@ export async function classifyDiscoveryTopics(
     });
 
     for (const r of result.object.results) {
-      // Trust only in-set answers; anything else degrades to the request topic
-      // by virtue of being left out of the map.
-      if (allowed.has(r.topic)) map.set(r.url, r.topic);
+      const topics = [...new Set(r.topics)].filter((t) => allowed.has(t)).slice(0, MAX_PROPOSALS);
+      if (topics.length > 0) map.set(r.url, topics);
     }
   } catch (err) {
     console.warn('[classify-topic] classification failed, filing under request topic', {
       count: resources.length,
-      candidates,
+      vocabulary: candidates.length,
       error: err instanceof Error ? err.message : String(err),
     });
   }
@@ -86,10 +113,13 @@ export async function classifyDiscoveryTopics(
   return map;
 }
 
-const CLASSIFY_SYSTEM_PROMPT = `You file a freshly discovered learning resource under its home topic, chosen from a fixed list of candidate topic slugs.
+const CLASSIFY_SYSTEM_PROMPT = `You file a freshly discovered learning resource under the topic slugs it belongs to, chosen from a fixed list of candidates.
 
 Rules:
-- Return one entry per input resource, keyed by its url, with a "topic" equal to one of the candidate slugs exactly.
+- Return one entry per input resource, keyed by its url, with "topics" ranked most-confident first.
+- Return ONE topic unless the resource genuinely teaches more than one subject well enough that a learner of the second subject would want it. Two or three topics are for a resource that squarely belongs on several shelves, not for hedging between guesses.
+- Every slug must appear in the candidate list exactly. Never invent a slug, and never return a topic you are merely unsure about — omit it instead.
 - Choose the most SPECIFIC candidate the resource squarely belongs to. A specialization slug (e.g. "javascript-react") is for resources that actually teach or require that specialization; a foundational slug (e.g. "javascript") is for resources covering only the general subject.
 - When a resource covers only the foundational subject and does NOT require the specialization, choose the foundational topic — even though it was discovered while building the specialization's library.
-- Be conservative: when genuinely unsure which candidate fits, choose the fallback topic given in the prompt rather than guessing.`;
+- The topic a resource was DISCOVERED under carries no weight. File it where it belongs, not where it was found.
+- Be conservative: when genuinely unsure, return the fallback topic given in the prompt rather than guessing.`;

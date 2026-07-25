@@ -511,6 +511,52 @@ page joining every CS topic.
 `contested = true` on the membership (not `Resource.status` — see the Uncertainty decision);
 a human or T3's minting resolves them.
 
+### As built — T2a + T2b (2026-07-26)
+
+Seven deviations from the specs above. They are load-bearing for T3/T4; read them before
+building either.
+
+1. **The margin pre-filter was not implemented; k-NN runs unconditionally.** Skipping the
+   k-NN query for margin-clearing rows would leave those memberships with no measured
+   purity to put in `relevance`, and the query it saves is one indexed pgvector lookup on
+   a batch of 3–10 rows. **`TopicCentroid` is therefore unconsumed until T4**, where
+   skipping k-NN across 1,152 rows actually pays. It is built, refreshed by
+   `scripts/embed-resources.ts`, and verified — just not read yet.
+2. **New degradation row: `MIN_VOUCHABLE_POOL` (= k = 10).** Measured 2026-07-25: **10 of
+   the 20 canonicals have no pool at all** (`precalculus`, `javascript`, `statistics`,
+   `data-structures-algorithms`, …). k-NN can never vouch for a topic with fewer than k
+   members, so as specced the guardrail would have rejected every correct proposal for
+   half the vocabulary and the self-widening property would deadlock — an empty pool could
+   never start filling. Such proposals are **accepted with `contested = true`** instead,
+   the same treatment T3 gives a freshly minted topic.
+3. **The request topic is a trailing secondary candidate**, held to the same purity bar.
+   Otherwise the run that paid for the discovery could not retrieve it: open-vocabulary
+   filing can land on a topic `relatedTopics` widening does not reach. Consistent with
+   T3's collision rule — the searched topic may assert membership, it just gets no free
+   pass.
+4. **`MIN_SECONDARY_PURITY = 0.2` is uncalibrated.** The calibration measured top-1
+   plurality agreement, not a secondary-label distribution. T4's recalibration settles it.
+5. **Memberships are written at insert (T2b), including for children.** Not deferred to
+   T3 as sequenced: post-T1 retrieval is `EXISTS` over `ResourceTopic`, so a filing
+   verdict with no membership row is invisible — T2b would have had no observable effect.
+   Written inside `upsertResource`'s transaction via `setPrimaryTopic(…, { tx })`.
+   **T3's remaining scope is minting + collision handling only.**
+6. **The classifier trusts the fallback topic even when it is outside the vocabulary** —
+   it is the caller's own request topic, not a model invention, and a topic can
+   legitimately be un-canonicalized. Without this, "none of these fit" is
+   indistinguishable from the classifier failing.
+7. **k-NN is snapshotted for the whole batch before the first insert.** Querying inside
+   the upsert loop made filing order-dependent — each inserted row joins the library and
+   becomes a neighbour for the rows after it, so a batch bootstrapped its own evidence
+   (observed on a cold `rust` run: request-topic purity climbing 0.0 → 0.1 → 0.2 across
+   three inserts of one batch).
+
+**Live confirmation of the defect being fixed** (2026-07-26): three resources discovered
+under `statistics` — no pool, **no `TOPIC_RELATIONS` edge**, so pre-T2b the classifier was
+skipped and all three would have been stamped `statistics` forever — were classified into
+`probability-and-statistics` and cleared the guardrail at purity **1.0** (all 10
+neighbours agreed), landing as `classifier` memberships.
+
 ---
 
 ## T3 — Discovery may mint topics; collisions add memberships

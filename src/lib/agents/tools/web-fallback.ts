@@ -42,6 +42,8 @@ import { classifyDiscoveryTopics } from '@/lib/agents/tools/classify-topic';
 import { searchYouTubeForConcept, type YoutubeSourcedResource } from '@/lib/agents/tools/youtube-search';
 import { deriveSourcedForPairs, type SourcedForRow } from '@/lib/agents/tools/sourced-for';
 import { safeEmbedBatch } from '@/lib/ai/embeddings';
+import { listCanonicals } from '@/lib/agents/topic-registry';
+import { decideFiling, knnNeighbourTopics, topicPools } from '@/lib/curation/topic-knn';
 import { relatedTopics } from '@/types/resource';
 
 const RAW_RESOURCE_TYPES = ['article', 'video', 'course', 'interactive', 'docs', 'book'] as const;
@@ -399,24 +401,23 @@ async function persistDiscovered(
   const vocab = await loadTopicVocab(topic);
   const canonical = await canonicalizeTags(atomicRows, vocab, abortSignal);
 
-  // File each survivor under its home topic rather than blindly stamping the
-  // request topic. Bounded to the request topic ∪ its related topics; a single
-  // candidate (the common case) skips the classifier entirely. Decomposed
-  // children inherit the parent's filed topic via createChild.
-  const candidateTopics = relatedTopics(topic);
-  const filedTopicByUrl =
-    candidateTopics.length > 1
-      ? await classifyDiscoveryTopics(
-          finalRows.map((r) => ({
-            url: r.url,
-            title: r.title,
-            summary: r.summary,
-            conceptsTaught: r.rawConceptsTaught,
-          })),
-          candidateTopics,
-          topic,
-        )
-      : new Map<string, string>();
+  // File each survivor under its home topic rather than blindly stamping the request
+  // topic. Topic filing T2b: the vocabulary is now every canonical, not
+  // relatedTopics(topic) — and the caller-side skip that made this a no-op for topics
+  // with no edges (60% of the library) is gone with it. The classifier only PROPOSES;
+  // decideFiling tests each proposal against the resource's embedding neighbourhood
+  // below. Decomposed children inherit the parent's filing via createChild.
+  const vocabulary = await listCanonicals();
+  const proposalsByUrl = await classifyDiscoveryTopics(
+    finalRows.map((r) => ({
+      url: r.url,
+      title: r.title,
+      summary: r.summary,
+      conceptsTaught: r.rawConceptsTaught,
+    })),
+    vocabulary,
+    topic,
+  );
 
   // The tags each row is actually persisted with: canonicalized for atomic survivors,
   // raw for containers (canonicalizeTags only covers the atomic set). Hoisted out of the
@@ -447,15 +448,39 @@ async function persistDiscovered(
     })),
   );
 
+  // Guardrail evidence, gathered for the WHOLE BATCH BEFORE the first insert. Doing this
+  // inside the upsert loop instead would make filing order-dependent: each inserted row
+  // joins the library and becomes a neighbour for the rows after it, so a batch could
+  // bootstrap its own evidence (measured 2026-07-25 on a cold `rust` run — the request
+  // topic's purity climbed 0.0 → 0.1 → 0.2 across three inserts of the same batch).
+  // A snapshot makes the batch's decisions independent of each other and of their order.
+  const pools = await topicPools();
+  const neighbourhoods = await Promise.all(
+    embeddings.map((vector) => (vector ? knnNeighbourTopics(vector) : Promise.resolve([]))),
+  );
+
   let insertedCount = 0;
   let skippedCount = 0;
   let reclassifiedCount = 0;
+  let contestedCount = 0;
   const insertedIds: string[] = [];
   const upsertedRows: SourcedForRow[] = [];
   for (const [i, { row, result }] of decomposed.entries()) {
     const tags = tagsByUrl.get(row.url)!;
-    const filedTopic = filedTopicByUrl.get(row.url) ?? topic;
+    // The guardrail: a proposal only becomes a membership if the resource's embedding
+    // actually sits among that topic's resources. No embedding (the batch embed failed)
+    // means no evidence — decideFiling degrades to the request topic on an empty
+    // neighbour list, which is the pre-T2b behaviour.
+    const vector = embeddings[i];
+    const filing = decideFiling({
+      proposals: proposalsByUrl.get(row.url) ?? [],
+      requestTopic: topic,
+      neighbourTopics: neighbourhoods[i],
+      pools,
+    });
+    const filedTopic = filing.primary.topic;
     if (filedTopic !== topic) reclassifiedCount += 1;
+    if (filing.primary.contested) contestedCount += 1;
     const { outcome, atomicIds, resourceId, decompositionStatus } = await upsertResource(
       filedTopic,
       {
@@ -472,8 +497,18 @@ async function persistDiscovered(
         youtube: row.youtube,
       },
       result,
-      embeddings[i],
+      vector,
+      filing,
     );
+    console.log('[web-fallback] filed', {
+      url: row.url,
+      requestTopic: topic,
+      filedTopic,
+      reason: filing.reason,
+      relevance: Number(filing.primary.relevance.toFixed(2)),
+      contested: filing.primary.contested,
+      secondaries: filing.secondaries.map((s) => s.topic),
+    });
     if (outcome === 'inserted') insertedCount += 1;
     else skippedCount += 1;
     insertedIds.push(...atomicIds);
@@ -508,6 +543,7 @@ async function persistDiscovered(
     insertedCount,
     skippedCount,
     reclassifiedCount,
+    contestedCount,
     sourcedForPairs: sourcedForPairs.length,
     targetMet: finalRows.length >= targetCount,
   });
