@@ -41,6 +41,7 @@ import { loadTopicVocab } from '@/lib/agents/decomposition/concepts';
 import { classifyDiscoveryTopics } from '@/lib/agents/tools/classify-topic';
 import { searchYouTubeForConcept, type YoutubeSourcedResource } from '@/lib/agents/tools/youtube-search';
 import { deriveSourcedForPairs, type SourcedForRow } from '@/lib/agents/tools/sourced-for';
+import { safeEmbedBatch } from '@/lib/ai/embeddings';
 import { relatedTopics } from '@/types/resource';
 
 const RAW_RESOURCE_TYPES = ['article', 'video', 'course', 'interactive', 'docs', 'book'] as const;
@@ -417,16 +418,42 @@ async function persistDiscovered(
         )
       : new Map<string, string>();
 
+  // The tags each row is actually persisted with: canonicalized for atomic survivors,
+  // raw for containers (canonicalizeTags only covers the atomic set). Hoisted out of the
+  // upsert loop because the embedding below must be built from the SAME text the row
+  // carries — embed the raw tags and the vector wouldn't match what a re-embed produces.
+  const tagsByUrl = new Map(
+    decomposed.map(({ row }) => [
+      row.url,
+      canonical.get(row.url) ?? {
+        prerequisiteConcepts: row.rawPrerequisiteConcepts,
+        conceptsTaught: row.rawConceptsTaught,
+      },
+    ]),
+  );
+
+  // Topic filing T2a: embed the batch BEFORE inserting anything, so the row is written
+  // already embedded and the T2b filing guardrail has its input at filing time — embeds
+  // used to run post-commit, which would leave every fresh find on the "no embedding
+  // yet" degradation path at the guardrail's primary application point. One batched
+  // call; best-effort, so a failure just returns nulls and the post-commit embed in
+  // upsertResource still covers the atomic rows.
+  abortSignal?.throwIfAborted();
+  const embeddings = await safeEmbedBatch(
+    decomposed.map(({ row }) => ({
+      title: row.title,
+      summary: row.summary,
+      conceptsTaught: tagsByUrl.get(row.url)!.conceptsTaught,
+    })),
+  );
+
   let insertedCount = 0;
   let skippedCount = 0;
   let reclassifiedCount = 0;
   const insertedIds: string[] = [];
   const upsertedRows: SourcedForRow[] = [];
-  for (const { row, result } of decomposed) {
-    const tags = canonical.get(row.url) ?? {
-      prerequisiteConcepts: row.rawPrerequisiteConcepts,
-      conceptsTaught: row.rawConceptsTaught,
-    };
+  for (const [i, { row, result }] of decomposed.entries()) {
+    const tags = tagsByUrl.get(row.url)!;
     const filedTopic = filedTopicByUrl.get(row.url) ?? topic;
     if (filedTopic !== topic) reclassifiedCount += 1;
     const { outcome, atomicIds, resourceId, decompositionStatus } = await upsertResource(
@@ -445,6 +472,7 @@ async function persistDiscovered(
         youtube: row.youtube,
       },
       result,
+      embeddings[i],
     );
     if (outcome === 'inserted') insertedCount += 1;
     else skippedCount += 1;

@@ -147,6 +147,29 @@ enum TopicFilingOrigin {
   review // a human set it via the review/curation surface
 }
 
+// Topic filing T2a — the mean embedding of a topic's pool, one row per topic.
+//
+// Feeds the CHEAP PRE-FILTER of the T2b filing guardrail: a proposed membership whose
+// margin (similarity to its own centroid minus the best other centroid) clears δ is
+// uncontested and skips the expensive k-NN query. The absolute similarity is NOT a
+// filing signal — an absolute cosine threshold was measured and rejected
+// (docs/topic-filing-plan.md, T2 calibration) — though it doubles as a decent
+// junk-leaf detector.
+//
+// ⚠️ `centroid` is a REQUIRED pgvector column, which Prisma has no type for. That makes
+// the whole model raw-SQL-only: `prisma.topicCentroid.create` cannot supply the column
+// and will fail. Every read and write goes through src/lib/curation/topic-centroids.ts,
+// exactly like `Resource.embedding`. No hnsw index — this table is ~a dozen rows, a seq
+// scan is cheaper than the index, and it keeps AGENTS.md's never-drop table at two.
+model TopicCentroid {
+  topic       String                     @id
+  centroid    Unsupported("vector(768)")
+  // Rows that went into the mean. The guardrail skips the pre-filter below
+  // MIN_CENTROID_MEMBERS (T2b) — too small a pool to characterize a centroid.
+  memberCount Int
+  computedAt  DateTime
+}
+
 // Free-beta A1: learner up/down votes on resources. RESOURCE-GLOBAL by design —
 // a dislike means "bad resource", not "bad fit for this concept" (per-concept fit
 // stays the judge's coverageScore), so one vote per user per resource, ±1,

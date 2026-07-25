@@ -14,7 +14,7 @@
 // here.
 
 import { prisma } from '@/lib/db';
-import { safeEmbedResource } from '@/lib/ai/embeddings';
+import { safeEmbedResource, storeEmbedding } from '@/lib/ai/embeddings';
 import { safeClassifyAndPersist } from '@/lib/curation/embeddability';
 import { computeTrustScore } from '@/lib/curation/trust-score';
 import { youtubeEngagementSignal } from '@/lib/curation/youtube-signal';
@@ -63,12 +63,32 @@ type TxClient = Omit<
 
 // Rows queued for post-commit per-resource work (embed + 2.5j embeddability probe)
 // once the transaction commits. `url` feeds the embeddability classifier.
-type EmbedTask = { id: string; url: string; title: string; summary: string; conceptsTaught: string[] };
+//
+// ⚠️ This list is ALSO the pickable-atomic id set — `atomicIds` (the retrieval session's
+// discovery allowlist) is derived from it below. Never push a container onto it, even
+// though containers are now embedded (T2a): membership here means "pickable", not
+// "embedded". `embedded: true` marks a row whose vector was already written pre-insert,
+// so the post-commit loop skips the redundant embed call but still runs the
+// embeddability probe.
+type EmbedTask = {
+  id: string;
+  url: string;
+  title: string;
+  summary: string;
+  conceptsTaught: string[];
+  embedded?: boolean;
+};
 
 export async function upsertResource(
   topic: string,
   resource: UpsertResourceInput,
   decomposition: DecompositionResult,
+  // Topic filing T2a: the parent's embedding, computed by the caller BEFORE the insert
+  // (persistDiscovered) from the same title + summary + conceptsTaught the post-commit
+  // embed would use. Written inside the transaction, so the row arrives embedded and the
+  // T2b filing guardrail has its input at filing time instead of after commit. Optional:
+  // callers without a vector (seed/verify paths) keep today's post-commit behaviour.
+  embedding?: number[] | null,
 ): Promise<UpsertOutcome> {
   // F8: dedup on the canonical URL — strip tracking params / fragment / trailing slash /
   // host case so a trivially-different URL for the same page collapses onto one row.
@@ -138,9 +158,18 @@ export async function upsertResource(
         select: { id: true },
       });
       parentId = parent.id;
-      // A decomposed container is the unpickable parent; an atomic resource has
-      // no children. Either way the parent itself is only embedded when it can
-      // be picked (atomic) — embedding an unpickable container wastes a call.
+      // T2a: the parent is embedded whatever its decompositionStatus, container
+      // included. The old atomic-only gate read "embedding an unpickable container
+      // wastes a call" — true while an embedding only bought PICKABILITY, false now
+      // that it also buys FILING EVIDENCE. Containers were the blind spot: the
+      // motivating defect (a 45-leaf Khan unit filed under discrete-mathematics) is a
+      // container mis-filing, and its children inherit the topic, multiplying one
+      // mistake by 45. Retrieval stays container-free via the decompositionStatus
+      // predicate in searchResources, not via embedding presence.
+      if (embedding) await storeEmbedding(parent.id, embedding, tx);
+      // ...but only an ATOMIC parent joins embedTasks, which is the pickable set that
+      // becomes `atomicIds` (see the type comment). Already-embedded rows still need
+      // their embeddability probe, hence the flag rather than an early exit.
       if (decomposition.status === 'atomic') {
         embedTasks.push({
           id: parent.id,
@@ -148,6 +177,7 @@ export async function upsertResource(
           title: resource.title,
           summary: resource.summary,
           conceptsTaught: resource.conceptsTaught,
+          embedded: Boolean(embedding),
         });
       }
 
@@ -180,11 +210,15 @@ export async function upsertResource(
   // the same pickable set (only resources that reach a Lesson need a deliveryMode);
   // also best-effort, retried by the backfill on `embedCheckedAt IS NULL`.
   for (const t of embedTasks) {
-    await safeEmbedResource(t.id, {
-      title: t.title,
-      summary: t.summary,
-      conceptsTaught: t.conceptsTaught,
-    });
+    // Skipped for a parent whose vector was written pre-insert (T2a) — same text, same
+    // model, so re-embedding it would only spend the call twice.
+    if (!t.embedded) {
+      await safeEmbedResource(t.id, {
+        title: t.title,
+        summary: t.summary,
+        conceptsTaught: t.conceptsTaught,
+      });
+    }
     await safeClassifyAndPersist(t.id, t.url);
   }
 
