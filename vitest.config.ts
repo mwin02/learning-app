@@ -31,6 +31,15 @@ export default defineConfig({
           include: ['tests/integration/**/*.test.ts'],
           environment: 'node',
           setupFiles: ['./tests/integration/setup.ts'],
+          // Run integration FILES one at a time. Every file writes to the same shared dev
+          // DB, and the queue primitives (claimNextQueued / reclaimStale / queueDepth)
+          // scan the WHOLE CourseRequest table by design — so a sibling file creating
+          // rows mid-assertion is indistinguishable from real backlog. That cuts both
+          // ways: course-request-queue's claims steal sibling `queued` rows, and sibling
+          // rows inflate its depth deltas. Scoping the assertions to marker rows would
+          // hide exactly the global-scan semantics these tests exist to verify, so
+          // serialize instead. Costs a few seconds; the whole project runs in ~10s.
+          fileParallelism: false,
         },
       },
     ],
