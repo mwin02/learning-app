@@ -1,6 +1,8 @@
 # Topic Filing Plan — multi-topic membership, open-vocabulary filing
 
-**Drafted 2026-07-25.** Fixes a structural defect in resource ingestion: a discovered
+**Drafted 2026-07-25; revised 2026-07-25 after two consolidated design reviews** (guardrail
+timing, container embedding, uncertainty carrier, collision guardrail, resequencing).
+Fixes a structural defect in resource ingestion: a discovered
 resource is permanently filed under the topic that was *searched*, not the topic it is
 actually about, and the set of topics it may be filed under is a hand-maintained edge list
 in code. This doc is the source of truth for the fix: every block below is meant to be
@@ -103,9 +105,11 @@ the allowlist — and the correction has two halves:
 | Membership model | New `ResourceTopic` join table. `Resource.topic` **stays** as a denormalized mirror of the primary membership — non-breaking rollout, and the `@@index([topic, status, tier])` keeps working. |
 | Filing vocabulary | Full canonical vocabulary (`listCanonicals()` = `TOPIC_SLUGS ∪ TopicAlias.canonical`), **not** `relatedTopics(requestTopic)`. |
 | Filing guardrail | **k-NN label purity** over the resource's embedding (k=10), with a centroid-margin pre-filter — replacing the allowlist ceiling. Calibrated 2026-07-25; the originally-proposed absolute cosine threshold was **measured and rejected** (see T2). Self-widening: a topic gets easier to file into as its pool grows, with no deploy. |
-| Uncertainty | Park, never guess. Below threshold (or cold-start topic) → file under the request topic **and** set `status='pending_review'` so it lands in the existing review queue. |
+| Guardrail timing | The embedding is computed **pre-insert**, in `persistDiscovered`, so the guardrail runs at filing time. Its input (`title` + `summary` + `conceptsTaught`, [upsert-resource.ts:183–187](../src/lib/agents/decomposition/upsert-resource.ts)) is fully known before insert; without this, every fresh find hits the "no embedding yet" degradation row and the guardrail is dead code at its primary application point (embeds are post-commit, [:177–189](../src/lib/agents/decomposition/upsert-resource.ts)). The vector is passed into the transaction; the post-commit `safeEmbedResource` becomes a no-op for these rows. Changes `upsertResource`'s signature. |
+| Containers | **Containers get embedded too** — one extra call each. The motivating case *is* a container, and containers currently never enter `embedTasks` ([upsert-resource.ts:144–152](../src/lib/agents/decomposition/upsert-resource.ts)), so the guardrail was structurally blind to the exact defect class this plan exists for — and children inherit the container's topic, multiplying one mistake by 45. Safe: retrieval already excludes non-atomic rows via the default `decompositionStatus = 'atomic'` predicate ([search-resources.ts:126](../src/lib/agents/tools/search-resources.ts)), not by embedding presence. The container's guardrail verdict governs what its children inherit. |
+| Uncertainty | Park, never guess — carried on the **membership** (`ResourceTopic.contested`), **not** on `Resource.status`. Discovery rows are already born `pending_review` ([upsert-resource.ts:133](../src/lib/agents/decomposition/upsert-resource.ts), children `:162`) and `DEFAULT_STATUSES` includes `pending_review` ([search-resources.ts:87](../src/lib/agents/tools/search-resources.ts)), so a status flip adds no distinguishable signal and "parked" rows would stay retrievable anyway. Quality review and filing confidence are orthogonal axes. Contested **secondaries** are excluded from retrieval; a contested **primary** stays retrievable (never orphan a row). |
 | New topics from discovery | Allowed, but only through the existing `runTopicGate` (tiers 1–2 short-circuit, tier 3 mints + persists the alias). A new topic with no Path is harmless — it waits in the library until a learner asks. |
-| URL collisions | A URL discovered under a second topic **adds a membership** instead of being skipped. Two topics finding the same page is evidence, not a conflict. |
+| URL collisions | A URL discovered under a second topic adds a membership **only after clearing the same k-NN guardrail**. A collision is the *searched* topic asserting membership — the exact signal "The modelling error" rejects — so it gets no free pass. Collision rows: `relevance` = k-NN purity (never the schema default 1.0, which would outrank guarded classifier rows under any future `minRelevance`), `isPrimary = false` always, and they count against the membership cap. |
 | `TOPIC_RELATIONS` | Survives, demoted to a **retrieval widening** hint — its original honest job. It is no longer a filing bound. |
 | Request-side topics | `Path.topic` / `CourseRequest.topic` stay scalar. Nothing about request intake or the topic gate's request path changes. |
 | Existing rows | Reclassified in bulk (T4), with disagreements routed to human review rather than auto-rewritten. |
@@ -115,13 +119,28 @@ the allowlist — and the correction has two halves:
 | # | Block | Kind | Depends on | Est. LOC |
 | --- | --- | --- | --- | --- |
 | T1 | `ResourceTopic` schema + backfill + retrieval seam | code + migration | — | ~250 |
-| T2 | Open-vocabulary classifier + centroid guardrail | code | T1 | ~280 |
-| T3 | Discovery-side topic minting + collision → membership | code | T2 | ~200 |
-| T4 | Bulk reclassification, drift merge, gate hardening | code + ops | T1–T3 | ~250 |
+| T1.5 | Twin merge + gate hardening (pulled forward from T4) | code + ops | T1 | ~80 |
+| T2a | Pre-insert embedding plumbing + `TopicCentroid` | code + migration | T1 | ~150 |
+| T2b | Open-vocabulary classifier + k-NN guardrail | code | T1.5, T2a | ~200 |
+| T3 | Discovery-side topic minting + collision → membership | code | T2b | ~200 |
+| T4 | Bulk reclassification, orphans, retrieval narrowing, recalibration | code + ops | T1–T3 | ~200 |
 
-T1–T4 stack (branch per block, stacked PRs — merge bottom-up per the CLAUDE.md stacked-chain
+Blocks stack (branch per block, stacked PRs — merge bottom-up per the CLAUDE.md stacked-chain
 procedure). T1 is independently valuable and independently shippable: it fixes retrieval
 reachability even before filing gets smarter.
+
+**Why T1.5 sits before T2b:** `listCanonicals()` — what T2b feeds the classifier — currently
+contains both twin pairs (`data-structures-and-algorithms` / `data-structures-algorithms`,
+`probability` / `probability-and-statistics`). Shipping the open-vocabulary classifier first
+would spread memberships across both halves of each twin, and T3's minting could add more.
+The twin merge and the snap-to-curated-slug gate guard are pure, cheap, and dependency-free —
+there is no reason to let the classifier run against a dirty vocabulary. (Their specs remain
+written in T4 §2–3 below; T1.5 executes them.)
+
+**Why T2 split in two:** the original ~280 LOC estimate did not cover the pre-insert
+embedding plumbing (an `upsertResource` signature change), the `TopicCentroid` migration,
+the centroid refresh in `scripts/embed-resources.ts`, the k-NN query, and the calibration
+re-wiring. T2a lands the plumbing and data; T2b lands the classifier + guardrail on top.
 
 ---
 
@@ -139,8 +158,14 @@ model ResourceTopic {
   // gate on this; ranking may blend it. 1.0 for `inherited` backfill rows.
   relevance  Float             @default(1.0)
   origin     TopicFilingOrigin @default(classifier)
-  // Exactly one true per resource; mirrored to Resource.topic.
+  // Exactly one true per resource; mirrored to Resource.topic. Enforced by the
+  // setPrimaryTopic seam + backfill assertion + integration test — deliberately
+  // NOT a partial unique index (see "The mirror write seam" below).
   isPrimary  Boolean           @default(false)
+  // Filing uncertainty lives HERE, not on Resource.status — quality review and
+  // filing confidence are orthogonal. Contested secondaries are excluded from
+  // retrieval; a contested primary stays retrievable.
+  contested  Boolean           @default(false)
   createdAt  DateTime          @default(now())
 
   @@unique([resourceId, topic])
@@ -159,12 +184,30 @@ enum TopicFilingOrigin {
 Precedent for the shape: `ResourceSourcedFor` is the same resource↔X join
 ([schema.prisma:665](../prisma/schema.prisma)).
 
+### The mirror write seam
+
+One transactional function — `setPrimaryTopic(resourceId, topic)` — is the **only** code
+path that writes `isPrimary` or `Resource.topic`. It clears the old primary flag, sets the
+new one, and updates the mirror in the same transaction. Everything else (backfill,
+classifier, collisions, T4 reclassifier, review surface) calls it; nothing writes either
+field directly, or the mirror rots.
+
+**The "exactly one primary" invariant is enforced by assertion, not by index** — a
+deliberate call, not an oversight. The DB-level option is a partial unique index
+(`ON "ResourceTopic"("resourceId") WHERE "isPrimary"`), which Prisma can't model, making it
+the **third** entry in AGENTS.md's never-drop table — a permanent tax on every future
+migration. Unlike `RemediationJob_active_per_path` there is no concurrent-claim race to
+backstop here: all primary changes flow through the one seam. So instead: assert the
+invariant in the backfill check (below), in an integration test, and as a drift assertion
+in the T1 differential harness. If a violation ever shows up in practice, escalate to the
+partial index then — and update AGENTS.md's table in the same PR.
+
 ### Backfill
 
 One row per existing `Resource`: `topic = Resource.topic`, `isPrimary = true`,
-`origin = inherited`, `relevance = 1.0`. Idempotent, run inside the migration or as a
-`scripts/` driver — **OPEN**: which, given the ~1,926-row size (in-migration is simpler;
-a driver is friendlier to the Supabase cutover in the free-beta D2 block).
+`origin = inherited`, `relevance = 1.0`. **Resolved** (was OPEN): an idempotent
+`scripts/` **driver**, not in-migration. 1,926 rows is fine either way, but the free-beta
+D2 Supabase cutover re-runs table lists, and a driver is re-runnable; a migration isn't.
 
 Invariant to assert after backfill: `count(ResourceTopic where isPrimary) == count(Resource)`
 and every `Resource.topic` has a matching primary membership.
@@ -184,12 +227,19 @@ through one function** — `buildConditions` in
 [search-resources.ts:99–145](../src/lib/agents/tools/search-resources.ts) — which is what makes T1
 tractable. Verified call sites:
 
-| Call site | Entry point | Topic scoping today |
-| --- | --- | --- |
-| Map candidate attachment | `attach-candidates.ts:263` → `searchResources` | `topics: relatedTopics(topic)` (`:169`) |
-| Web-fallback library rung | `web-fallback.ts:246` → `searchNearbyResources` | `topics: relatedTopics(topic)` (`:247`) |
-| Playground resource picker | `resource-search/route.ts:38` → `searchResources` | `topics: relatedTopics(topic)` (`:40`) |
-| Agent tool wrapper | `search-resources.ts:263` → `searchResources` | model-supplied `topic` |
+| Call site | Entry point | Topic scoping today | Scoping after T4's backfill |
+| --- | --- | --- | --- |
+| Map candidate attachment | `attach-candidates.ts:263` → `searchResources` | `topics: relatedTopics(topic)` (`:169`) | **narrow to `[topic]`** |
+| Web-fallback library rung | `web-fallback.ts:246` → `searchNearbyResources` | `topics: relatedTopics(topic)` (`:247`) | **keep `relatedTopics`** — `maxDistance` is the real gate here |
+| Playground resource picker | `resource-search/route.ts:38` → `searchResources` | `topics: relatedTopics(topic)` (`:40`) | **narrow to `[topic]`** |
+| Agent tool wrapper | `search-resources.ts:263` → `searchResources` | model-supplied `topic` | unchanged |
+
+**Bleed is multiplicative until the narrowing lands.** `relatedTopics` widening layered on
+top of multi-membership widens twice, and the stated control (`minRelevance`) defaults to
+off. But narrowing **must wait for T4's backfill** — before cross-topic rows have their
+memberships, dropping `relatedTopics` at the attach/picker sites would regress
+reachability. So: T1 lands the plumbing with today's scoping unchanged; the narrowing is an
+explicit T4 step (§4 below), flipped once memberships exist.
 
 ### 1. The predicate: `EXISTS`, not `JOIN`
 
@@ -203,14 +253,22 @@ else if (topic)     conds.push(Prisma.sql`topic = ${topic}`);
 // after
 const wanted = topics?.length ? topics : topic ? [topic] : [];
 if (wanted.length > 0) {
+  // Omit the relevance clause entirely when minRelevance is 0 (the default):
+  // it keeps @@index([topic, resourceId]) sufficient (the clause isn't covered
+  // by that index), and keeps the emitted SQL identical to the differential
+  // baseline. Revisit the index shape ([topic, relevance, resourceId]) only
+  // when a nonzero default actually lands (T4+).
   conds.push(Prisma.sql`EXISTS (
     SELECT 1 FROM "ResourceTopic" rt
     WHERE rt."resourceId" = "Resource".id
       AND rt.topic IN (${Prisma.join(wanted)})
-      AND rt.relevance >= ${minRelevance}
+      AND NOT (rt.contested AND NOT rt."isPrimary")
   )`);
 }
 ```
+
+(The `contested` clause implements the uncertainty decision: contested secondaries are
+invisible to retrieval, a contested primary stays reachable.)
 
 **`EXISTS` is load-bearing, not stylistic.** A plain `JOIN` against a multi-row membership
 table multiplies result rows whenever a resource matches two of the requested topics — and
@@ -235,9 +293,9 @@ from the same `where`:
 None needs structural change. But note the **fast-path threshold now sees a larger candidate
 pool**: multi-membership means more rows clear the filter, so some searches that used to take
 the cheap unranked path will now rank (spending an embedding). That is the intended
-behaviour — more candidates is the point — but it shifts LLM/embedding cost. **OPEN**:
-whether `SEARCH_RANK_THRESHOLD` needs re-tuning once T4's backfill shows real membership
-fan-out.
+behaviour — more candidates is the point — but it shifts LLM/embedding cost.
+**Resolved** (was OPEN): leave `SEARCH_RANK_THRESHOLD` as-is; re-tune only after T4's
+backfill shows real membership fan-out.
 
 `searchNearbyResources` ([:228](../src/lib/agents/tools/search-resources.ts)) reuses `buildConditions`
 and keeps its hard `maxDistance` ceiling, so a weak membership still can't drag a far-off
@@ -245,11 +303,19 @@ row in on topic alone — the distance gate remains the real admission control t
 
 ### 3. `minRelevance`: the new bleed control
 
-Add `minRelevance?: number` to `SearchParams`, defaulting to a constant (**OPEN**: start
-at 0.0 — i.e. off — until T4 produces a relevance distribution to calibrate against;
-`inherited` rows are all 1.0 so a nonzero default would be a no-op pre-T4 anyway). Post-T2,
-`relevance` carries k-NN purity, which is bounded 0–1 and comparable across topics — unlike
-the raw cosine, whose narrow 0.72–0.79 band the calibration showed is unthresholdable.
+Add `minRelevance?: number` to `SearchParams`, defaulting to 0.0 — i.e. off — until T4
+produces a relevance distribution to calibrate against. Post-T2, `relevance` carries k-NN
+purity, which is bounded 0–1 and comparable across topics — unlike the raw cosine, whose
+narrow 0.72–0.79 band the calibration showed is unthresholdable.
+
+**⚠️ `relevance` semantics are origin-dependent — `minRelevance` must be origin-aware.**
+`inherited` rows carry 1.0 meaning "unknown", not "certain"; `classifier`/`collision` rows
+carry measured k-NN purity. A flat nonzero `minRelevance` would let unverified inherited
+labels sail through while gating verified classifier memberships — backwards. When
+`minRelevance` goes nonzero (T4+), the predicate gates **only non-`inherited`/non-`review`
+origins** (`AND (rt.origin IN ('inherited','review') OR rt.relevance >= ${minRelevance})`).
+Note T4's reclassifier only re-scores the 1,152 skipped-classifier rows; the other ~774
+inherited rows keep their placeholder 1.0 unless T4's stretch re-score (§1) reaches them.
 
 This is the knob that replaces `TOPIC_RELATIONS` as bleed control. Relatedness widening was
 a proxy for "this resource might also be useful over here"; a real membership with a real
@@ -287,7 +353,11 @@ Rollout is a straight cutover, not a dual-read: after the backfill, the membersh
 a **superset** of the scalar (every resource has its primary row), so the `EXISTS` predicate
 returns a superset of today's results. Verify with a differential harness — run both
 predicates over the same params on the dev DB and assert the result sets are identical
-pre-T2 — then delete the old branch.
+pre-T2 — then delete the old branch. **Scope honestly stated:** pre-T2 the membership table
+is exactly the mirror, so an identical id set validates the *SQL rewrite only* — it says
+nothing about filing behaviour. Don't read a green differential as evidence about T2+.
+The harness also asserts the mirror invariant (every `Resource.topic` matches its primary
+membership) as the drift check for the write seam.
 
 ### Verification gate (T1)
 
@@ -295,13 +365,37 @@ pre-T2 — then delete the old branch.
   ids (regression test for the `JOIN` footgun).
 - Integration (`tests/integration/`, `describeDb`, `__verify_rt__` prefix): a resource with
   two memberships is returned exactly once by each of the three `searchResources` paths, and
-  by `searchNearbyResources`.
+  by `searchNearbyResources`; a contested secondary membership does not match, a contested
+  primary does; `setPrimaryTopic` leaves exactly one primary and a matching mirror.
 - Differential: old vs new predicate over every existing topic → identical id sets.
 - Manual: playground resource picker renders unchanged for a `javascript-react` topic.
 
 ---
 
 ## T2 — Open-vocabulary filing with an embedding guardrail
+
+Ships as **two blocks** (see Sequencing): **T2a** = pre-insert embedding plumbing +
+`TopicCentroid`; **T2b** = the classifier + guardrail below. T2b also depends on T1.5 so
+the classifier never runs against the twin-polluted vocabulary.
+
+### T2a — the guardrail's input must exist at filing time
+
+The margin pre-filter and the k-NN purity check both read the resource's embedding, but
+embeds run **post-commit** ([upsert-resource.ts:177–189](../src/lib/agents/decomposition/upsert-resource.ts))
+— so without this block, every fresh find at discovery time (the guardrail's primary
+application point) would hit the "no embedding" degradation row, and T2 would ship an open
+vocabulary with no guardrail. The fix, per the locked decision above:
+
+1. In `persistDiscovered`, compute the embedding from `title` + `summary` +
+   `conceptsTaught` **before** calling `upsertResource` — the same input the post-commit
+   embed uses ([:183–187](../src/lib/agents/decomposition/upsert-resource.ts)).
+2. Run the guardrail on that vector, then pass it into `upsertResource` (signature change)
+   so the row is written with its embedding and the post-commit `safeEmbedResource` is a
+   no-op for it.
+3. **Containers included** — add container parents to the embed set (amending the
+   atomic-only gate at [:144–152](../src/lib/agents/decomposition/upsert-resource.ts) and its
+   "wastes a call" comment: the embedding now buys filing evidence, not pickability).
+   Retrieval stays container-free via `decompositionStatus`.
 
 ### Candidate set
 
@@ -367,7 +461,8 @@ a cheap pre-filter: rows with margin ≥ δ are uncontested and skip the k-NN qu
 Drop `TOPIC_FILING_THRESHOLD` — there is no absolute cosine worth thresholding on.
 
 Starting parameters from this run, to be re-verified after T4's backfill: **δ = 0.05**
-(4.3% of rows go to the k-NN check), **k = 10**, plurality with ties → park for review.
+(4.3% of rows go to the k-NN check), **k = 10**, plurality with ties → membership
+`contested = true` for review.
 
 `TopicCentroid` is still worth building: it powers the margin pre-filter cheaply, and the
 absolute score feeds the junk-leaf signal above. Its role is narrowed, not eliminated.
@@ -393,25 +488,28 @@ like `Resource.embedding` (see the schema note at
 | Condition | Behaviour |
 | --- | --- |
 | `memberCount < MIN_CENTROID_MEMBERS` | No trustworthy centroid → skip the margin pre-filter, go straight to k-NN. |
-| Fewer than k embedded neighbours in the whole library | Accept the classifier's primary, file `pending_review`. |
-| Resource has no embedding yet (post-commit backfill) | Defer the guardrail; file under the request topic, mark for T4's reclassifier to revisit. |
+| Fewer than k embedded neighbours in the whole library | Accept the classifier's primary, membership `contested = true`. |
+| Resource has no embedding yet | **Rare after T2a** (pre-insert embedding makes discovery rows arrive embedded) — reachable only via legacy paths like the seed backfill, or if the embed call itself fails. Defer the guardrail; file under the request topic with `contested = true` for T4's reclassifier to revisit. |
 | Classifier errors / returns nothing | Fall back to the request topic, exactly as today ([classify-topic.ts:33–37](../src/lib/agents/tools/classify-topic.ts)). Never worse than current behaviour. |
 
-**OPEN**: `MIN_CENTROID_MEMBERS`. Every topic in this run cleared 5 members except
-`differentiation` (1 row, no embedded atomic leaf — it didn't even enter the sample), so the
-data doesn't pin this down; pick it defensively.
+**Resolved** (was OPEN): `MIN_CENTROID_MEMBERS = 20`. The data doesn't pin it down (every
+sampled topic cleared 5), and the pre-filter only saves a k-NN query — being conservative
+costs nothing but that query.
 
 ### Multi-membership at filing time
 
 Every proposal clearing the guardrail becomes a `ResourceTopic` row (`origin: classifier`,
 `relevance` = the k-NN purity fraction, which is bounded 0–1 and comparable across topics in
 a way the raw cosine is not). The highest becomes `isPrimary` and is mirrored to
-`Resource.topic`. **OPEN**: cap memberships per resource (a hard cap of ~3 is the obvious
-guard against a generic "intro to programming" page joining every CS topic).
+`Resource.topic` — via the `setPrimaryTopic` seam (T1), never directly. **Resolved** (was
+OPEN): hard cap of **3** memberships per resource (primary + guarded secondaries), with
+collision rows counting against it — the guard against a generic "intro to programming"
+page joining every CS topic.
 
 **Never auto-refile an existing row.** Per the motivating case above, a disagreement means
-"the current label is contested", not "the alternative is right". Disagreements go to
-`pending_review`; a human or T3's minting resolves them.
+"the current label is contested", not "the alternative is right". Disagreements set
+`contested = true` on the membership (not `Resource.status` — see the Uncertainty decision);
+a human or T3's minting resolves them.
 
 ---
 
@@ -419,43 +517,68 @@ guard against a generic "intro to programming" page joining every CS topic).
 
 1. **Minting.** When no existing canonical clears the threshold, hand the classifier's
    proposed label to `runTopicGate`. Tier 1 fast-accepts a curated slug, tier 2 reuses a
-   known alias, tier 3 mints + persists. File under the result with `status='pending_review'`.
-   The gate already coerces to a safe slug (`toCanonicalSlug`) and already grounds the model
-   on the canonical list, so this reuses hardened code rather than adding a second minting
-   path.
-2. **Collisions.** [upsert-resource.ts:76–93](../src/lib/agents/decomposition/upsert-resource.ts): on
-   `existing.topic !== topic`, add a `ResourceTopic` row (`origin: collision`) instead of
-   logging and returning `skipped`. Extend `UpsertOutcome` with a `membership_added` outcome
-   so `persistDiscovered`'s counters (`skippedCount`, `reclassifiedCount`) report it honestly.
+   known alias, tier 3 mints + persists (with T1.5's snap-to-curated-slug guard already in
+   place, so a mint can't twin a code-owned slug). File under the result with the membership
+   `contested = true` — a freshly minted topic has no pool, so the guardrail cannot vouch
+   for it. The gate already coerces to a safe slug (`toCanonicalSlug`) and already grounds
+   the model on the canonical list, so this reuses hardened code rather than adding a second
+   minting path.
+2. **Collisions — through the same guardrail, no free pass.** [upsert-resource.ts:76–93](../src/lib/agents/decomposition/upsert-resource.ts):
+   on `existing.topic !== topic`, run the requested topic through the margin + k-NN
+   guardrail against the existing row's embedding. Clearing it → add a `ResourceTopic` row:
+   `origin: collision`, `relevance` = the measured k-NN purity (never the 1.0 default),
+   `isPrimary = false`, counted against the cap of 3. Failing it → skip as today. Rationale:
+   a collision is the *searched* topic asserting membership — exactly the signal "The
+   modelling error" section rejects — so "two topics found the same page" is a hypothesis to
+   test, not evidence to accept. Extend `UpsertOutcome` with a `membership_added` outcome so
+   `persistDiscovered`'s counters (`skippedCount`, `reclassifiedCount`) report it honestly.
    Keep the existing log line — it becomes a useful signal rather than a dead end.
 3. **Children.** Decomposition children still inherit the parent's primary topic
    ([:377](../src/lib/agents/decomposition/upsert-resource.ts), [:411](../src/lib/agents/decomposition/upsert-resource.ts)).
    Per-child classification is out of scope — a container's children are by construction the
-   same subject as the container.
+   same subject as the container. What makes this safe post-revision: containers are now
+   embedded and guardrail-checked (T2a), so the primary the children inherit has been
+   evidence-tested at the granularity where the motivating defect actually occurred.
 
 ---
 
-## T4 — Bulk reclassification, drift merge, gate hardening
+## T4 — Bulk reclassification, orphans, retrieval narrowing, recalibration
 
 1. **Reclassify the backlog.** A `scripts/reclassify-topics.ts` driver over rows filed while
    the classifier was skipped (1,152). Write memberships that clear the k-NN guardrail
-   automatically; where the proposed primary **differs** from the current one, flip the row
-   to `pending_review` rather than rewriting it. Expect roughly 11% disagreement (the k-NN
-   instrument's measured 88.7% agreement) — call it ~130 rows for review, though some of
-   that 11% is the instrument being *right* about existing mis-filings. The `/review-pending-resources` skill is
-   already the reviewer seam and already opens each page against a rubric — no new tooling.
-   Run in batches with a dry-run mode; this is an LLM + embedding cost, so it belongs in the
-   ops budget alongside the warm campaign.
-2. **Merge drifted canonicals.** `data-structures-and-algorithms` → `data-structures-algorithms`,
+   automatically; where the proposed primary **differs** from the current one, set
+   `contested = true` on the membership and **leave `Resource.status` alone** — flipping
+   ~130 `active` rows to `pending_review` (the original spec) would destroy the record that
+   those rows already passed human *quality* review, and some are attached to live Paths.
+   Filing doubt is the membership's business; the resource's quality status is not touched.
+   Expect roughly 11% disagreement (the k-NN instrument's measured 88.7% agreement) —
+   call it ~130 contested rows, though some of that 11% is the instrument being *right*
+   about existing mis-filings. The `/review-pending-resources` skill is
+   already the reviewer seam and already opens each page against a rubric — extend its
+   queue to include contested memberships. Run in batches with a dry-run mode; this is an
+   LLM + embedding cost, so it belongs in the ops budget alongside the warm campaign.
+   **Stretch:** re-score the remaining ~774 `inherited` rows too, replacing their
+   placeholder `relevance = 1.0` with measured purity — otherwise they keep a fake
+   certainty forever and any nonzero `minRelevance` must stay origin-aware around them.
+2. **Merge drifted canonicals** — *moved to T1.5; spec kept here.*
+   `data-structures-and-algorithms` → `data-structures-algorithms`,
    `probability` → `probability-and-statistics`. Remap `TopicAlias.canonical`, rewrite
-   memberships and mirrors, then verify no `Path`/`CourseRequest` references the dead slug.
-3. **Harden the gate against re-drift.** After `toCanonicalSlug`, snap a tier-3 mint onto a
-   curated slug when it near-matches one (normalized comparison against `TOPIC_SLUGS`), so
-   the gate can't mint a twin of a code-owned slug again. Unit-testable, pure.
-4. **Adopt the orphans.** `differentiation` (1 row) and `differential-equations` (12) have no
-   Path — the reclassifier should either fold them into a real topic or leave them parked
-   with a review flag. **OPEN**: fold vs. park.
-5. **Re-run the calibration and re-tune.** This is a required closing step, not a nice-to-have.
+   memberships and mirrors (via `setPrimaryTopic`), then verify no `Path`/`CourseRequest`
+   references the dead slug.
+3. **Harden the gate against re-drift** — *moved to T1.5; spec kept here.* After
+   `toCanonicalSlug`, snap a tier-3 mint onto a curated slug when it near-matches one
+   (normalized comparison against `TOPIC_SLUGS`), so the gate can't mint a twin of a
+   code-owned slug again. Unit-testable, pure.
+4. **Adopt the orphans.** **Resolved** (was OPEN): **fold** `differentiation` (1 row, no
+   embedded leaf — a mint accident) into `calculus`; **park** `differential-equations`
+   (12 rows — a real, if thin, topic) with its memberships left intact, waiting for a
+   learner request.
+5. **Narrow retrieval widening** (see the call-site table in the T1 retrieval section).
+   Once the backfill has written cross-topic memberships: attach-candidates and the
+   playground picker drop `relatedTopics(topic)` for `[topic]`; the web-fallback library
+   rung keeps `relatedTopics` (its `maxDistance` ceiling is the real gate). Doing this
+   before the backfill would regress reachability, which is why it lives here and not T1.
+6. **Re-run the calibration and re-tune.** This is a required closing step, not a nice-to-have.
    The 2026-07-25 run calibrated against labels we already know are partly wrong, so its
    88.7% is *agreement with the status quo*, not correctness — the noise floor is the very
    defect T4 removes. Once the backlog is reclassified and the review queue drained:
@@ -495,8 +618,10 @@ guard against a generic "intro to programming" page joining every CS topic).
 
 ## Risks
 
-- **Retrieval bleed.** More memberships = larger candidate sets. Controls: `minRelevance`,
-  the per-resource membership cap, and the unchanged `maxDistance` ceiling on the re-judge
+- **Retrieval bleed.** More memberships = larger candidate sets — and *multiplicative*
+  until T4 §5 narrows the `relatedTopics` widening at the attach/picker sites. Controls:
+  the T4 narrowing, `minRelevance` (origin-aware), the contested-secondary exclusion, the
+  per-resource membership cap of 3, and the unchanged `maxDistance` ceiling on the re-judge
   rung. Watch candidate-set sizes in the map-attach trace after T2.
 - ~~**Threshold miscalibration**~~ — **retired 2026-07-25.** Calibration ran
   (`scripts/calibrate-topic-threshold.ts`) and settled the instrument: absolute cosine
