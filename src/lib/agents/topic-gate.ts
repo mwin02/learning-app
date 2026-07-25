@@ -34,6 +34,7 @@ import {
   listCanonicals,
   recordCanonicalization,
   toCanonicalSlug,
+  snapToKnownSlug,
   type TopicSubject,
 } from '@/lib/agents/topic-registry';
 
@@ -173,14 +174,30 @@ export async function validateTopic(
   // Coerce the LLM-minted slug to a safe canonical BEFORE it's frozen as Path.topic /
   // CourseRequest.topic / a first-writer-wins TopicAlias — kebab-case is otherwise
   // only prompt-enforced. Reject when nothing usable survives (empty / all-junk).
-  const canonical = toCanonicalSlug(v.canonical);
-  if (!canonical) {
+  const coerced = toCanonicalSlug(v.canonical);
+  if (!coerced) {
     onTrace({
       kind: 'stage',
       label: 'topic gate: rejected',
       detail: { reason: 'canonical slug normalized to empty', raw: v.canonical },
     });
     return { valid: false, reason: 'classifier returned an unusable canonical slug' };
+  }
+
+  // T1.5: last line of defence against slug drift. Grounding the model on `canonicals`
+  // is prompt-only — it still minted `data-structures-and-algorithms` next to the
+  // curated `data-structures-algorithms`, and `probability` next to
+  // `probability-and-statistics`. Snapping onto a known slug when the content tokens
+  // match is deterministic, so a twin can't be frozen as Path.topic / a first-writer-wins
+  // TopicAlias. Traced when it fires — if this fires often, the tier-3 prompt needs work.
+  const canonical = snapToKnownSlug(coerced, canonicals);
+  if (canonical !== coerced) {
+    onTrace({
+      kind: 'stage',
+      label: 'topic gate: snapped mint onto known slug',
+      detail: { minted: coerced, snappedTo: canonical },
+    });
+    console.log('[topic-gate] snapped near-duplicate mint', { minted: coerced, snappedTo: canonical });
   }
 
   // Persist so this phrasing (and the canonical itself) short-circuits next
