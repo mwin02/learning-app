@@ -9,6 +9,11 @@
 // same rows would make the ordering assertions flaky. As a safety net, any foreign
 // `queued` row this test happens to claim is quarantined and restored to `queued` in
 // afterAll, so a stray row is never stranded in `running`.
+//
+// A sibling TEST FILE creating CourseRequest rows is the same hazard as a live worker,
+// which is why the integration project sets `fileParallelism: false` (see
+// vitest.config.ts). Don't "fix" a flake here by narrowing the global queries to MARK
+// rows — their whole-table scope is the property under test.
 import { beforeAll, afterAll, it, expect } from 'vitest';
 import { CourseRequestStatus, type CourseRequest } from '@prisma/client';
 import { prisma } from '@/lib/db';
