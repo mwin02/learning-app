@@ -106,7 +106,16 @@ export async function requeueCourseRequest(
     data: {
       status: CourseRequestStatus.queued,
       claimedAt: null,
-      nextAttemptAt: new Date(Date.now() + opts.delayMs),
+      // delayMs <= 0 means "claimable immediately", and the only clock-safe way to
+      // say that is NULL (the same encoding reclaimStale uses). Writing
+      // `new Date(Date.now())` instead mixes clocks: nextAttemptAt comes from the
+      // APP clock while claimNextQueued's `nextAttemptAt <= now()` predicate reads
+      // the DB clock, and the app runs ~1-2ms ahead of Postgres locally — so a
+      // zero-delay requeue landed a hair in the DB's future and the very next
+      // claim skipped it (flaked ~2 runs in 3). A positive delay stays on the app
+      // clock: a few ms of skew is meaningless against a multi-minute backoff, and
+      // the row is legitimately in the future either way.
+      nextAttemptAt: opts.delayMs > 0 ? new Date(Date.now() + opts.delayMs) : null,
     },
   });
   if (count === 0) {
