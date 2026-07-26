@@ -191,7 +191,7 @@ describeDb('course-worker pipeline branches', () => {
     expect(row.status).toBe(CourseRequestStatus.queued); // released, not failed
     expect(row.error).toBeNull();
     // delayMs 0: a surviving worker's next poll can claim it right away.
-    expect(row.nextAttemptAt!.getTime()).toBeLessThanOrEqual(Date.now());
+    expect(row.nextAttemptAt).toBeNull();
   });
 
   it('an already-aborted shutdown signal releases the claim before any stage work', async () => {
@@ -254,7 +254,7 @@ describeDb('course-worker pipeline branches', () => {
     const row = await prisma.courseRequest.findUniqueOrThrow({ where: { id: cr.id } });
     expect(row.status).toBe(CourseRequestStatus.queued); // released, not failed
     expect(row.error).toBeNull();
-    expect(row.nextAttemptAt!.getTime()).toBeLessThanOrEqual(Date.now()); // delayMs 0, immediately claimable
+    expect(row.nextAttemptAt).toBeNull(); // delayMs 0, immediately claimable
   });
 
   it('a deadline abort (no shutdown) still fails — the two aborts stay distinguishable', async () => {
