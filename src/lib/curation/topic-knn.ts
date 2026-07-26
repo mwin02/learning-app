@@ -76,7 +76,7 @@ export type FilingDecision = {
   secondaries: FilingMembership[];
   // Why the primary is what it is — carried into the discovery log so a filing run is
   // auditable without re-deriving it.
-  reason: 'classifier' | 'unvouchable-pool' | 'rejected' | 'no-evidence';
+  reason: 'classifier' | 'unvouchable-pool' | 'rejected' | 'no-evidence' | 'minted';
 };
 
 export type FilingInput = {
@@ -205,6 +205,70 @@ export function decideFiling(input: FilingInput): FilingDecision {
   };
 }
 
+// PURE. Topic filing T3 — the filing that results when the classifier says none of the
+// canonicals fit and the topic gate MINTED (or resolved) a slug for its proposal.
+//
+// Called only after `decideFiling` returned `rejected` / `no-evidence`, i.e. no existing
+// canonical cleared the guardrail. The minted topic is always `contested`: a fresh topic
+// has no pool, so k-NN cannot vouch for it by construction — this is the same treatment
+// MIN_VOUCHABLE_POOL gives a real-but-thin topic, and a contested PRIMARY stays
+// retrievable, so the new topic's pool can start filling.
+//
+// The request topic is kept as a secondary when the neighbourhood supports it, for the
+// reason it is a trailing candidate in `decideFiling`: otherwise the run that paid to
+// discover this row could not retrieve its own find, since a minted topic is by
+// definition not reachable through `relatedTopics` widening either.
+export function decideMintedFiling(input: FilingInput, minted: string): FilingDecision {
+  const { requestTopic, neighbourTopics } = input;
+  const requestPurity = purity(neighbourTopics, requestTopic);
+  return {
+    primary: {
+      topic: minted,
+      relevance: purity(neighbourTopics, minted),
+      origin: 'classifier',
+      contested: true,
+    },
+    secondaries:
+      minted !== requestTopic && requestPurity >= MIN_SECONDARY_PURITY
+        ? [{ topic: requestTopic, relevance: requestPurity, origin: 'classifier', contested: false }]
+        : [],
+    reason: 'minted',
+  };
+}
+
+// PURE. Topic filing T3 — a URL rediscovered under a second topic.
+//
+// A collision is the SEARCHED topic asserting membership, which is exactly the signal the
+// plan's "modelling error" section rejects, so it gets no free pass: the claim is tested
+// against the EXISTING row's own embedding neighbourhood, through the same decision matrix
+// a fresh filing goes through. Deliberately reuses `decideFiling` rather than
+// re-implementing the thresholds — one filing path, one place to recalibrate in T4.
+//
+// Note the branch is on `reason`, NOT on the returned primary: with a single proposal that
+// is also the fallback, a REJECTED verdict still names that topic, and reading the topic
+// alone would turn every rejection into an acceptance.
+//
+// Returns null when the claim fails — including when the existing row has no embedding
+// (no neighbours → `no-evidence`), which is the caller's degradation path too.
+export function decideCollision(
+  topic: string,
+  neighbourTopics: string[],
+  pools: Map<string, number>,
+): FilingMembership | null {
+  const d = decideFiling({ proposals: [topic], requestTopic: topic, neighbourTopics, pools });
+  if (d.reason !== 'classifier' && d.reason !== 'unvouchable-pool') return null;
+  return {
+    topic,
+    // The MEASURED purity, never the schema default of 1.0 — a collision row that
+    // outranked guarded classifier rows under a future minRelevance would invert the
+    // whole point of guarding it.
+    relevance: d.primary.relevance,
+    origin: 'collision',
+    // A pool too small to vouch is a hypothesis worth recording, not a verdict.
+    contested: d.reason === 'unvouchable-pool',
+  };
+}
+
 // ── DB reads (the evidence `decideFiling` runs on) ───────────────────────────────────
 
 // The k nearest embedded neighbours' PRIMARY topics, by cosine distance over the same
@@ -226,6 +290,35 @@ export async function knnNeighbourTopics(vector: number[], k = KNN_K): Promise<s
       AND status::text IN ('active', 'pending_review')
       AND origin::text <> 'generated'
     ORDER BY embedding <=> ${literal}::vector
+    LIMIT ${k}
+  `;
+  return rows.map((r) => r.topic);
+}
+
+// T3: the same neighbourhood, for a row that is ALREADY IN the table — the collision
+// path, where the resource under test is the existing row rather than one about to be
+// inserted. Two differences from `knnNeighbourTopics`, both load-bearing:
+//
+//   - the vector stays in Postgres (`r.embedding`), so a 768-dim round-trip through JS
+//     is avoided and there is no `Unsupported("vector(768)")` column to marshal;
+//   - `n.id <> r.id` makes it leave-one-out EXPLICITLY. The pre-insert path gets that
+//     for free (its row does not exist yet); here the row is its own nearest neighbour
+//     at distance 0, and its own label would vote for itself.
+//
+// Returns [] when the resource is missing or has no embedding — which `decideCollision`
+// reads as "no evidence", i.e. skip.
+export async function knnNeighbourTopicsOf(resourceId: string, k = KNN_K): Promise<string[]> {
+  const rows = await prisma.$queryRaw<{ topic: string }[]>`
+    SELECT n.topic
+    FROM "Resource" n, "Resource" r
+    WHERE r.id = ${resourceId}
+      AND r.embedding IS NOT NULL
+      AND n.id <> r.id
+      AND n.embedding IS NOT NULL
+      AND n."decompositionStatus"::text = 'atomic'
+      AND n.status::text IN ('active', 'pending_review')
+      AND n.origin::text <> 'generated'
+    ORDER BY n.embedding <=> r.embedding
     LIMIT ${k}
   `;
   return rows.map((r) => r.topic);

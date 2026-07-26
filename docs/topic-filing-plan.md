@@ -586,6 +586,72 @@ neighbours agreed), landing as `classifier` memberships.
    embedded and guardrail-checked (T2a), so the primary the children inherit has been
    evidence-tested at the granularity where the motivating defect actually occurred.
 
+### As built — T3 (2026-07-26)
+
+Scope was smaller than §1–3 above: **membership-at-insert had already shipped in T2b**
+(As-built item 5), and children already inherit the parent's filing, so §3 was a no-op.
+What remained was minting + collisions. Seven deviations:
+
+1. **Minting was UNREACHABLE as specced, and T3 had to open the channel.** §1 says "hand
+   the classifier's proposed label to the gate", but `classifyDiscoveryTopics` filters
+   every proposal to `listCanonicals() ∪ requestTopic` — so no non-canonical label could
+   ever reach `decideFiling`. The request-topic escape hatch doesn't rescue it either:
+   `recordCanonicalization` writes a self-alias, so a gated request topic is already a
+   canonical. `ClassificationSchema` therefore gained a per-result **`newTopic`** field,
+   the one place the model may name a slug outside the vocabulary, with a prompt rule
+   scoping it to "the subject is missing entirely, not merely a loose fit". Without it the
+   motivating case stays unfixable — `algebra` is a label no code path could utter.
+   ⚠️ This relaxes the classifier's "never invent a slug" rule; the compensating controls
+   are the gate's domain rejection, `toCanonicalSlug`, T1.5's `snapToKnownSlug`, and the
+   always-contested membership. There is no column marking a mint as discovery-born, so
+   the audit trail is the `[topic-mint]` log line plus the contested flag.
+2. **Evidence beats a mint.** The mint fires only when `decideFiling` returned `rejected`
+   or `no-evidence` — an accepted proposal is evidence about a topic we already have, and
+   minting over it would let an eager `newTopic` fragment a healthy shelf.
+3. **A mint keeps the request topic as a secondary** when its measured purity clears
+   `MIN_SECONDARY_PURITY` (`decideMintedFiling`, pure). A minted topic is not reachable
+   through `relatedTopics` widening, so without this the run that paid for the discovery
+   could not retrieve its own find — the same argument as T2b's As-built item 3.
+4. **The collision candidate is the FILED topic, not the raw request topic.** `upsertResource`
+   receives the post-guardrail verdict, which is what this discovery actually asserts;
+   testing it against the existing row's embedding is strictly stronger than testing the
+   searched topic, and the two coincide whenever filing degraded. A corollary worth
+   knowing: a rediscovery the classifier files right back where the row already lives is
+   correctly a plain skip, so **collisions are rarer than "two topics found the same page"**.
+5. **`decideCollision` branches on `reason`, never on the returned topic.** It reuses
+   `decideFiling` with a single proposal that is also its own fallback — so a REJECTED
+   verdict still names that topic, and reading the topic alone would turn every rejection
+   into an acceptance. `unvouchable-pool` is admitted `contested`, consistent with T2b;
+   note that a contested secondary is invisible to retrieval under T1's predicate, so such
+   a collision records the hypothesis for T4 without widening reachability today.
+6. **A collision membership does not join `insertedIds`.** That list is the retrieval
+   session's discovery allowlist and means "newly created pickable id"; the existing row
+   may well be a parked container. So the rediscovering run makes the row reachable for
+   FUTURE searches but does not attach it to the concept that triggered this one — rung 0
+   is what covers that. `membershipAddedCount` is a summary-log counter; `PersistResult`'s
+   shape is unchanged (it ripples into `WebFallbackResult`'s consumers).
+7. **Everything gates on `filing` being supplied**, which is what marks an
+   evidence-gathering caller. The seed/verify paths pass none and keep the pre-T3
+   log-and-skip byte-for-byte.
+
+**Live verification** (`scripts/verify-topic-filing-t3.ts`, 2026-07-26). Two findings worth
+carrying into T4:
+
+- **Rung 0 suppresses discovery for any well-covered concept.** `gradient descent` and
+  `list comprehensions` both filled the target from the library, so those runs exercised
+  nothing at all. Forcing the discovery ladder to run needs a concept with ZERO rows inside
+  the rung-0 distance ceiling (`isotonic regression` under `machine-learning`).
+- **A driver that cleans up by `insertedIds` LEAKS containers.** A parent that parks
+  `human_review` is not pickable, so it never enters that list; the first run stranded
+  scikit-learn's isotonic page in the library. Cleanup is a `createdAt` window instead,
+  which is why the run needs the compose workers stopped.
+
+The guardrail against the real corpus: a Khan *"Another least squares example"* filed under
+`linear-algebra`, whose true 10-neighbourhood is **7 `probability-and-statistics` / 3
+`linear-algebra`**, was admitted at relevance 0.7 — while `calculus` (pool 381, absent from
+the neighbourhood) was declined. That is both directions of the collision rule on real
+embeddings, and a preview of the ~11% disagreement T4's reclassifier will be draining.
+
 ---
 
 ## T4 — Bulk reclassification, orphans, retrieval narrowing, recalibration

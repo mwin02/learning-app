@@ -43,7 +43,8 @@ import { searchYouTubeForConcept, type YoutubeSourcedResource } from '@/lib/agen
 import { deriveSourcedForPairs, type SourcedForRow } from '@/lib/agents/tools/sourced-for';
 import { safeEmbedBatch } from '@/lib/ai/embeddings';
 import { listCanonicals } from '@/lib/agents/topic-registry';
-import { decideFiling, knnNeighbourTopics, topicPools } from '@/lib/curation/topic-knn';
+import { decideFiling, decideMintedFiling, knnNeighbourTopics, topicPools } from '@/lib/curation/topic-knn';
+import { createTopicMinter } from '@/lib/curation/topic-mint';
 import { relatedTopics } from '@/types/resource';
 
 const RAW_RESOURCE_TYPES = ['article', 'video', 'course', 'interactive', 'docs', 'book'] as const;
@@ -407,6 +408,10 @@ async function persistDiscovered(
   // with no edges (60% of the library) is gone with it. The classifier only PROPOSES;
   // decideFiling tests each proposal against the resource's embedding neighbourhood
   // below. Decomposed children inherit the parent's filing via createChild.
+  // T3: the classifier may also name a subject the vocabulary LACKS (`newTopic`), which
+  // the topic gate turns into a canonical below. That is the only way a discovery can
+  // widen the vocabulary — pre-T3 a new canonical could only be born from a learner
+  // request, so a resource whose real subject we had no slug for was unfilable forever.
   const vocabulary = await listCanonicals();
   const proposalsByUrl = await classifyDiscoveryTopics(
     finalRows.map((r) => ({
@@ -459,10 +464,16 @@ async function persistDiscovered(
     embeddings.map((vector) => (vector ? knnNeighbourTopics(vector) : Promise.resolve([]))),
   );
 
+  // One minter for the whole batch: several rows commonly propose the same missing
+  // subject, and the gate's tier 3 is an LLM call.
+  const mintTopic = createTopicMinter();
+
   let insertedCount = 0;
   let skippedCount = 0;
+  let membershipAddedCount = 0;
   let reclassifiedCount = 0;
   let contestedCount = 0;
+  let mintedCount = 0;
   const insertedIds: string[] = [];
   const upsertedRows: SourcedForRow[] = [];
   for (const [i, { row, result }] of decomposed.entries()) {
@@ -472,12 +483,26 @@ async function persistDiscovered(
     // means no evidence — decideFiling degrades to the request topic on an empty
     // neighbour list, which is the pre-T2b behaviour.
     const vector = embeddings[i];
-    const filing = decideFiling({
-      proposals: proposalsByUrl.get(row.url) ?? [],
+    const proposal = proposalsByUrl.get(row.url);
+    const evidence = {
+      proposals: proposal?.topics ?? [],
       requestTopic: topic,
       neighbourTopics: neighbourhoods[i],
       pools,
-    });
+    };
+    let filing = decideFiling(evidence);
+    // T3 minting: only when NO existing canonical cleared the guardrail. An accepted
+    // proposal is evidence about a topic we already have, and evidence beats a mint —
+    // otherwise a model that volunteers `newTopic` too eagerly could fragment a healthy
+    // shelf. The gate may still resolve the label onto an existing canonical (tier 1/2,
+    // or T1.5's snap), in which case this is a lookup, not a mint.
+    if ((filing.reason === 'rejected' || filing.reason === 'no-evidence') && proposal?.newTopic) {
+      const minted = await mintTopic(proposal.newTopic);
+      if (minted) {
+        filing = decideMintedFiling(evidence, minted);
+        mintedCount += 1;
+      }
+    }
     const filedTopic = filing.primary.topic;
     if (filedTopic !== topic) reclassifiedCount += 1;
     if (filing.primary.contested) contestedCount += 1;
@@ -509,7 +534,11 @@ async function persistDiscovered(
       contested: filing.primary.contested,
       secondaries: filing.secondaries.map((s) => s.topic),
     });
+    // T3: a dedup hit that cleared the collision guardrail is neither an insert nor a
+    // skip — nothing was written to "Resource", but the requested topic can now retrieve
+    // a row it previously could not reach at all.
     if (outcome === 'inserted') insertedCount += 1;
+    else if (outcome === 'membership_added') membershipAddedCount += 1;
     else skippedCount += 1;
     insertedIds.push(...atomicIds);
     upsertedRows.push({ resourceId, decompositionStatus });
@@ -542,8 +571,10 @@ async function persistDiscovered(
     survivors: finalRows.length,
     insertedCount,
     skippedCount,
+    membershipAddedCount,
     reclassifiedCount,
     contestedCount,
+    mintedCount,
     sourcedForPairs: sourcedForPairs.length,
     targetMet: finalRows.length >= targetCount,
   });
