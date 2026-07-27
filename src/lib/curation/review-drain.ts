@@ -164,3 +164,203 @@ export function filingHistogram(topics: string[]): Array<{ topic: string; n: num
     .map(([topic, n]) => ({ topic, n }))
     .sort((a, b) => b.n - a.n || a.topic.localeCompare(b.topic));
 }
+
+// ── verdict planning (D2, the write side) ────────────────────────────────────
+//
+// Verdicts are DATA, not a source literal. The cfml retirement carried its five container
+// decisions in a committed script, which is right for a one-off; this queue REGENERATES —
+// every discovery batch that hits an unvouchable pool or a k-NN tie writes another
+// contested row (T2b As-built item 2, T3 item 5) — so baking decisions into code would
+// mean editing and committing source to drain a batch. A verdict file keeps the driver's
+// real advantage (the whole slate reviewable in a dry run before anything executes)
+// without that cost.
+//
+// ⚠️ NO VERDICT HERE MAY TOUCH `Resource.status`. Filing doubt and quality are orthogonal
+// axes (the plan's Uncertainty decision), and these rows already passed human quality
+// review — 113 of 131 are `active`, some attached to live Paths. The verbs below write
+// `ResourceTopic` and nothing else.
+
+export type VerdictKind = 'confirm' | 'refile' | 'add' | 'skip';
+
+// Exactly one of `membershipId` (row-level) / `containerId` (container-level).
+//
+// A CONTAINER verdict must name `applyTo`: the held topic it acts on. It never covers a
+// subtree wholesale. Measured 2026-07-27, `Khan Academy: Cryptography` holds 17 contested
+// rows across `cryptography` (8), `data-structures-algorithms` (7) and
+// `discrete-mathematics` (2) — and a Khan cryptography course genuinely does teach modular
+// arithmetic and algorithms, so a blanket "this container is cryptography" would refile
+// rows nobody looked at. That is the fallback-vs-container distinction cfml item 3 had to
+// introduce after the fact; requiring `applyTo` makes it impossible to get wrong. It also
+// preserves shelf-retire's `untouched` discipline: a verdict can never reach a row an
+// earlier pass settled on a different topic.
+export type Verdict = {
+  verdict: VerdictKind;
+  membershipId?: string;
+  containerId?: string;
+  applyTo?: string;
+  // Destination topic. Required for `refile` / `add`, meaningless for `confirm` / `skip`.
+  topic?: string;
+  // Refile only. Default false: the vacated topic is RETAINED as an uncontested secondary
+  // (T4b's rule — the shelf is still a place, and retention is what kept
+  // probability-and-statistics' retrievable pool whole through its split). True deletes it
+  // instead, which is T4c's rule for a topic that never was a place. Retention with the
+  // contested flag left ON is the one option that is always wrong: it would be invisible
+  // to retrieval AND permanently queued, re-litigating a decided row.
+  dropVacated?: boolean;
+  note?: string;
+};
+
+export type PlannedWrite = {
+  membershipId: string;
+  resourceId: string;
+  title: string;
+  verdict: VerdictKind;
+  heldTopic: string;
+  targetTopic: string | null;
+  dropVacated: boolean;
+  // Which container verdict decided this row, or null when it was decided row-by-row.
+  // Every verdict in this pass is an operator judgement — unlike the cfml retirement there
+  // is no policy fallback — so this is provenance for the audit record, not an input to
+  // whether doubt clears. Only `skip` preserves doubt here.
+  viaContainer: string | null;
+  note?: string;
+};
+
+export type DrainPlan = {
+  writes: PlannedWrite[];
+  skipped: PlannedWrite[];
+  // Queue rows no verdict covered. Reported so a batch can't silently under-deliver.
+  unresolved: DrainRow[];
+  errors: string[];
+};
+
+function isInSubtree(
+  resourceId: string,
+  containerId: string,
+  parents: Map<string, ParentLink>,
+): boolean {
+  let cursor: string | null = resourceId;
+  const seen = new Set<string>();
+  while (cursor) {
+    if (cursor === containerId) return true;
+    if (seen.has(cursor)) return false;
+    seen.add(cursor);
+    cursor = parents.get(cursor)?.parentId ?? null;
+  }
+  return false;
+}
+
+// Resolves verdicts against the queue. Pure: every failure is an entry in `errors` rather
+// than a throw, so one malformed line cannot hide the other twenty from the dry run.
+export function planVerdicts(
+  rows: DrainRow[],
+  verdicts: Verdict[],
+  parents: Map<string, ParentLink>,
+  membershipCounts: Map<string, number>,
+  maxMemberships: number,
+): DrainPlan {
+  const writes: PlannedWrite[] = [];
+  const skipped: PlannedWrite[] = [];
+  const errors: string[] = [];
+  const byMembership = new Map(rows.map((r) => [r.membershipId, r]));
+  // The queue's own rows are not necessarily in `parents` (that map carries the ancestor
+  // chain, which is loaded for containers that are themselves uncontested). Without this
+  // merge the subtree walk starts at a resource it cannot look up and every container
+  // verdict silently matches nothing — same merge groupQueue does.
+  const links = new Map(parents);
+  for (const r of rows) if (!links.has(r.resourceId)) links.set(r.resourceId, { parentId: r.parentId });
+  // Which verdict claimed each membership, so a row covered twice is a reported conflict
+  // rather than two writes racing in file order.
+  const claimed = new Map<string, number>();
+
+  verdicts.forEach((v, i) => {
+    const label = `verdict[${i}] (${v.verdict})`;
+    const hasRow = Boolean(v.membershipId);
+    const hasContainer = Boolean(v.containerId);
+    if (hasRow === hasContainer) {
+      errors.push(`${label}: needs exactly one of membershipId / containerId`);
+      return;
+    }
+    if ((v.verdict === 'refile' || v.verdict === 'add') && !v.topic) {
+      errors.push(`${label}: '${v.verdict}' requires a destination topic`);
+      return;
+    }
+    if (hasContainer && !v.applyTo) {
+      errors.push(`${label}: a container verdict requires applyTo (the held topic it acts on)`);
+      return;
+    }
+
+    let matched: DrainRow[];
+    if (hasRow) {
+      const row = byMembership.get(v.membershipId!);
+      if (!row) {
+        errors.push(`${label}: membership ${v.membershipId} is not in the queue`);
+        return;
+      }
+      matched = [row];
+    } else {
+      matched = rows.filter(
+        (r) => r.topic === v.applyTo && isInSubtree(r.resourceId, v.containerId!, links),
+      );
+      if (matched.length === 0) {
+        // A typo'd applyTo that silently does nothing is worse than a loud failure — it
+        // reads as "handled" in the report while the rows stay queued forever.
+        errors.push(
+          `${label}: container ${v.containerId} has no contested '${v.applyTo}' rows in the queue`,
+        );
+        return;
+      }
+    }
+
+    for (const row of matched) {
+      const prior = claimed.get(row.membershipId);
+      if (prior !== undefined) {
+        errors.push(
+          `${label}: membership ${row.membershipId} already claimed by verdict[${prior}]`,
+        );
+        continue;
+      }
+      // A refile onto the topic a PRIMARY already holds is a no-op dressed as a decision;
+      // on a contested SECONDARY the same instruction means "promote this to primary",
+      // which is exactly what the drain exists to make possible.
+      if (v.verdict === 'refile' && row.isPrimary && v.topic === row.topic) {
+        errors.push(`${label}: ${row.resourceId} is already primary on '${v.topic}'`);
+        continue;
+      }
+      if (v.verdict === 'add') {
+        if (v.topic === row.topic) {
+          errors.push(`${label}: ${row.resourceId} already holds '${v.topic}'`);
+          continue;
+        }
+        const count = membershipCounts.get(row.resourceId) ?? 0;
+        if (count >= maxMemberships) {
+          errors.push(
+            `${label}: ${row.resourceId} is at the membership cap (${count}/${maxMemberships})`,
+          );
+          continue;
+        }
+      }
+      claimed.set(row.membershipId, i);
+      const planned: PlannedWrite = {
+        membershipId: row.membershipId,
+        resourceId: row.resourceId,
+        title: row.title,
+        verdict: v.verdict,
+        heldTopic: row.topic,
+        targetTopic: v.topic ?? null,
+        dropVacated: v.dropVacated ?? false,
+        viaContainer: hasContainer ? v.containerId! : null,
+        ...(v.note ? { note: v.note } : {}),
+      };
+      if (v.verdict === 'skip') skipped.push(planned);
+      else writes.push(planned);
+    }
+  });
+
+  return {
+    writes,
+    skipped,
+    unresolved: rows.filter((r) => !claimed.has(r.membershipId)),
+    errors,
+  };
+}
