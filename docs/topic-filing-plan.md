@@ -1149,14 +1149,11 @@ instrument than "the neighbourhood is mixed", and contesting here would apply a 
 than the backlog got while growing a queue with no drainer. The 45 rows under 0.4 are
 reported as review-queue input instead.
 
-**Deferred deliberately: `calculus-for-machine-learning`.** It is the largest incoherent
-pool in the library and the single biggest source of both confusion and review backlog —
-132 rows at **0.42** mean purity, holding **82 of the 208 contested primaries (39%)**, and
-responsible for 80 of the top confusions. It is agent-minted and by construction a
-*curriculum framing* (calculus ∪ linear-algebra "for ML") rather than a subject, which is
-exactly why it cannot hold a neighbourhood. §6 says to triage an incoherent pool rather than
-loosen the guardrail around it — that stands, and triaging 132 rows is its own block, not
-T4e's tail. Library-wide the sub-0.60 shelves are now:
+**Deferred to its own block: `calculus-for-machine-learning`** — done immediately after
+T4e, see "As built — cfml shelf retirement" below. It was the largest incoherent pool in
+the library and the single biggest source of both confusion and review backlog — 132 rows
+at **0.42** mean purity, holding **82 of the 208 contested primaries (39%)**, and
+responsible for 80 of the top confusions. Library-wide the sub-0.60 shelves were:
 
 | shelf | rows | mean k-NN purity |
 | --- | --- | --- |
@@ -1173,6 +1170,133 @@ so missed `calculus-for-machine-learning` and `machine-learning` entirely.
 
 ---
 
+## As built — cfml shelf retirement (2026-07-27)
+
+The first of T4e's two follow-ups. Shipped `src/lib/curation/shelf-retire.ts` (pure) +
+`shelf-retire.test.ts`, and `scripts/retire-cfml-shelf.ts`. Applied to the dev DB
+2026-07-27 with the compose workers stopped; invariants clean. **138 rows refiled, 188
+vacated memberships dropped, 2 aliases repointed, residue 0 resources / 0 memberships.**
+
+### 1. ⚠️ k-NN CANNOT adjudicate a large mis-filed shelf — it is its own neighbourhood
+
+The most reusable finding here, and it inverts the method every other block used. Asked
+where the cfml rows belong, the guardrail answers:
+
+```
+"Limits and continuity | Calculus 1"  n=67  -> (tie)=27  calculus=26  cfml=14
+"Linear Algebra"                      n=21  -> cfml=14   linear-algebra=6
+"Linear Algebra Course – Math for ML" n=19  -> linear-algebra=6  calculus=5  (tie)=4  cfml=4
+```
+
+The 21 `Linear Algebra` rows name **cfml** as their own plurality — because they are each
+other's nearest neighbours. The instrument reports "this row sits near other cfml rows",
+which is true and useless. **A shelf that starts wrong and grows big becomes
+self-justifying**: that is the failure mode of the guardrail's self-widening property, and
+it is why T4a contested 82 of these rows but could propose a home for only 51.
+
+So the decision ran on **provenance** — what the container demonstrably is — making it an
+operator judgement (`origin: review`, the T4c precedent). Corroboration that this is the
+system's own view: the program plan pass already ships a scoped-topic reconciler whose
+canonical *example* is `"calculus-for-machine-learning" is a scope of "calculus"`
+([plan.ts:246](../src/lib/agents/program/plan.ts)). That policy has governed new proposals
+since F7; this applies the same verdict to the library that predates it.
+
+### 2. The shelf was 5 containers, not 132 decisions
+
+| container (itself filed cfml) | cfml children | → | why |
+| --- | --- | --- | --- |
+| `Limits and continuity \| Calculus 1 \| Math \| Khan Academy` | 67 | `calculus` | a Khan Calculus 1 unit; nothing ML-specific |
+| `Linear Algebra` | 21 | `linear-algebra` | general course; T4b already split its eigenvalue/systems units out |
+| `Linear Algebra Course – Mathematics for ML and Generative AI` | 19 | `linear-algebra` | ML *framing*, linear-algebra *subject* |
+| `An Algorithmist's Toolkit: Spectral Graph Theory` | 9 | `discrete-mathematics` | graph theory, not calculus |
+| `Introduction to Convex Optimization` | 1 | `convex-optimization` | straggler; 18 of 19 siblings already there |
+| *(16 top-level, no container)* | 16 | `calculus` | fallback = the scope parent |
+
+Destinations: **84 → calculus, 42 → linear-algebra, 10 → discrete-mathematics, 2 →
+convex-optimization.** 32 rows in those subtrees that T4b had already split out
+(`convex-optimization` 18, `eigenvalues-and-eigenvectors` 7,
+`systems-of-linear-equations` 6, `data-structures-algorithms` 1) were reported as
+**untouched** and left alone — the planner's source population is the retiring shelf only,
+so a container verdict never reaches a row an earlier pass had settled.
+
+### 3. Who decided the row governs whether its doubt clears — and the first rule was wrong
+
+Preserving `contested` verbatim (the first implementation) left the review queue at **208**:
+the doubt moved shelves instead of being resolved, which would have undercut the entire
+reason for doing this shelf first. The rule that replaced it turns on *who decided*:
+
+- **Container-decided → CLEARED.** T4a contested these rows for exactly one reason — the
+  primary disagreed with the neighbourhood — and moving them off it answers that. The
+  operator naming what the container is **is** the review. This is the T4c pattern: T4a
+  detected and recorded the hypothesis, a human confirms it.
+- **Fallback-decided → PRESERVED.** A top-level row folded to the scope parent got a policy
+  default, not a judgement. Nobody looked at it, so the drain still owes it a verdict.
+
+Result: **77 doubts closed, 5 kept**; review queue **208 → 131**. A row that was never
+contested is never newly contested — the pass does not manufacture doubt.
+
+The move and the settle are separate writes, so the driver recognizes rows it already moved
+(`origin: review` on the slate target, inside a slate subtree) and is fully re-runnable; a
+second run reports 0/0/0. That selector is also what keeps it from adjudicating another
+pass's work: T4b's splits carry `origin: classifier` and are never settled by this pass.
+
+### 4. Measured effect — the shelves it fed got *better*, not worse
+
+| | before | after |
+| --- | --- | --- |
+| k-NN agreement (any membership) | 89.4% | **92.2%** |
+| … scalar mirror | 84.3% | 89.7% |
+| … retrievable membership | 86.5% | 91.8% |
+| own-label purity, mean | 0.770 | **0.827** |
+| vocabulary | 20 topics | 19 |
+| review queue | 208 | **131** |
+
+⚠️ **Per As-built T4e item 2 these are not strictly comparable** — removing a topic also
+makes agreement mechanically easier, and the two effects cannot be cleanly separated. What
+*is* clean is the shape: the cfml confusions (65 + 17 + 15 = 97) did not relocate, they
+disappeared, and the receiving shelves held their own-centroid means (`calculus` 0.749 at
+381→463 rows, `linear-algebra` 0.780 at 195→235). Absorbing 126 rows cost neither shelf its
+coherence.
+
+### 5. Retired the vocabulary entry, NOT the Path — deliberately, and it is a real gap
+
+`repointCanonical(cfml → calculus)` repointed both alias rows, so the phrasing now
+short-circuits at tier 2 to the parent topic and cfml is **no longer in
+`listCanonicals()`**. The vacated memberships were **deleted**, per T4c's rule: retain when
+the vacated topic is still a place, delete when it never was.
+
+**The Path and its Track were DELETED** — an explicit operator decision (2026-07-27), taken
+because the app has no users yet and Paths/Tracks are slated for a wholesale reset anyway.
+Cascade, enumerated before the delete and all of it dev-only:
+
+| destroyed | |
+| --- | --- |
+| `Path` / `Concept` / `ConceptPrereq` | 1 / 19 / 29 |
+| `Track` / `Lesson` / `Section` | 1 / 12 / 4 |
+| `ResourceSourcedFor` / `RemediationJob` | 10 / 1 |
+
+`CourseRequest.trackId` is `onDelete: SetNull`, so the one fulfilled request survives as a
+historical record with a null track — inert, since queue claims only scan `queued`. **No
+`Resource` rows were touched**: all 138 had already been refiled, so the delete removed
+attachments, not library content. Afterwards cfml is gone completely — **0 Paths, 0 Tracks,
+0 resources, 0 memberships, not in `listCanonicals()`** — matching the standard T4c set for
+a fully retired slug. Done as a one-off ops action rather than a driver (the T4c precedent);
+this section is the record.
+
+⚠️ **This was only safe because the library had already been refiled, and it does not
+generalize.** With real users the same operation is blocked: `PathStatus` has no `archived`
+state, so there is nowhere to retire a Path *to*; `Track.pathId` cascades, so deleting
+destroys delivered Lessons; and retargeting to `calculus` would create a second Path beside
+the existing 22-concept one. **A `PathStatus.archived` migration is the real prerequisite
+for retiring a topic end-to-end once anyone is enrolled, and nothing in this plan provides
+it.**
+
+Refiling by itself cost the Path nothing — `ResourceSourcedFor` has no topic column, so its
+attachments would have survived (the property T4b measured as "0 attached `teaches` rows
+lost"). The Path was deleted because the topic is retired, not because the refile broke it.
+
+---
+
 ## Open: the contested-membership review drain
 
 **This is the one thing the plan needs and does not have.** T4d item 2 surfaced it; T4e
@@ -1185,10 +1309,19 @@ design. T4b's quorum refile is the only shipped mechanism that ever produced ret
 cross-topic reach, and it fires only on `unvouchable` shelves — `precalculus` now has a
 47-row pool, so it no longer qualifies. The queue therefore only grows.
 
-**The backlog** (measured 2026-07-27): **208 contested primaries**, concentrated in
-`calculus-for-machine-learning` (82), `linear-algebra` (20), `statistics` (18),
-`data-structures-algorithms` (15), `precalculus` (12), plus 61 contested secondaries and the
-45 sub-0.4 rows the T4e re-score surfaced.
+**The backlog** (re-measured after the cfml retirement, 2026-07-27): **131 contested
+primaries** — down from 208, since that block closed 77 doubts with one operator decision
+per container. No single shelf dominates any more; the queue is now a long tail:
+`linear-algebra` (20), `statistics` (18), `data-structures-algorithms` (15), `precalculus`
+(12), `discrete-mathematics` (11), `differential-equations` (10), `cryptography` (10),
+`multivariable-calculus` (10), `number-theory` (9), `calculus` (5, the fallback-folded cfml
+top-level rows), plus contested secondaries and the 45 sub-0.4 rows the T4e re-score
+surfaced.
+
+**The cfml block changed what this queue is.** Its bulk was one mis-filed shelf, resolvable
+by provenance in five judgements. What remains is genuinely row-by-row: rows whose
+neighbourhood disagrees with their shelf and where no container verdict can settle it. Do
+not expect another 37% win from a single decision.
 
 **Why `/review-pending-resources` is the seam but not yet the tool.** T4 §1 assumed the
 skill's queue could simply be extended to contested memberships, and extending it was
@@ -1211,10 +1344,16 @@ rubric and different write target.
    uncontested secondary — the mechanism T4d item 2 shows is missing).
 4. A driver to apply verdicts in batches with a dry-run, mirroring `reclassify-topics.ts`.
 
-**Sequencing note:** triaging `calculus-for-machine-learning` first would cut this queue by
-39% in one operator decision, and that shelf's rows are the least useful ones to review
-individually — the right verdict for most of them is a property of the shelf, not the row.
-Do the shelf, then the drain.
+**Sequencing note — done.** `calculus-for-machine-learning` was triaged first and cut the
+queue 37% (208 → 131), confirming the prediction that a shelf-level verdict beats
+row-by-row review when the rows share a container. Two lessons the drain should inherit:
+
+- **Offer a container-level verdict, not just a row-level one.** One judgement settled 67
+  rows. A drain that only ever asks about single rows will re-litigate structure that a
+  glance at the parent resolves.
+- **Show provenance, not only the neighbourhood.** k-NN is circular on exactly the cases
+  that need review most (see cfml item 1), so the reviewer needs the container title,
+  source and sibling filings alongside the embedding evidence.
 
 ---
 
