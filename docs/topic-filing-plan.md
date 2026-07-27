@@ -406,52 +406,74 @@ returns **ranked proposals with confidence** rather than one label. Delete the
 and the caller-side skip ([web-fallback.ts:406](../src/lib/agents/tools/web-fallback.ts)) — those are
 what make the classifier a no-op for 1,152 rows today.
 
-### Calibration results (run 2026-07-25 — `scripts/calibrate-topic-threshold.ts`)
+### Calibration results (run 2026-07-27 — `scripts/calibrate-topic-threshold.ts`)
 
-Run over 1,832 atomic, embedded, non-generated rows across 11 topics. Positives are
+Run over 1,832 atomic, embedded, non-generated rows across **20 topics**. Positives are
 leave-one-out similarity to the row's own topic centroid; negatives are its similarity to
-the best *other* centroid. **This run changed the design below — read it before implementing.**
+the best *other* centroid. **This is the current calibration; it replaces the 2026-07-25 run.**
 
 | Instrument | Agreement with current labels | Verdict |
 | --- | --- | --- |
-| 1. Absolute centroid threshold *(originally specified)* | best Youden J **0.453** at t=0.725 | ❌ **rejected** |
-| 2. Relative margin (own − bestOther) | 80.8% top-1 | ✅ viable as a **flagger** |
-| 3. k-NN label purity (k=10) | **88.7%** plurality agreement | ✅ **strongest** |
+| 1. Absolute centroid threshold *(originally specified)* | best Youden J **0.367** at t=0.750 | ❌ **rejected** |
+| 2. Relative margin (own − bestOther) | 77.7% top-1 | ✅ viable as a **flagger** |
+| 3. k-NN label purity (k=10) | **89.4%** plurality agreement *(vs any membership)* | ✅ **strongest** |
+
+⚠️ **Do not compare these numbers to the 2026-07-25 run.** The vocabulary went from 11
+topics to 20 between them (T4b seeded 6 shelves and minted 3), and agreement is not
+comparable across vocabularies — see As-built T4e item 2. Every instrument reads *lower*
+than 2026-07-25 against the scalar mirror, and none of that is rising label noise.
+
+**Instrument 3 is the best single signal** and is what the guardrail uses. Read it against
+the right target — post-T1 the label of record is the **membership set**, not the scalar
+mirror:
+
+| scored against | agreement |
+| --- | --- |
+| `Resource.topic` (scalar mirror) | 84.3% |
+| **any membership** — the model T1 implements | **89.4%** |
+| any *retrievable* membership (T1's predicate) | 86.5% |
+
+Median purity 1.0, p25 0.6. k-NN handles multi-modal topics that a single mean vector
+represents badly — which is most of them.
 
 **Instrument 1 fails.** The distributions overlap almost completely — own-topic p50 =
-0.757, best-other p50 = 0.688, with p05–p95 spans of 0.663–0.825 and 0.586–0.779. At the
-best operating point (t=0.725) it parks **28.3% of correctly-filed rows** while still
-admitting 26.4% of wrong-topic claims. This confirms the prior warning already recorded in
+0.768, best-other p50 = 0.718, with p05–p95 spans of 0.668–0.848 and 0.597–0.811. At the
+best operating point (t=0.750) it parks **36.0% of correctly-filed rows** while still
+admitting 27.3% of wrong-topic claims — worse than the 2026-07-25 run on both sides. This
+confirms the prior warning recorded in
 [audit-topic-relations.ts](../scripts/audit-topic-relations.ts): a technical corpus clusters too
-tightly for an absolute cosine to threshold on. Per-topic means sit in a narrow 0.724–0.786
+tightly for an absolute cosine to threshold on. Per-topic means sit in a narrow 0.724–0.861
 band, so no per-topic threshold rescues it either.
 
 **Instrument 2 works because it is scale-free.** An absolute cosine conflates "is this about
 topic X" with "how tight is topic X's cluster"; the margin asks the discriminating question
-directly. Margin p50 = +0.065, p05 = −0.045. Flag rates: δ=0 → 19.2% (352 rows), **δ=0.05 →
-4.3% (78 rows)**, δ=0.1 → 0.9%.
+directly. Margin p50 = +0.048, p05 = −0.061. Flag rates: δ=0 → 22.3% (408 rows), δ=0.05 →
+6.7% (122 rows), δ=0.1 → 1.9%. **δ is no longer a tunable** — see As-built T4e item 4.
 
-**Instrument 3 is the best single signal** and is what the guardrail should actually use:
-the plurality label of a row's 10 nearest neighbours matches its current topic 88.7% of the
-time (median purity 1.0, p25 0.7). It handles multi-modal topics that a single mean vector
-represents badly — which is most of them.
+**Where the disagreement actually is.** The top confusions are overwhelmingly *sibling
+shelves T4a–T4c deliberately created*, not mis-filings:
 
-**Motivating case.** The 45 Khan "Functions" leaves score margin p50 = −0.033, and **38/45
-are flagged at δ=0** — the margin instrument catches them, where the absolute threshold only
-"caught" them by parking a quarter of the library. But their nearest other centroids are
-`calculus-for-machine-learning` (19) and `calculus` (18): **detection works, correction does
-not**, because the right answer (`algebra`) isn't in the vocabulary. This is the empirical
-argument that T2 must *flag*, never auto-refile, and that T3's minting is the block that
-actually fixes this class of defect.
+| confusion | rows | |
+| --- | --- | --- |
+| `calculus-for-machine-learning` → `calculus` | 65 | the incoherent-pool case (T4e item 6) |
+| `probability-and-statistics` ↔ `statistics` | 31 | T4b's split |
+| `calculus` ↔ `calculus-for-machine-learning` | 17 | |
+| `calculus-for-machine-learning` → `linear-algebra` | 15 | |
+| `differential-equations` / `multivariable-calculus` / `precalculus` → `calculus` | 20 | T4b/T4c |
 
-**Side finding worth its own ticket.** The 15 lowest absolute scorers are dominated by
+**Motivating case — fixed.** The 45 Khan "Functions" leaves are now filed `precalculus=45`,
+with margin p50 **+0.088** and **5/45** flagged at δ=0 (was −0.033 and 38/45). Per As-built
+T4a item 2 this was a *seeding* problem, not a minting one: `algebra` was never the answer.
+The block in the script is now a **regression check** — a return to negative margins means
+the seeding re-broke.
+
+**Side finding worth its own ticket.** The lowest absolute scorers are dominated by
 non-teaching boilerplate leaves — "About the course", "What Now?", "Feedback", "Course
 Prerequisites", "Why These Prerequisites Matter". Low absolute similarity is a decent
 **junk-leaf detector** even though it's a poor mis-filing detector. That's a quality/containment
-signal for the review queue, not a filing signal. It also surfaced two genuine mis-filings
-worth fixing by hand now: `sklearn.linear_model.LogisticRegression` filed under
-`probability-and-statistics` (nearest `python-data-ml`, margin −0.163) and the Khan
-average-rate-of-change rows.
+signal for the review queue, not a filing signal. Still-live hand-fix candidates:
+`sklearn.linear_model.LogisticRegression` filed under `probability-and-statistics` (nearest
+`python-data-ml`) and a `calculus` row titled simply *"Algebra"* (measured purity 0.00).
 
 ### Revised guardrail: k-NN purity, with margin as the cheap pre-filter
 
@@ -1036,6 +1058,164 @@ give the 777 `inherited` rows a measured relevance), the three sub-0.60 shelves 
 would let `precalculus` stand on its own shelf**, which is what item 2 above shows is
 missing from the plan entirely.
 
+### As built — T4e (2026-07-27)
+
+**§6's premise was not met and most of its instructions pointed at the wrong thing**, so
+T4e is mostly a measurement fix and a set of recorded *negative* results. Shipped: the
+membership-aware rewrite of `scripts/calibrate-topic-threshold.ts`,
+`scripts/rescore-inherited-relevance.ts` (the §1 stretch, at zero LLM cost), the
+`topicPools()` currency fix in `topic-knn.ts`, and
+`tests/integration/topic-pool-currency.test.ts`. Applied to the dev DB 2026-07-27;
+membership invariants clean (`noMembership: 0, badPrimaryCount: 0, mirrorDrift: 0`).
+
+Six findings, in the order they change decisions:
+
+1. **The calibration script was scoring the wrong target, and had been since T1.** It reads
+   `Resource.topic` — a denormalized *mirror* of the primary membership — while the label of
+   record post-T1 is the `ResourceTopic` set. Correcting the target moves k-NN agreement
+   from 84.3% to **89.4%**. The reported "regression" from 88.7% never happened; against the
+   model T1 actually implements the number went **up**.
+2. **Agreement is not comparable across vocabularies, and ours changed 11 → 20 topics.**
+   Splitting one shelf into two adjacent shelves mechanically depresses purity — a
+   `statistics` row's neighbours are now half `probability-and-statistics`, right in every
+   sense that matters and still scored as a miss. `statistics` had **zero** rows on
+   2026-07-25 and 249 now; `precalculus` had 1 and has 47. **Neither branch of §6's decision
+   rule should fire**: the "≥95% → tighten δ" and "≤88% → escalate to a supervised
+   classifier" thresholds were both keyed to a number whose denominator changed. Escalating
+   the instrument here would have been a response to an artifact. The script now prints the
+   vocabulary size and a confusion table so a future run cannot repeat the mistake.
+3. **`minRelevance` is NOT the lever T4d handed it, and the default stays 0.0.** It was
+   never implemented — T1 §3 specced it and T1 shipped without it — and the measurements say
+   leave it that way. The +430 bleed is T4b's *retained vacated primaries*, which carry
+   **high** relevance precisely because T4a measured them while they were still primary:
+
+   | shelf | bleed rows | avg relevance |
+   | --- | --- | --- |
+   | `probability-and-statistics` | 249 | **0.96** (p50 1.0) |
+   | `discrete-mathematics` | 118 | 0.84 |
+   | `calculus-for-machine-learning` | 47 | 0.61 |
+   | `linear-algebra` | 16 | 0.71 |
+
+   A bar of 0.5 removes **32 of 430** (7%) while making **131 resources unreachable
+   entirely** — bar 0.4 already orphans 74 — which violates the locked "never orphan a row"
+   decision. It buys almost no bleed reduction at a cost the plan explicitly forbids.
+   ⚠️ If it is ever implemented, the specced clause is **incomplete**: it is origin-aware but
+   not *primary*-aware, and needs `OR rt."isPrimary"` to match the reasoning T1's retrieval
+   predicate already encodes (a primary always admits; parking doubt must not orphan a row).
+4. **δ is retired as a tunable.** It has no constant in code — it lives only in the
+   calibration sweep — and per As-built T4a item 6 it cannot be the cost gate the plan
+   sketched, because every written membership needs a measured `relevance` and only k-NN
+   produces one. Its flag rate moved 4.3% → 6.7% purely on the item-2 confound. The margin
+   keeps its one real job: review-priority sorting via `centroidMargins`. No threshold
+   constant is needed for that, and none should be reintroduced.
+5. **`MIN_SECONDARY_PURITY = 0.2` — the bar was never the binding constraint, so lowering it
+   would change nothing.** At 0.2, **787 of 1,106 rows (71%)** have a rival neighbour label
+   clearing it, yet only 207 are memberships and T4a wrote *zero* uncontested secondaries.
+   The classifier's one-topic prompt rule is what binds (As-built T4a item 3). So §6's fork
+   resolves: **do not lower the bar.** If the prompt is ever loosened, the bar should
+   *rise* — 0.4 admits 36.9% of rows, 0.5 admits 24.8%, and 0.2 is so permissive it would
+   be no guard at all. The sweep is now printed by the calibration script each run.
+6. **`MIN_VOUCHABLE_POOL` was measured in one currency and spent in another — fixed.**
+   `topicPools()` counted `ResourceTopic` rows, but `knnNeighbourTopics` votes with
+   `Resource.topic`, so a secondary membership inflated a shelf's pool without ever being
+   able to vouch for it. T4b's retention mechanic made the gap systematic
+   (`probability-and-statistics` 445/196, `discrete-mathematics` 263/145,
+   `calculus-for-machine-learning` 179/132, `linear-algebra` 211/195). All four are
+   vouchable either way, so the **only behavioural change in the library** is the boundary
+   case As-built T4a item 7 predicted and T4c parked: `differential-equations` read pool
+   **10** — vouchable by the letter of the constant — while just **9** rows could vote for
+   it, so k-NN could never actually vouch and its rows stayed permanently contested. It now
+   reads 9 and is honestly unvouchable, routing it to the accepted-but-contested treatment a
+   new shelf gets. The other direction (neighbours voting with every membership) was
+   rejected: a row with 3 memberships would cast 3 votes and purity would no longer be over
+   a denominator of k.
+
+**The §1 stretch is done, and it never needed the ops budget.** The plan filed it under
+`scripts/reclassify-topics.ts --all --apply`, an LLM cost. That is the wrong tool: the
+classifier is paid for in order to *propose* topics, and per As-built T4a item 5 the
+reclassifier never refiles, so for these rows proposals can only land as contested
+secondaries. What §1 actually asks for is one number — the measured worth of the membership
+the row already has, `purity(neighbours, currentTopic)` — which is a pure embedding
+computation over an index we already maintain. **777/777 measured, 0 unmeasurable, 0 model
+calls.** Mean 0.84, p50 1.00; 446 scored exactly 1.0 (a unanimous neighbourhood, not a
+placeholder — the column cannot distinguish those, so the driver verifies *coverage*
+instead of counting 1.0s).
+
+This establishes a property worth stating plainly: **every membership in the library now
+carries a measured relevance.** That does more than remove a lie — it dissolves the reason
+`minRelevance` had to be origin-aware at all. The pass deliberately does **not** contest
+low scorers: T4a contested on a classifier proposal *disagreeing*, a strictly stronger
+instrument than "the neighbourhood is mixed", and contesting here would apply a weaker test
+than the backlog got while growing a queue with no drainer. The 45 rows under 0.4 are
+reported as review-queue input instead.
+
+**Deferred deliberately: `calculus-for-machine-learning`.** It is the largest incoherent
+pool in the library and the single biggest source of both confusion and review backlog —
+132 rows at **0.42** mean purity, holding **82 of the 208 contested primaries (39%)**, and
+responsible for 80 of the top confusions. It is agent-minted and by construction a
+*curriculum framing* (calculus ∪ linear-algebra "for ML") rather than a subject, which is
+exactly why it cannot hold a neighbourhood. §6 says to triage an incoherent pool rather than
+loosen the guardrail around it — that stands, and triaging 132 rows is its own block, not
+T4e's tail. Library-wide the sub-0.60 shelves are now:
+
+| shelf | rows | mean k-NN purity |
+| --- | --- | --- |
+| `differential-equations` | 9 | 0.22 *(parked; now honestly unvouchable — item 6)* |
+| `machine-learning` | 17 | 0.25 *(10 of 17 confuse to `python-data-ml`)* |
+| `multivariable-calculus` | 17 | 0.40 |
+| `calculus-for-machine-learning` | **132** | **0.42** ← triage first |
+| `number-theory` | 14 | 0.47 |
+| `data-structures-algorithms` | 33 | 0.52 |
+| `cryptography` | 28 | 0.59 |
+
+Note this supersedes T4b's shortlist, which was drawn from its own refile cohort only and
+so missed `calculus-for-machine-learning` and `machine-learning` entirely.
+
+---
+
+## Open: the contested-membership review drain
+
+**This is the one thing the plan needs and does not have.** T4d item 2 surfaced it; T4e
+scopes it here rather than closing the plan with a silent gap. No code exists for it.
+
+**The gap.** Nothing in T1–T4e converts "this `calculus` row is really `precalculus`" into a
+*retrievable* membership without a human. The reclassifier never refiles (T4a item 5), so a
+disagreement becomes a **contested secondary**, which T1's retrieval predicate excludes by
+design. T4b's quorum refile is the only shipped mechanism that ever produced retrievable
+cross-topic reach, and it fires only on `unvouchable` shelves — `precalculus` now has a
+47-row pool, so it no longer qualifies. The queue therefore only grows.
+
+**The backlog** (measured 2026-07-27): **208 contested primaries**, concentrated in
+`calculus-for-machine-learning` (82), `linear-algebra` (20), `statistics` (18),
+`data-structures-algorithms` (15), `precalculus` (12), plus 61 contested secondaries and the
+45 sub-0.4 rows the T4e re-score surfaced.
+
+**Why `/review-pending-resources` is the seam but not yet the tool.** T4 §1 assumed the
+skill's queue could simply be extended to contested memberships, and extending it was
+deliberately scoped out of T4a into its own block. The skill reviews a resource against a
+*quality* rubric and its verdict writes `Resource.status`. Filing doubt is the orthogonal
+axis (the plan's Uncertainty decision) and its verdict must write `ResourceTopic` —
+`contested`, and sometimes a new primary via `setPrimaryTopic`. Same surface, different
+rubric and different write target.
+
+**Scope for that block:**
+
+1. A queue query over `ResourceTopic where contested`, ordered by review value — the
+   centroid margin is the ranking signal it was demoted to (T4a item 6), lowest first.
+2. A rubric that asks *one* question — "is this resource's primary topic right, and does it
+   also belong elsewhere?" — with the neighbourhood shown as evidence: the k-NN plurality,
+   the row's measured relevance, and the rival label's share.
+3. Three verdicts, all writing memberships and never `Resource.status`: **confirm** (clear
+   `contested`), **refile** (`setPrimaryTopic` to the proposal, `origin: review` — the one
+   sanctioned refiling path, as T4c did by hand for `differentiation`), **add** (write an
+   uncontested secondary — the mechanism T4d item 2 shows is missing).
+4. A driver to apply verdicts in batches with a dry-run, mirroring `reclassify-topics.ts`.
+
+**Sequencing note:** triaging `calculus-for-machine-learning` first would cut this queue by
+39% in one operator decision, and that shelf's rows are the least useful ones to review
+individually — the right verdict for most of them is a property of the shelf, not the row.
+Do the shelf, then the drain.
+
 ---
 
 ## Rejected alternatives
@@ -1049,16 +1229,25 @@ missing from the plan entirely.
 
 ## Risks
 
-- **Retrieval bleed.** More memberships = larger candidate sets — and *multiplicative*
-  until T4 §5 narrows the `relatedTopics` widening at the attach/picker sites. Controls:
-  the T4 narrowing, `minRelevance` (origin-aware), the contested-secondary exclusion, the
-  per-resource membership cap of 3, and the unchanged `maxDistance` ceiling on the re-judge
-  rung. Watch candidate-set sizes in the map-attach trace after T2.
-- ~~**Threshold miscalibration**~~ — **retired 2026-07-25.** Calibration ran
-  (`scripts/calibrate-topic-threshold.ts`) and settled the instrument: absolute cosine
-  rejected, k-NN purity adopted, δ=0.05 / k=10 as starting parameters. Residual risk is that
-  the labels it calibrated against are themselves noisy, so re-run after T4's backfill
-  cleans them. The script is idempotent and read-only.
+- ~~**Retrieval bleed**~~ — **measured and largely retired 2026-07-27 (T4d/T4e).** The
+  "multiplicative until §5 narrows" risk did not materialize: multi-membership added **+0**
+  bleed at every site §5 would have narrowed (T4d item 3). The real +430 is on edgeless
+  shelves, where widening never applied, and it is T4b's retained vacated primaries — rows
+  that are genuinely on those shelves. `minRelevance` is **not** a usable control for it
+  (As-built T4e item 3: a 0.5 bar removes 7% of the bleed while orphaning 131 resources) and
+  stays unimplemented at 0.0. The live controls are the contested-secondary exclusion, the
+  per-resource cap of 3, the directed edge table, and the `maxDistance` ceiling on the
+  re-judge rung.
+- ~~**Threshold miscalibration**~~ — **retired; re-run 2026-07-27 (T4e).** The instrument
+  holds: absolute cosine rejected again (Youden J fell 0.453 → 0.367), k-NN purity adopted,
+  k=10 kept, δ retired as a tunable. The residual risk the original entry named — noisy
+  labels — turned out to be the *lesser* hazard. The real one is **comparing agreement
+  across vocabularies**: ours went 11 → 20 topics, which depresses purity mechanically and
+  made a healthy corpus read as a regression. The script now prints vocabulary size and a
+  confusion table so the mistake is visible; it remains idempotent and read-only.
+- **An undrained review queue.** 208 contested primaries and no mechanism to resolve them —
+  the queue only grows, and it is the only path that makes a mis-filing retrievably
+  corrected. See "Open: the contested-membership review drain".
 - **Cost.** One classifier call per discovery batch (already batched) plus a cached centroid
   aggregate — small next to the discovery LLM spend. T4's one-off backfill is the real line
   item and should be budgeted with the warm campaign.

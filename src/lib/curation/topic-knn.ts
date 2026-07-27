@@ -7,15 +7,21 @@
 // the resource's embedding actually sit among that topic's resources?
 //
 // The instrument is k-NN LABEL PURITY, chosen by measurement, not taste
-// (scripts/calibrate-topic-threshold.ts, 2026-07-25, 1,832 rows / 11 topics):
+// (scripts/calibrate-topic-threshold.ts, re-run 2026-07-27, 1,832 rows / 20 topics):
 //
-//   absolute cosine to a topic centroid   Youden J 0.453   ❌ rejected — a technical
+//   absolute cosine to a topic centroid   Youden J 0.367   ❌ rejected — a technical
 //                                                            corpus clusters too tightly
-//                                                            (own p50 0.757 vs best-other
-//                                                            0.688; the distributions
+//                                                            (own p50 0.768 vs best-other
+//                                                            0.718; the distributions
 //                                                            almost completely overlap)
-//   relative margin (own − best other)    80.8% top-1     ✅ viable as a flagger
-//   k-NN plurality, k=10                  88.7%           ✅ strongest — adopted
+//   relative margin (own − best other)    77.7% top-1     ✅ viable as a flagger
+//   k-NN plurality, k=10                  89.4%           ✅ strongest — adopted
+//
+// ⚠️ That 89.4% is agreement with ANY MEMBERSHIP, which is the label of record post-T1.
+// Scored against the scalar `Resource.topic` mirror the same run reads 84.3%. And do not
+// compare either figure to the 2026-07-25 run (11 topics): agreement is not comparable
+// across vocabularies, and T4b's shelf splits depress purity mechanically. See As-built
+// T4e items 1-2 in docs/topic-filing-plan.md.
 //
 // k-NN also handles multi-modal topics, which a single mean vector represents badly —
 // and most of our topics are multi-modal.
@@ -36,14 +42,24 @@
 import { prisma } from '@/lib/db';
 import type { TopicFilingOrigin } from '@prisma/client';
 
-// k from the calibration run. Re-verify after T4's backfill cleans the labels.
+// k from the calibration run. Re-verified 2026-07-27 (T4e) and kept at 10.
 export const KNN_K = 10;
 
-// A secondary membership needs this share of the k neighbours. UNCALIBRATED — the
-// calibration measured top-1 plurality agreement, not a secondary-label distribution,
-// so 0.2 (2 of 10 neighbours) is a deliberately conservative starting point. T4's
-// recalibration is where it gets settled; until then it only ever ADDS reachability,
-// and the membership cap bounds the blast radius.
+// A secondary membership needs this share of the k neighbours.
+//
+// T4e settled the plan's open question ("lower the bar, or loosen the classifier's
+// one-topic rule?") and the answer is NEITHER, in that order. The bar was never the
+// binding constraint: at 0.2, 787 of 1,106 rows (71%) have a rival neighbour label
+// clearing it, yet only 207 are memberships and T4a wrote ZERO uncontested secondaries.
+// What binds is the classifier's prompt rule to return one topic unless a resource
+// squarely belongs on several shelves — a topic never reaches this bar unless the model
+// proposed it first. So lowering 0.2 would change nothing.
+//
+// It stays at 0.2 because it is currently harmless (it only ever ADDS reachability, and
+// MAX_MEMBERSHIPS bounds the blast radius). ⚠️ But it is NOT a safe bar on its own: if the
+// one-topic prompt rule is ever loosened, RAISE this first — 0.2 admits 71% of rows, which
+// is no guard at all. The measured alternatives are 0.4 (36.9%) and 0.5 (24.8%). The
+// calibration script prints this sweep on every run.
 export const MIN_SECONDARY_PURITY = 0.2;
 
 // Hard cap on memberships per resource (primary + guarded secondaries; T3's collision
@@ -89,8 +105,9 @@ export type FilingInput = {
   // Primary topics of the k nearest embedded neighbours. Empty when the resource has no
   // embedding, or the library has none.
   neighbourTopics: string[];
-  // Pool size per topic, live. Only membership in this map at >= MIN_VOUCHABLE_POOL
-  // makes a topic vouchable.
+  // Live count per topic of the rows that VOTE for it — i.e. whose `Resource.topic` is
+  // that topic, the same population `neighbourTopics` is drawn from (see topicPools).
+  // Only an entry at >= MIN_VOUCHABLE_POOL makes a topic vouchable.
   pools: Map<string, number>;
 };
 
@@ -334,17 +351,37 @@ export async function knnNeighbourTopicsOf(resourceId: string, k = KNN_K): Promi
 // TopicCentroid.memberCount, which is only as fresh as the last embed backfill: a topic
 // that just received its first resources would still read as unvouchable, which is the
 // bootstrapping deadlock MIN_VOUCHABLE_POOL exists to break.
+//
+// ⚠️ T4e — COUNTS THE SCALAR MIRROR, NOT MEMBERSHIPS. This reads like a T1 regression
+// and is the opposite: the pool exists to answer exactly one question — "can k-NN ever
+// vouch for this topic?" — and the only rows that can answer it are the rows that CAST A
+// VOTE. `knnNeighbourTopics` / `knnNeighbourTopicsOf` select `n.topic`, the scalar
+// primary, so a secondary membership contributes nothing to any neighbourhood tally. The
+// membership form counted a currency the instrument never spends.
+//
+// T4b's retention mechanic is what made the two diverge: a vacated primary is kept as an
+// uncontested secondary, so every shelf T4b split reads larger by membership than by
+// votes (measured 2026-07-27: probability-and-statistics 445/196, discrete-mathematics
+// 263/145, calculus-for-machine-learning 179/132, linear-algebra 211/195). Those four are
+// vouchable either way, so the ONLY behavioural change in the whole library is the case
+// this fix exists for: `differential-equations` read pool 10 — vouchable by the letter of
+// MIN_VOUCHABLE_POOL — while just 9 rows could ever vote for it, so k-NN could never
+// actually vouch and its rows stayed permanently contested (As-built T4a item 7). It now
+// reads 9 and is honestly unvouchable, which routes it to the same accepted-but-contested
+// treatment a new shelf gets instead of pretending the guardrail can adjudicate it.
+//
+// The other direction of reconciliation — letting neighbours vote with every membership —
+// was rejected: a neighbour with 3 memberships would cast 3 votes and purity would no
+// longer be over a denominator of k.
 export async function topicPools(): Promise<Map<string, number>> {
   const rows = await prisma.$queryRaw<{ topic: string; n: number }[]>`
-    SELECT rt.topic, count(*)::int AS n
-    FROM "ResourceTopic" rt
-    JOIN "Resource" r ON r.id = rt."resourceId"
+    SELECT r.topic, count(*)::int AS n
+    FROM "Resource" r
     WHERE r.embedding IS NOT NULL
       AND r."decompositionStatus"::text = 'atomic'
       AND r.status::text IN ('active', 'pending_review')
       AND r.origin::text <> 'generated'
-      AND NOT (rt.contested AND NOT rt."isPrimary")
-    GROUP BY rt.topic
+    GROUP BY r.topic
   `;
   return new Map(rows.map((r) => [r.topic, r.n]));
 }
