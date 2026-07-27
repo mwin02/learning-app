@@ -202,6 +202,28 @@ export async function applyReclassification(
   });
 }
 
+// ── quorum refile settlement (T4b) ───────────────────────────────────────────
+//
+// Phase 2 of the seed/mint pass: the measured worth of a membership, written after the
+// whole cohort has landed. Deliberately NOT `setPrimaryTopic` — nothing about the primary
+// or the mirror changes here, and routing a relevance update through the refile seam
+// would take a row lock and rewrite the mirror for no reason.
+//
+// `updateMany` rather than `update` so a membership that vanished between the write and
+// the measurement (a concurrent refile, a deleted resource) is a no-op instead of a throw:
+// this runs across hundreds of rows at the end of a long pass, and the settlement is a
+// refinement of an already-correct row, never a correctness requirement.
+export async function settleMembership(
+  resourceId: string,
+  topic: string,
+  settlement: { relevance: number; contested: boolean },
+): Promise<void> {
+  await prisma.resourceTopic.updateMany({
+    where: { resourceId, topic },
+    data: { relevance: settlement.relevance, contested: settlement.contested },
+  });
+}
+
 // The three properties T1 carries by assertion instead of by DB constraint. Shared by the
 // backfill driver and the differential harness so there is one definition of "healthy",
 // and cheap enough (three aggregates) to run after any bulk membership write.

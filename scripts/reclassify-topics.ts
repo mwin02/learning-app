@@ -39,11 +39,11 @@ import {
   tallyQuorumChannels,
   type ReclassifyDecision,
 } from '../src/lib/curation/reclassify';
-
 // T4b's bar, printed here so a dry-run says which shelves are ready to seed. Below it,
 // k-NN can never vouch for the topic, so filing a handful of rows there would strand
-// them on a shelf the guardrail permanently distrusts.
-const QUORUM = 10;
+// them on a shelf the guardrail permanently distrusts. Imported from the block that
+// enforces it (where it is MIN_VOUCHABLE_POOL) so the two can't drift apart.
+import { QUORUM } from '../src/lib/curation/quorum-refile';
 
 // One classifier call per batch. Kept small: the prompt carries each row's full metadata
 // and the whole canonical vocabulary, and a structured-output failure costs the batch.
