@@ -94,7 +94,9 @@ export type FilingInput = {
   pools: Map<string, number>;
 };
 
-function purity(neighbourTopics: string[], topic: string): number {
+// Exported for T4a, which measures purity directly rather than reading it back off a
+// FilingDecision — same tally, same neighbour list, one obvious source.
+export function purity(neighbourTopics: string[], topic: string): number {
   if (neighbourTopics.length === 0) return 0;
   let hits = 0;
   for (const t of neighbourTopics) if (t === topic) hits++;
@@ -103,7 +105,11 @@ function purity(neighbourTopics: string[], topic: string): number {
 
 // The plurality label, or null when the neighbours are empty or TIE. A tie is not a
 // verdict — it is exactly the "we can't tell" case the contested flag exists for.
-function plurality(neighbourTopics: string[]): string | null {
+// Exported for T4a's review report: when the guardrail rejects a proposal because some
+// THIRD topic holds the neighbourhood, that topic is the single most useful thing a
+// reviewer can be told. Diagnostic only — it never becomes a membership, since nothing
+// proposed it.
+export function plurality(neighbourTopics: string[]): string | null {
   const counts = new Map<string, number>();
   for (const t of neighbourTopics) counts.set(t, (counts.get(t) ?? 0) + 1);
   let best: string | null = null;
