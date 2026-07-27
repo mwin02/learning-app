@@ -2,15 +2,31 @@
 //
 // Runs the OLD scalar predicate (`topic IN (…)`) and the NEW membership predicate
 // (buildConditions' EXISTS over ResourceTopic) over the same params, for every topic in
-// the library plus the multi-topic sets real call sites request, and asserts the returned
-// id sets are identical. Also asserts the mirror invariant (the drift check for the
-// setPrimaryTopic write seam) and, on the paths Vitest can't afford, that no row comes
-// back twice.
+// the library plus the multi-topic sets real call sites request, and asserts the new side
+// is a JUSTIFIED SUPERSET of the old. Also asserts the mirror invariant (the drift check
+// for the setPrimaryTopic write seam) and, on the paths Vitest can't afford, that no row
+// comes back twice.
 //
-// ⚠️ Scope, stated honestly: pre-T2 the membership table is EXACTLY the mirror (one
-// inherited primary per resource), so an identical id set validates the SQL REWRITE and
-// nothing else. It says nothing about filing behaviour, and a green run here is not
-// evidence about T2+.
+// ⚠️ THE ASSERTION IS ONE-SIDED, AND WAS NOT ALWAYS. As written for T1 this asserted the
+// two id sets were IDENTICAL, which was correct only while the membership table was
+// exactly the mirror (one inherited primary per resource). That expired at **T4b**, whose
+// quorum refile retains each vacated topic as an uncontested SECONDARY — 441 of them, the
+// thing that made T4d's precondition real. The scalar column only ever sees the primary,
+// so it structurally cannot return those rows, and the identity assertion started
+// reporting the feature working as 6 failures. Restoring identity would mean deleting
+// T4b's retention; the assertion is what was wrong, not the data.
+//
+// What is still checked, and is the property that actually matters:
+//   - `missing` must be EMPTY — the membership predicate may never LOSE a row the scalar
+//     returns. That is the no-regression half of the cutover and it is unconditional.
+//   - every `extra` row must be EXPLAINED by an admitting non-primary membership in one
+//     of the requested topics. An extra with no such membership is a real defect (a stray
+//     membership, a contested-secondary leak, or a mirror that has drifted), so extras are
+//     verified rather than tolerated.
+//
+// ⚠️ Scope, stated honestly: this validates the SQL REWRITE and the shape of the extras.
+// It says nothing about whether any given filing is CORRECT — a green run is not evidence
+// about T2+ filing behaviour.
 //
 // Costs two embedding calls (the ranked path and searchNearbyResources — the two paths
 // kept out of tests/integration per CLAUDE.md); pass --skip-ranked to omit them.
@@ -54,6 +70,31 @@ function nonTopicConditions(params: SearchParams): Prisma.Sql[] {
   return buildConditions({ ...params, topic: undefined, topics: undefined });
 }
 
+// Extras are legitimate exactly when the membership table explains them: the row is
+// reachable under one of the requested topics through a membership the scalar mirror
+// cannot represent — a NON-PRIMARY, non-contested one. Returns the extras that have no
+// such explanation, i.e. the genuine defects.
+//
+// Mirrors buildConditions' admission rule (`isPrimary OR NOT contested`) restricted to
+// its secondary half; a contested secondary is excluded there, so it must not justify an
+// extra here either.
+async function unexplainedExtras(topics: string[], extra: string[]): Promise<string[]> {
+  if (extra.length === 0) return [];
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT r.id FROM "Resource" r
+    WHERE r.id IN (${Prisma.join(extra)})
+      AND EXISTS (
+        SELECT 1 FROM "ResourceTopic" rt
+        WHERE rt."resourceId" = r.id
+          AND rt.topic IN (${Prisma.join(topics)})
+          AND NOT rt."isPrimary"
+          AND NOT rt.contested
+      )
+  `;
+  const explained = new Set(rows.map((r) => r.id));
+  return extra.filter((id) => !explained.has(id));
+}
+
 async function differential(label: string, topics: string[], params: SearchParams) {
   const rest = nonTopicConditions(params);
   const oldWhere = Prisma.join([legacyTopicClause(topics), ...rest], ' AND ');
@@ -64,14 +105,21 @@ async function differential(label: string, topics: string[], params: SearchParam
   const newSet = new Set(newIds);
   const missing = oldIds.filter((id) => !newSet.has(id));
   const extra = newIds.filter((id) => !oldSet.has(id));
+  const unexplained = await unexplainedExtras(topics, extra);
 
-  check(
-    `${label} (${oldIds.length} rows)`,
-    missing.length === 0 && extra.length === 0,
-    missing.length || extra.length ? `missing=${missing.length} extra=${extra.length}` : '',
-  );
-  if (missing.length) console.log(`        missing sample: ${missing.slice(0, 3).join(', ')}`);
-  if (extra.length) console.log(`        extra sample:   ${extra.slice(0, 3).join(', ')}`);
+  const detail = [
+    missing.length ? `missing=${missing.length}` : '',
+    // A secondary-only extra is the expected post-T4b shape, so it is reported as
+    // information rather than scored — but silently dropping the count would hide a
+    // sudden jump in membership fan-out, which is worth seeing.
+    extra.length ? `+${extra.length} via secondary${unexplained.length ? ` (${unexplained.length} UNEXPLAINED)` : ''}` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  check(`${label} (${oldIds.length} rows)`, missing.length === 0 && unexplained.length === 0, detail);
+  if (missing.length) console.log(`        missing sample:     ${missing.slice(0, 3).join(', ')}`);
+  if (unexplained.length) console.log(`        unexplained sample: ${unexplained.slice(0, 3).join(', ')}`);
 }
 
 async function main() {
@@ -80,8 +128,13 @@ async function main() {
   console.log('\n── mirror invariant (write-seam drift check) ──');
   await assertMembershipInvariants();
 
+  // `, topic` is a DETERMINISM tiebreaker, not cosmetics: the playground-style section
+  // below samples `slice(0, 3)`, and `probability-and-statistics` / `linear-algebra` are
+  // currently tied at exactly 202 rows. With no tiebreaker Postgres returns ties in
+  // arbitrary order, so that section silently tested a different topic run to run —
+  // making a regression on the unlucky topic a coin flip.
   const topicRows = await prisma.$queryRaw<{ topic: string; c: number }[]>`
-    SELECT topic, count(*)::int AS c FROM "Resource" GROUP BY topic ORDER BY c DESC
+    SELECT topic, count(*)::int AS c FROM "Resource" GROUP BY topic ORDER BY c DESC, topic
   `;
 
   console.log('\n── differential: every topic, retrieval defaults (pickable, active+pending) ──');
