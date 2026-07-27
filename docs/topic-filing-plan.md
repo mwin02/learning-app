@@ -938,6 +938,104 @@ retained it as an uncontested secondary — a live demonstration of T4b's retent
 and it leaves the topic sitting precisely on the `MIN_VOUCHABLE_POOL` boundary that
 As-built T4a item 7 flagged. **T4e inherits it unchanged.**
 
+### As built — T4d (2026-07-27)
+
+**§5 was not implemented, because its premise measured false.** The narrowing shipped, but
+through the *edge data* rather than the call sites: `relatedTopics` became **directed** and
+each direction was declared on measured evidence. All three call sites
+([attach-candidates.ts:169](../src/lib/agents/map/attach-candidates.ts),
+[resource-search/route.ts:40](../src/app/api/playground/resource-search/route.ts),
+[web-fallback.ts:251](../src/lib/agents/tools/web-fallback.ts)) still read
+`relatedTopics(topic)` verbatim — **zero call-site diff**. Shipped
+`scripts/verify-topic-narrowing.ts` (live per-concept candidate re-search),
+`src/types/resource.test.ts`, and a pin in `scripts/reclassify-topics.ts`.
+
+Result: `calculus` 431→383, `sql` 166→93, `python` 173→140, `python-data-ml` 250→157, with
+`precalculus` and `javascript-react` deliberately unchanged. Across every Path: **13 of 522
+candidate slots churned, 0 concepts emptied, 0 attached `teaches` rows lost.**
+
+Three measurements inverted the plan, and they are load-bearing for T4e:
+
+1. **§5 as written would have COLLAPSED the precalculus Path.** Narrowing to `[topic]`
+   costs 76 of its 77 attachments and takes it from **5 spine holes to 23 of 24
+   concepts** (12 of them `spine`); `python-data-ml` loses 21 attachments and opens 2
+   holes; `python` opens 1. Only `calculus` and `sql` were safe. The plan reasoned about
+   candidate counts; the deciding measurement is per-concept coverage.
+2. **The stretch re-score (§1) does NOT unblock the narrowing — do not sequence it as
+   the precondition.** 60 of the 76 rows precalculus would lose carry *no* `precalculus`
+   membership at all, not even contested. Per As-built T4a item 5 the reclassifier never
+   refiles, so a re-score routes every such row to the **disagree** path → a `contested`
+   secondary → **invisible to retrieval** under T1's predicate. The only shipped
+   mechanism that ever produced *retrievable* cross-topic reach is T4b's quorum refile,
+   and it fires only on `unvouchable` shelves — `precalculus` now has a 47-row pool, so
+   it no longer qualifies. **Nothing in this plan currently converts "this calculus row
+   is really precalculus" into a retrievable membership without a human.** That is a
+   review-queue drain nobody has scoped, not a re-score.
+3. **Multi-membership added ZERO bleed at exactly the sites §5 narrows.** Measured
+   membership pool vs the old scalar-mirror pool over the same widened sets:
+   `calculus` / `precalculus` / `python` / `python-data-ml` / `sql` / `javascript-react`
+   all **+0**, while every shelf that *did* widen — `probability-and-statistics` **+249**,
+   `discrete-mathematics` **+118**, `calculus-for-machine-learning` **+47**,
+   `linear-algebra` **+16** — has no edges, so §5 is a no-op there and has no lever on it.
+   T4a's backlog ("topics with NO relations") and T4d's targets ("topics WITH relations")
+   are exact complements, so 774 of the 777 remaining `inherited` rows sit on shelves the
+   narrowing touches and no re-score has ever reached. **The "bleed is multiplicative
+   until the narrowing lands" risk did not materialize; the lever for the real +430 is
+   origin-aware `minRelevance`, which is T4e's.**
+
+Five further deviations:
+
+4. **The `precalculus`→`calculus` re-evaluation note in [resource.ts](../src/types/resource.ts)
+   is answered: KEEP the edge.** It asked whether the edge merely compensated for
+   mis-filing. It does both jobs, and the mis-filing half is *not* fixed — T4b's 47-row
+   precalculus shelf came off `discrete-mathematics`, while the genuinely-precalculus
+   material on the **calculus** shelf was never re-scored (calculus had an edge, so its
+   395 rows fell outside T4a's backlog and are still 100% `inherited`). The note is
+   replaced in code by the measurement.
+5. **Direction is the unit of decision, and the old symmetric closure priced every edge
+   at its more defensible half.** `precalculus`→`calculus` carries 76 attachments;
+   `calculus`→`precalculus` carries 0. One declaration used to buy both. Dropped on
+   measurement: `calculus`→`precalculus` (4/132 slots churn), **both** directions of
+   `sql`↔`python-data-ml` (0 of 126 and 1 of 132), `python`→`data-structures-algorithms`,
+   and the never-exercised `machine-learning`→`python-data-ml` /
+   `javascript`→`javascript-react`. Newly declared explicitly: `python`→`python-data-ml`
+   (5 real attachments, previously free via the reverse scan).
+6. **`python`→`data-structures-algorithms` was actively HARMFUL, not merely inert.**
+   Every row it contributed was the same generic MIT *"Lecture 2x: Advanced Topics
+   (cont.)"* cluster, displacing on-topic Python docs (*More Control Flow Tools*,
+   *Errors and Exceptions*, *Modules*) from 8 slots across 5 concepts. A widening edge
+   can cost quality even when it costs no coverage — worth checking for the shelves T4e
+   triages.
+7. **The web-fallback rung is COUPLED to the same table** — a deviation from §5, which
+   wanted it kept wide. An edge dropped on evidence is dropped everywhere; the
+   alternative (a second `sourcingTopics()` list) reintroduces the two-lists problem.
+   Justified by the corpus: the 2026-07-25 precalculus warm run shows wide reach at that
+   rung *suppressing* needed discovery, because the rung counts raw hits rather than
+   judged `teaches` survivors. Cost is more web discovery on cold `sql`/`calculus` warms.
+8. **"0 attachments lost" is only evidence when the far shelf was populated at map-build
+   time**, and a verification harness must not derive its own baseline. T4b seeded
+   `precalculus` and `data-structures-algorithms` *after* every Path was mapped, so
+   archaeology on those directions is trivially clean and proves nothing — hence the live
+   re-search. Likewise `scripts/verify-topic-narrowing.ts` holds a **frozen**
+   `PRE_T4D_RELATIONS`: deriving the baseline from the live table reproduces edges made
+   one-way but silently misses edges *deleted outright*, which reported `sql` as a no-op
+   until it was fixed.
+
+⚠️ **`scripts/reclassify-topics.ts`'s default backlog selector was pinned.** It read
+`relatedTopics(t).length === 1`, a claim about *history* (which topics the pre-T2b
+classifier skipped). Directed edges drop `calculus` and `sql` to one member, so the live
+function would have silently enrolled them. It now tests the frozen symmetric closure.
+Those rows do deserve a re-score — that is `--all`'s job (the §1 stretch), not a change of
+meaning smuggled into the default.
+
+**What T4e inherits:** the calibration re-run, `minRelevance` (now clearly the *only*
+bleed control for the +430 on edgeless shelves, and it needs the §1 stretch re-score to
+give the 777 `inherited` rows a measured relevance), the three sub-0.60 shelves from T4b
+(`multivariable-calculus` at 0.40 first), `differential-equations` parked on the
+`MIN_VOUCHABLE_POOL` boundary — and a newly explicit item: **scoping the review drain that
+would let `precalculus` stand on its own shelf**, which is what item 2 above shows is
+missing from the plan entirely.
+
 ---
 
 ## Rejected alternatives
