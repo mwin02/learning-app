@@ -886,6 +886,58 @@ genuinely met), 209 contested primaries for the review queue (134 from T4a's dis
 + 79 unsettled refiles), and 3 new canonicals with no Path — harmless per the plan's
 locked decision, waiting for a learner request.
 
+### As built — T4c (2026-07-27)
+
+**T4c was an OPS ACTION, not a code block** — the honest scope of §4 turned out to be one
+`setPrimaryTopic` call and a one-row delete, so no driver was written and this section is
+the record. Applied to the dev DB 2026-07-27; membership invariants clean afterwards.
+
+**The fold.** `differentiation`'s single row — *"Derivatives: Measuring the Rate of
+Change"* — moved to `calculus` at measured purity **1.0** (all 10 nearest neighbours are
+`calculus`), written with `origin: review`, since this is an operator decision closing out
+a plan item rather than a classifier verdict. The `differentiation` membership was then
+deleted, retiring the slug completely: **0 resources, 0 memberships, 0 centroids, 0
+aliases, 0 Paths** now reference it.
+
+⚠️ **Deleting the vacated membership is the OPPOSITE of T4b's rule, deliberately.** T4b
+retains the vacated topic as an uncontested secondary because the goal there is to keep a
+live shelf reachable through a split. Here the goal is to *retire a slug*, so retention
+would defeat the operation — the leftover row was contested (hence already invisible to
+retrieval), pure dead weight keeping a junk topic alive in every membership-derived
+listing. Read the two rules as one principle: retain when the vacated topic is still a
+place, delete when it never was.
+
+**Three of §4's premises were stale by the time it ran** — worth noting as a general
+caution about acting on numbers measured several blocks earlier:
+
+1. `differentiation`'s row **is** embedded, atomic and active; §4's "no embedded leaf"
+   rationale was wrong. Its pool reads 0 because the row is `origin: generated`
+   (`generated://differentiation/conceptual-introduction-to-derivatives`) — a
+   lesson-generation artifact that minted a junk slug — and `topicPools()` excludes
+   generated rows. Still a mint accident, just not the one described.
+2. **Neither orphan slug exists in `TopicAlias`** (no alias, no canonical), so the fold
+   needed no registry remap. T1.5's twin merge is the tempting precedent here and would
+   have been the wrong instrument.
+3. `differential-equations` is **11 primary rows, not 12** — one moved to
+   `eigenvalues-and-eigenvectors` in T4b.
+
+**The fold did not grow `calculus`'s pool** (381 → 381). Because the row is
+`origin: generated` it is excluded from pools and from k-NN neighbour sets alike, so this
+was a bookkeeping correction, not a change to any shelf. Nothing retrievable moved.
+
+**T4a's detection loop closed end to end.** The row already carried a *contested* `calculus`
+secondary, written by T4a's disagreement path — T4a detected the mis-filing and recorded the
+hypothesis without acting on it, and T4c is the human confirmation. That is precisely the
+"disagreements are routed to review rather than auto-rewritten" flow the locked decisions
+call for, observed working on a real row.
+
+**The park.** `differential-equations` — **no action taken**, which is what "park" means:
+11 primary rows and 12 memberships left exactly as they are, waiting for a learner request.
+Its pool is still **exactly 10** even after losing a primary to T4b, because the moved row
+retained it as an uncontested secondary — a live demonstration of T4b's retention mechanic,
+and it leaves the topic sitting precisely on the `MIN_VOUCHABLE_POOL` boundary that
+As-built T4a item 7 flagged. **T4e inherits it unchanged.**
+
 ---
 
 ## Rejected alternatives
