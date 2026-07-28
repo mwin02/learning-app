@@ -15,6 +15,8 @@
 
 import { prisma } from '@/lib/db';
 import { safeEmbedResource, storeEmbedding } from '@/lib/ai/embeddings';
+import { setPrimaryTopic } from '@/lib/curation/resource-topics';
+import { MAX_MEMBERSHIPS, type FilingDecision } from '@/lib/curation/topic-knn';
 import { safeClassifyAndPersist } from '@/lib/curation/embeddability';
 import { computeTrustScore } from '@/lib/curation/trust-score';
 import { youtubeEngagementSignal } from '@/lib/curation/youtube-signal';
@@ -89,6 +91,12 @@ export async function upsertResource(
   // T2b filing guardrail has its input at filing time instead of after commit. Optional:
   // callers without a vector (seed/verify paths) keep today's post-commit behaviour.
   embedding?: number[] | null,
+  // Topic filing T2b: where this resource is FILED — one primary (mirrored to
+  // Resource.topic through the setPrimaryTopic seam) plus any guarded secondaries, as
+  // decided by decideFiling against the embedding above. Omitted by callers that gather
+  // no evidence (the seed/verify paths), which then get today's semantics: a single
+  // `discovery` membership under `topic`, which is precisely what that origin means.
+  filing?: FilingDecision,
 ): Promise<UpsertOutcome> {
   // F8: dedup on the canonical URL — strip tracking params / fragment / trailing slash /
   // host case so a trivially-different URL for the same page collapses onto one row.
@@ -158,6 +166,14 @@ export async function upsertResource(
         select: { id: true },
       });
       parentId = parent.id;
+
+      // T2b: file the row. Post-T1 retrieval is an EXISTS over "ResourceTopic", so a row
+      // with no membership is unreachable no matter what Resource.topic says — the
+      // memberships ARE the filing, and they are written in the same transaction as the
+      // row so that can never come apart.
+      const decision = filing ?? defaultFiling(topic);
+      await writeMemberships(tx, parent.id, decision);
+
       // T2a: the parent is embedded whatever its decompositionStatus, container
       // included. The old atomic-only gate read "embedding an unpickable container
       // wastes a call" — true while an embedding only bought PICKABILITY, false now
@@ -166,6 +182,10 @@ export async function upsertResource(
       // container mis-filing, and its children inherit the topic, multiplying one
       // mistake by 45. Retrieval stays container-free via the decompositionStatus
       // predicate in searchResources, not via embedding presence.
+      // ⚠️ Must stay AFTER the membership write: setPrimaryTopic updates Resource.topic
+      // through the Prisma client, which bumps @updatedAt — and storeEmbedding stamps
+      // GREATEST("updatedAt", now()), so embedding last is what keeps the row from
+      // looking stale to embedMissing() the moment it is created.
       if (embedding) await storeEmbedding(parent.id, embedding, tx);
       // ...but only an ATOMIC parent joins embedTasks, which is the pickable set that
       // becomes `atomicIds` (see the type comment). Already-embedded rows still need
@@ -183,7 +203,8 @@ export async function upsertResource(
 
       for (const child of decomposition.children) {
         await createChild(tx, {
-          topic,
+          topic: decision.primary.topic,
+          filing: decision,
           parentId: parent.id,
           sourceId: source.id,
           trustScore: sourceTrust,
@@ -195,7 +216,15 @@ export async function upsertResource(
           embedTasks,
         });
       }
-    });
+    // T2b: raised off Prisma's 5s default, the same trade decomposeExisting already
+    // makes. Filing added ~4 round-trips per row (setPrimaryTopic locks the Resource,
+    // clears other primaries, upserts the membership, writes the mirror) on top of the
+    // insert, so the motivating 45-leaf Khan container now spends ~5x the statements
+    // inside this transaction. Blowing the budget is silent in the worst way: the catch
+    // below turns a P2028 into `outcome: 'skipped'`, so the whole decomposition would
+    // vanish with one log line. 60s is well clear of the observed shape while still
+    // bounding a hung connection.
+    }, { maxWait: 10_000, timeout: 60_000 });
   } catch (err) {
     console.log('[upsert-resource] transaction failed', {
       url,
@@ -375,6 +404,14 @@ async function createChild(
   tx: TxClient,
   args: {
     topic: string;
+    // T2b: the parent's filing, inherited whole. A container's children are by
+    // construction the same subject as the container, and post-T2a the container itself
+    // was embedded and guardrail-checked — so the evidence backing this membership was
+    // tested at the granularity where the motivating mis-filing actually occurred.
+    // Per-child classification stays out of scope. Absent for decomposeExisting, whose
+    // parent's filing predates T2b; children then inherit the parent's topic as a plain
+    // `discovery` membership, which is still what makes them retrievable at all.
+    filing?: FilingDecision;
     parentId: string;
     sourceId: string;
     trustScore: number;
@@ -428,6 +465,12 @@ async function createChild(
     select: { id: true },
   });
 
+  // T2b: children are the pickable leaves, so a missing membership costs MORE here than
+  // on the container — it makes the whole decomposition unretrievable. Secondaries are
+  // inherited too: they were tested against the container's embedding, which is the
+  // subject the children share.
+  await writeMemberships(tx, created.id, args.filing ?? defaultFiling(topic));
+
   // Only atomic leaves are pickable, so only they are embedded.
   if (decompStatus === 'atomic') {
     embedTasks.push({
@@ -443,6 +486,7 @@ async function createChild(
   for (const grandchild of child.children ?? []) {
     count += await createChild(tx, {
       topic,
+      filing: args.filing,
       parentId: created.id,
       sourceId,
       trustScore,
@@ -454,6 +498,55 @@ async function createChild(
     });
   }
   return count;
+}
+
+// ── topic filing (T2b) ───────────────────────────────────────────────────────
+
+// What a caller that gathered no evidence gets: the topic it asked for, filed as
+// `discovery` — which is exactly that origin's definition ("request topic; classifier
+// skipped or unavailable"). relevance 1.0 here means UNKNOWN, not certain, the same
+// convention T1's backfill used for `inherited`; any future minRelevance must stay
+// origin-aware around it (see the ResourceTopic model comment).
+function defaultFiling(topic: string): FilingDecision {
+  return {
+    primary: { topic, relevance: 1.0, origin: 'discovery', contested: false },
+    secondaries: [],
+    reason: 'no-evidence',
+  };
+}
+
+// The primary goes through setPrimaryTopic — the ONE seam allowed to write `isPrimary`
+// and the Resource.topic mirror — enlisted in this transaction so the row, its
+// memberships and its mirror commit together. Secondaries are plain inserts (they touch
+// neither field). skipDuplicates because a proposal can repeat the primary's topic.
+async function writeMemberships(
+  tx: TxClient,
+  resourceId: string,
+  filing: FilingDecision,
+): Promise<void> {
+  await setPrimaryTopic(resourceId, filing.primary.topic, {
+    tx,
+    relevance: filing.primary.relevance,
+    origin: filing.primary.origin,
+    contested: filing.primary.contested,
+  });
+
+  const secondaries = filing.secondaries
+    .filter((s) => s.topic !== filing.primary.topic)
+    .slice(0, MAX_MEMBERSHIPS - 1);
+  if (secondaries.length === 0) return;
+
+  await tx.resourceTopic.createMany({
+    data: secondaries.map((s) => ({
+      resourceId,
+      topic: s.topic,
+      relevance: s.relevance,
+      origin: s.origin,
+      contested: s.contested,
+      isPrimary: false,
+    })),
+    skipDuplicates: true,
+  });
 }
 
 // ── source + slug helpers (moved from web-fallback.ts) ───────────────────────
