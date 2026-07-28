@@ -295,6 +295,12 @@ export function planVerdicts(
   // Which verdict claimed each membership, so a row covered twice is a reported conflict
   // rather than two writes racing in file order.
   const claimed = new Map<string, number>();
+  // ⚠️ A WORKING COPY, incremented as `add` verdicts are planned — the caller's map is a
+  // snapshot taken before any of them. A resource can hold TWO contested memberships (5 do
+  // on the live queue), so a file with an `add` for each read the same starting count and
+  // both cleared a cap they jointly breached. Counting as we go makes the cap hold across
+  // the whole file, not just per verdict.
+  const projectedCounts = new Map(membershipCounts);
 
   verdicts.forEach((v, i) => {
     const label = `verdict[${i}] (${v.verdict})`;
@@ -355,13 +361,15 @@ export function planVerdicts(
           errors.push(`${label}: ${row.resourceId} already holds '${v.topic}'`);
           continue;
         }
-        const count = membershipCounts.get(row.resourceId) ?? 0;
+        const count = projectedCounts.get(row.resourceId) ?? 0;
         if (count >= maxMemberships) {
           errors.push(
             `${label}: ${row.resourceId} is at the membership cap (${count}/${maxMemberships})`,
           );
           continue;
         }
+        // Claimed below, so the next `add` for this resource sees the slot as spent.
+        projectedCounts.set(row.resourceId, count + 1);
       }
       claimed.set(row.membershipId, i);
       const planned: PlannedWrite = {

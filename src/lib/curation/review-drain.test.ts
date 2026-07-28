@@ -280,6 +280,28 @@ describe('planVerdicts', () => {
     expect(p.errors[0]).toMatch(/membership cap \(3\/3\)/);
   });
 
+  // 5 resources on the live queue hold two contested memberships each, so one file can
+  // carry two `add` verdicts for the same resource. Against the caller's snapshot both
+  // read the same starting count and both cleared a cap they jointly breached.
+  it('counts planned adds against the cap, not just the starting snapshot', () => {
+    const twice = [
+      row({ resourceId: 'r6', membershipId: 'm6a', topic: 'calculus' }),
+      row({ resourceId: 'r6', membershipId: 'm6b', topic: 'precalculus' }),
+    ];
+    const p = planVerdicts(
+      twice,
+      [
+        { verdict: 'add', membershipId: 'm6a', topic: 'statistics' },
+        { verdict: 'add', membershipId: 'm6b', topic: 'number-theory' },
+      ],
+      parents([]),
+      new Map([['r6', 2]]),
+      3,
+    );
+    expect(p.writes.map((w) => w.membershipId)).toEqual(['m6a']);
+    expect(p.errors[0]).toMatch(/membership cap \(3\/3\)/);
+  });
+
   it('refuses an add of a topic the row already holds', () => {
     const p = plan([{ verdict: 'add', membershipId: 'm1', topic: 'cryptography' }]);
     expect(p.writes).toEqual([]);
