@@ -213,12 +213,17 @@ export async function applyReclassification(
 // the measurement (a concurrent refile, a deleted resource) is a no-op instead of a throw:
 // this runs across hundreds of rows at the end of a long pass, and the settlement is a
 // refinement of an already-correct row, never a correctness requirement.
+//
+// `client` lets a caller enlist this in its own interactive transaction — the review
+// drain's `--apply` settles and refiles in one all-or-nothing batch, same seam
+// `setPrimaryTopic` and `storeEmbedding` offer.
 export async function settleMembership(
   resourceId: string,
   topic: string,
   settlement: { relevance: number; contested: boolean },
+  client: TxClient = prisma,
 ): Promise<void> {
-  await prisma.resourceTopic.updateMany({
+  await client.resourceTopic.updateMany({
     where: { resourceId, topic },
     data: { relevance: settlement.relevance, contested: settlement.contested },
   });

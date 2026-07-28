@@ -292,9 +292,45 @@ describe('planVerdicts', () => {
     expect(p.skipped[0]).toMatchObject({ membershipId: 'm1', note: 'title uninformative' });
   });
 
-  it('defaults dropVacated to false — the vacated topic is retained', () => {
+  // The default flips on `isPrimary` because retention means opposite things for the two
+  // kinds of row: it preserves reach for a primary and GRANTS it for a secondary, which
+  // would publish the row to the shelf the reviewer just rejected.
+  it('retains the vacated topic by default when refiling a contested PRIMARY', () => {
     const p = plan([{ verdict: 'refile', membershipId: 'm1', topic: 'number-theory' }]);
     expect(p.writes[0].dropVacated).toBe(false);
+  });
+
+  it('drops the vacated topic by default when refiling a contested SECONDARY', () => {
+    const secondary = [
+      row({ resourceId: 'r5', membershipId: 'm5', topic: 'precalculus', isPrimary: false }),
+    ];
+    const p = planVerdicts(
+      secondary,
+      [{ verdict: 'refile', membershipId: 'm5', topic: 'number-theory' }],
+      parents([]),
+      new Map([['r5', 2]]),
+      3,
+    );
+    expect(p.errors).toEqual([]);
+    expect(p.writes[0].dropVacated).toBe(true);
+  });
+
+  it('honours an explicit dropVacated against either default', () => {
+    const secondary = [
+      row({ resourceId: 'r5', membershipId: 'm5', topic: 'precalculus', isPrimary: false }),
+    ];
+    const kept = planVerdicts(
+      secondary,
+      [{ verdict: 'refile', membershipId: 'm5', topic: 'number-theory', dropVacated: false }],
+      parents([]),
+      new Map([['r5', 2]]),
+      3,
+    );
+    expect(kept.writes[0].dropVacated).toBe(false);
+    const dropped = plan([
+      { verdict: 'refile', membershipId: 'm1', topic: 'number-theory', dropVacated: true },
+    ]);
+    expect(dropped.writes[0].dropVacated).toBe(true);
   });
 
   it('rejects a verdict targeting both a row and a container', () => {

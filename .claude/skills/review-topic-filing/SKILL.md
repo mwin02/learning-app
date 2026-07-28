@@ -3,7 +3,7 @@ name: review-topic-filing
 description: Drain the contested-membership review queue - pull contested ResourceTopic rows grouped by container, judge each against a FILING rubric (is this row's topic right, and does it also belong elsewhere?), then execute confirm/refile/add verdicts via a verdict file. Writes memberships only, never Resource.status. Takes a count, topic, or container id. Returns a decision table.
 argument-hint: [count | --topic <slug>]
 disable-model-invocation: true
-allowed-tools: Bash(npx tsx *), mcp__Claude_in_Chrome__list_connected_browsers, mcp__Claude_in_Chrome__select_browser, mcp__Claude_in_Chrome__tabs_context_mcp, mcp__Claude_in_Chrome__navigate, mcp__Claude_in_Chrome__browser_batch, mcp__Claude_in_Chrome__get_page_text, mcp__Claude_in_Chrome__read_page
+allowed-tools: Bash(npx tsx *), mcp__claude-in-chrome__list_connected_browsers, mcp__claude-in-chrome__select_browser, mcp__claude-in-chrome__tabs_context_mcp, mcp__claude-in-chrome__navigate, mcp__claude-in-chrome__browser_batch, mcp__claude-in-chrome__get_page_text, mcp__claude-in-chrome__read_page
 ---
 
 # Drain the contested-membership review queue
@@ -83,13 +83,23 @@ with a rival membership: that is independent corroboration.
 | Verdict | When | Effect |
 |---|---|---|
 | **confirm** | The held topic is right. The doubt was instrument noise — typically a thin shelf, or a container whose siblings corroborate. | Clears `contested`, keeps the measured relevance. Nothing moves. |
-| **refile** | The row genuinely belongs on a different shelf, and provenance supports it (not just the neighbourhood). | `setPrimaryTopic(..., origin: 'review')` — the **only** sanctioned refiling path. The vacated topic is retained as an *uncontested secondary* by default; add `"dropVacated": true` only when that topic was never a real place for this row. |
+| **refile** | The row genuinely belongs on a different shelf, and provenance supports it (not just the neighbourhood). | `setPrimaryTopic(..., origin: 'review')` — the **only** sanctioned refiling path. What happens to the vacated topic depends on which kind of row it was, and the default is already the safe reading (see below); override with `"dropVacated"` only against that default. |
 | **add** | The held topic is right **and** the row squarely belongs on a second shelf too. | Writes an uncontested secondary (`origin: review`). This is the mechanism that makes cross-topic material retrievable — the gap the whole plan is missing. Capped at 3 memberships per resource. |
 | **skip** | Genuinely unsure, or the metadata is too thin to judge and no browser is available. | No write. **Doubt is preserved** — the row stays queued. Do not guess. |
 
 A **contested secondary** (`kind: "contested-secondary"`) is a different bug: it is invisible
 to retrieval entirely, so it is a *reachability* problem rather than a labelling doubt.
 `confirm` makes it retrievable; `refile` onto its own topic promotes it to primary.
+
+**What `refile` does with the vacated topic**, and why the default flips on `kind`:
+
+- **contested-primary** → *retained* as an uncontested secondary. The row was already
+  retrievable there, the shelf is still a place (it may hold live Paths), and the verdict
+  only asked to move the primary. Pass `"dropVacated": true` when that topic was never a
+  real place for this row.
+- **contested-secondary** → *dropped*. That membership was invisible to retrieval, so
+  retaining it uncontested would not preserve reach, it would **grant** reach to the topic
+  you just judged wrong. Pass `"dropVacated": false` to keep it anyway.
 
 ## Steps
 

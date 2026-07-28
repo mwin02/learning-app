@@ -289,6 +289,18 @@ async function queue(limitGroups: number, topic: string | null, kind: Kind) {
 // Every write goes through the T1 seams (`setPrimaryTopic` / `settleMembership`) so the
 // `Resource.topic` mirror and the one-primary invariant hold by construction. Nothing here
 // touches `Resource.status`.
+//
+// ⚠️ THE WRITES ARE ONE TRANSACTION, and that is a recoverability requirement, not tidiness.
+// A verdict file is authored against a snapshot of the queue, and the queue is defined by
+// `contested = true` — so a write REMOVES its own row from it. A loop that died halfway
+// therefore could not be re-run: the applied rows are no longer contested, `loadQueue` no
+// longer returns them, and every verdict naming one comes back as `membership … is not in
+// the queue`, which trips the refuse-on-error guard above and blocks the writes that never
+// happened. All-or-nothing makes the file's own re-run the recovery path.
+//
+// The measurement pass below stays OUTSIDE the transaction on purpose: it is N k-NN queries
+// over pgvector and holding a transaction open across them would pin a connection (and the
+// `FOR UPDATE` locks setPrimaryTopic takes) for the duration of the reads.
 async function apply(file: string, execute: boolean) {
   const raw = JSON.parse(readFileSync(file, 'utf8')) as Verdict[] | { verdicts: Verdict[] };
   const verdicts = Array.isArray(raw) ? raw : raw.verdicts;
@@ -371,50 +383,69 @@ async function apply(file: string, execute: boolean) {
     return;
   }
 
-  for (const w of report) {
-    const row = byMembership.get(w.membershipId)!;
-    if (w.verdict === 'confirm') {
-      await settleMembership(w.resourceId, w.heldTopic, {
-        relevance: row.relevance,
-        contested: false,
-      });
-    } else if (w.verdict === 'refile') {
-      await setPrimaryTopic(w.resourceId, w.targetTopic!, {
-        origin: 'review',
-        contested: false,
-        relevance: w.relevanceToWrite,
-      });
-      // The vacated topic. Retain-but-still-contested is the one outcome that is always
-      // wrong: invisible to retrieval AND permanently queued. Promotion of a contested
-      // SECONDARY vacates nothing, so it is skipped.
-      if (w.heldTopic !== w.targetTopic) {
-        if (w.dropVacated) {
-          await prisma.resourceTopic.deleteMany({
-            where: { resourceId: w.resourceId, topic: w.heldTopic },
-          });
-        } else {
-          await settleMembership(w.resourceId, w.heldTopic, {
-            relevance: purities.get(`${w.resourceId}|${w.heldTopic}`) ?? row.relevance,
+  await prisma.$transaction(
+    async (tx) => {
+      for (const w of report) {
+        const row = byMembership.get(w.membershipId)!;
+        if (w.verdict === 'confirm') {
+          await settleMembership(
+            w.resourceId,
+            w.heldTopic,
+            { relevance: row.relevance, contested: false },
+            tx,
+          );
+        } else if (w.verdict === 'refile') {
+          await setPrimaryTopic(w.resourceId, w.targetTopic!, {
+            origin: 'review',
             contested: false,
+            relevance: w.relevanceToWrite,
+            tx,
+          });
+          // The vacated topic. Retain-but-still-contested is the one outcome that is
+          // always wrong: invisible to retrieval AND permanently queued. Promotion of a
+          // contested SECONDARY vacates nothing, so it is skipped. Whether the default is
+          // to drop or to retain turns on which kind of row this was — see
+          // `defaultDropVacated`.
+          if (w.heldTopic !== w.targetTopic) {
+            if (w.dropVacated) {
+              await tx.resourceTopic.deleteMany({
+                where: { resourceId: w.resourceId, topic: w.heldTopic },
+              });
+            } else {
+              await settleMembership(
+                w.resourceId,
+                w.heldTopic,
+                {
+                  relevance: purities.get(`${w.resourceId}|${w.heldTopic}`) ?? row.relevance,
+                  contested: false,
+                },
+                tx,
+              );
+            }
+          }
+        } else if (w.verdict === 'add') {
+          await tx.resourceTopic.createMany({
+            data: [
+              {
+                resourceId: w.resourceId,
+                topic: w.targetTopic!,
+                relevance: w.relevanceToWrite ?? 0,
+                origin: 'review',
+                contested: false,
+                isPrimary: false,
+              },
+            ],
+            skipDuplicates: true,
           });
         }
       }
-    } else if (w.verdict === 'add') {
-      await prisma.resourceTopic.createMany({
-        data: [
-          {
-            resourceId: w.resourceId,
-            topic: w.targetTopic!,
-            relevance: w.relevanceToWrite ?? 0,
-            origin: 'review',
-            contested: false,
-            isPrimary: false,
-          },
-        ],
-        skipDuplicates: true,
-      });
-    }
-  }
+    },
+    // A batch is tens of rows and each row is 2-4 statements, so the 5s default is a real
+    // ceiling against a remote DB. Generous rather than tuned: the cost of a timeout here
+    // is a rolled-back batch the operator has to re-run, and nothing else contends for
+    // these rows (the drain is run with the compose workers stopped).
+    { timeout: 120_000, maxWait: 10_000 },
+  );
 
   const invariants = await assertMembershipInvariants();
   const remaining = await prisma.resourceTopic.count({ where: { contested: true } });
