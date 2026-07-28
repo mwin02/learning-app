@@ -16,6 +16,12 @@
 import { embedMany } from 'ai';
 import { prisma } from '@/lib/db';
 import { getEmbeddingModel } from '@/lib/ai/models';
+import type { PrismaClient } from '@prisma/client';
+
+type TxClient = Omit<
+  PrismaClient,
+  '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'
+>;
 
 // Vertex text-embedding accepts large batches, but chunking bounds the blast
 // radius of a single failing call and keeps memory predictable on backfill.
@@ -60,11 +66,25 @@ export async function embedQuery(text: string): Promise<number[]> {
 }
 
 // pgvector accepts a text literal of the form `[0.1,0.2,...]` cast to ::vector.
-async function storeEmbedding(id: string, vec: number[]): Promise<void> {
+//
+// `client` lets a caller enlist this write in its own interactive transaction — T2a's
+// pre-insert embedding writes the vector in the same transaction that creates the row
+// (src/lib/agents/decomposition/upsert-resource.ts), so a discovery row is never briefly
+// visible unembedded.
+//
+// ⚠️ `GREATEST("updatedAt", now())`, not bare `now()`: inside a transaction `now()` is
+// TRANSACTION-START time, while Prisma stamps `updatedAt` client-side when the row is
+// created — so a bare `now()` can land `embeddedAt < updatedAt` and make embedMissing()
+// re-embed every freshly-inserted row on the next backfill.
+export async function storeEmbedding(
+  id: string,
+  vec: number[],
+  client: TxClient = prisma,
+): Promise<void> {
   const literal = `[${vec.join(',')}]`;
-  await prisma.$executeRaw`
+  await client.$executeRaw`
     UPDATE "Resource"
-    SET embedding = ${literal}::vector, "embeddedAt" = now()
+    SET embedding = ${literal}::vector, "embeddedAt" = GREATEST("updatedAt", now())
     WHERE id = ${id}
   `;
 }
@@ -98,6 +118,29 @@ export async function embedMissing(): Promise<number> {
     embedded += chunk.length;
   }
   return embedded;
+}
+
+// Topic filing T2a: embed a whole discovery batch BEFORE any row is inserted, so the
+// filing guardrail (T2b) has its input at filing time rather than post-commit. One
+// embedMany call for the batch — cheaper than the N sequential post-commit calls it
+// replaces, which also pays for the rows that turn out to be URL-dedup skips.
+//
+// Best-effort, like safeEmbedResource: a failure returns all-nulls and logs, so
+// discovery degrades to "no embedding yet" (the guardrail defers, the post-commit
+// embed still runs) instead of losing the finds.
+export async function safeEmbedBatch(
+  rows: EmbeddingFields[],
+): Promise<(number[] | null)[]> {
+  if (rows.length === 0) return [];
+  try {
+    return await embedTexts(rows.map(buildEmbeddingText));
+  } catch (err) {
+    console.log('[embeddings] pre-insert batch embed failed', {
+      count: rows.length,
+      error: (err as Error).message,
+    });
+    return rows.map(() => null);
+  }
 }
 
 // Best-effort single-row embed for insert paths. Swallows + logs errors so the

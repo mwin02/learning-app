@@ -112,10 +112,20 @@ export async function safeClassifyAndPersist(resourceId: string, url: string): P
   try {
     const embeddable = await classifyEmbeddability(url);
     if (embeddable === null) return null;
-    await prisma.resource.update({
-      where: { id: resourceId },
-      data: { embeddable, embedCheckedAt: new Date() },
-    });
+    // ⚠️ Raw SQL, not prisma.resource.update, to leave `updatedAt` ALONE.
+    //
+    // `Resource.updatedAt` is @updatedAt, and embedMissing() treats
+    // `embeddedAt < updatedAt` as "content changed, re-embed me". This probe runs
+    // immediately AFTER the embed on every insert path, so a Prisma update here bumps
+    // updatedAt past embeddedAt and marks the row stale the moment it is created —
+    // which is why a backfill re-embedded 1,914 of 1,929 rows on 2026-07-25 despite
+    // nothing having changed. `embeddable`/`embedCheckedAt` are a cached property of the
+    // URL, not of the embedded text, so they must not count as a content change.
+    await prisma.$executeRaw`
+      UPDATE "Resource"
+      SET embeddable = ${embeddable}, "embedCheckedAt" = now()
+      WHERE id = ${resourceId}
+    `;
     return embeddable;
   } catch (err) {
     console.log('[embeddability] classify failed', { resourceId, url, error: (err as Error).message });
