@@ -81,11 +81,12 @@ export const TOPIC_RELATIONS: Record<string, readonly string[]> = {
   // DSA is taught THROUGH a language, and both curated language topics carry
   // real DSA pools (Python most of all, JS second). One-hop only, so this does
   // NOT connect python and javascript to each other.
-  // ⚠️ Inert for now: `TopicAlias` holds the drifted canonical
-  // `data-structures-and-algorithms` (note the extra "and"), and relatedTopics()
-  // keys off the exact slug — so a request canonicalizing to the twin gets no
-  // edges. topic-filing-plan T4 step 2 merges the twins; these edges start
-  // working then.
+  // These edges were inert until topic-filing T1.5: `TopicAlias` held the drifted
+  // canonical `data-structures-and-algorithms` (note the extra "and") and
+  // relatedTopics() keys off the exact slug, so a request canonicalizing to the twin
+  // got no edges. The twin was merged into this curated slug (scripts/merge-topic-twins.ts)
+  // and snapToKnownSlug now stops the gate re-minting it, so the edges apply. Note the
+  // shelf itself is still empty — 0 resources are filed here today.
   'data-structures-algorithms': ['python', 'javascript'],
   // `physics-mechanics` is deliberately EDGELESS. Calculus is the only plausible
   // neighbor, but calculus-based mechanics and calculus proper are distinct

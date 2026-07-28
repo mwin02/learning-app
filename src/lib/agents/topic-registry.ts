@@ -44,6 +44,52 @@ export function toCanonicalSlug(input: string): string {
   return slug.slice(0, MAX_CANONICAL_SLUG_LEN).replace(/-+$/g, ''); // re-trim after the cut
 }
 
+// Topic filing T1.5 — the anti-drift guard on a tier-3 mint.
+//
+// AR-5 exists to stop the gate minting near-duplicate slugs for one concept, but it
+// leaked twice: `TopicAlias` held `data-structures-and-algorithms` alongside the curated
+// `data-structures-algorithms`, and `probability` alongside `probability-and-statistics`
+// — two canonicals over one pool each. `relatedTopics` keys off the exact slug and the
+// Resource library keys off an exact `topic` match, so a twin silently splits a shelf.
+// scripts/merge-topic-twins.ts cleans those two up; this stops the next one.
+//
+// The rule: a mint snaps onto a known slug when their NON-STOPWORD TOKEN SETS are equal.
+// That catches the filler-word twin (the motivating case differs only by "and", which a
+// plain de-hyphenated comparison misses: "datastructuresandalgorithms" ≠
+// "datastructuresalgorithms") and reordering ("algorithms-and-data-structures").
+//
+// The safety property that makes this conservative enough to run unattended: any extra
+// CONTENT token blocks the snap. So deliberately-scoped mints survive — the F7
+// reconciler's `calculus-for-machine-learning` is {calculus,machine,learning}, not
+// {machine,learning}, and `probability-and-statistics` is not `statistics`. Edit
+// distance was rejected for the opposite reason: on slugs this short it merges genuinely
+// distinct topics (`python`/`pytorch` is distance 3, `calculus`/`calculus-2` is 2).
+const SLUG_STOPWORDS = new Set(['and', 'or', 'of', 'the', 'for', 'in', 'to', 'a', 'an', 'with']);
+
+function tokenKey(slug: string): string {
+  const tokens = slug.split('-').filter((t) => t.length > 0 && !SLUG_STOPWORDS.has(t));
+  // Set, not sequence: order-insensitive, and a repeated token doesn't change identity.
+  return [...new Set(tokens)].sort().join(' ');
+}
+
+// `known` is the vocabulary to snap onto — pass listCanonicals() (curated ∪ learned), as
+// the gate does. Curated TOPIC_SLUGS win ties: a code-owned slug is the canonical form by
+// definition, which is the direction the twin merge also resolves.
+export function snapToKnownSlug(slug: string, known: readonly string[]): string {
+  if (!slug) return slug;
+  // An exact hit is already canonical; nothing to snap.
+  if (known.includes(slug)) return slug;
+  const key = tokenKey(slug);
+  // All-stopword input has no content to match on — never snap it onto another
+  // all-stopword slug.
+  if (!key) return slug;
+
+  const matches = known.filter((k) => k !== slug && tokenKey(k) === key).sort();
+  if (matches.length === 0) return slug;
+  const curated = matches.find((m) => (TOPIC_SLUGS as readonly string[]).includes(m));
+  return curated ?? matches[0];
+}
+
 // Cached canonicalization for a previously-seen phrasing, or null on a miss.
 export async function lookupAlias(
   normalized: string,

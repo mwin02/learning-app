@@ -13,8 +13,23 @@ import { validateTopic, type TopicClassifier } from '@/lib/agents/topic-gate';
 import { describeDb } from './db';
 
 const MARK = 'zz-verify-slug';
+// The snap test's mint resolves to a REAL curated slug, so its alias row is not caught by
+// the canonical-prefix sweep — match the input phrasing too. And its canonical self-alias
+// ('data-structures-algorithms' → itself) is a legitimate registry row we must not delete
+// if it predates the test: quarantine-and-restore, per the pattern in CLAUDE.md.
+const SNAP_CANONICAL = 'data-structures-algorithms';
+let snapSelfAliasPreexisted = false;
 
-const cleanup = () => prisma.topicAlias.deleteMany({ where: { canonical: { startsWith: MARK } } });
+async function cleanup() {
+  await prisma.topicAlias.deleteMany({
+    where: {
+      OR: [{ canonical: { startsWith: MARK } }, { alias: { startsWith: 'zz verify slug' } }],
+    },
+  });
+  if (!snapSelfAliasPreexisted) {
+    await prisma.topicAlias.deleteMany({ where: { alias: SNAP_CANONICAL } });
+  }
+}
 
 const aliasRow = (alias: string) =>
   prisma.topicAlias.findUnique({ where: { alias }, select: { canonical: true, subject: true } });
@@ -25,7 +40,10 @@ const mint =
   async () => ({ valid: true, subject: 'cs', canonical, reason: null });
 
 describeDb('topic gate: tier-3 slug validation', () => {
-  beforeAll(cleanup);
+  beforeAll(async () => {
+    snapSelfAliasPreexisted = (await aliasRow(SNAP_CANONICAL)) !== null;
+    await cleanup();
+  });
   afterAll(cleanup);
 
   it('persists a mixed-case / spaced mint as a slugified canonical', async () => {
@@ -41,6 +59,28 @@ describeDb('topic gate: tier-3 slug validation', () => {
     // The alias row maps the input phrasing → slug, and the canonical self-alias exists.
     expect(await aliasRow(normalized)).toEqual({ canonical: slug, subject: 'cs' });
     expect(await aliasRow(slug)).toEqual({ canonical: slug, subject: 'cs' });
+  });
+
+  // T1.5: the anti-drift guard, end to end through the gate. The unit tests
+  // (topic-registry.test.ts) pin snapToKnownSlug's rule; this pins that the gate applies
+  // it, and — the part that actually matters — that the SNAPPED slug is what gets frozen
+  // into TopicAlias. This is a replay of the real defect: the gate minted
+  // `data-structures-and-algorithms` alongside the curated `data-structures-algorithms`.
+  it('snaps a near-duplicate mint onto the curated slug before persisting it', async () => {
+    const topic = 'zz verify slug and twin';
+    const normalized = 'zz verify slug and twin';
+    // The mint differs from a curated slug only by a filler token.
+    const res = await validateTopic(topic, {
+      classify: mint('data structures and algorithms'),
+    });
+
+    expect(res).toEqual({ valid: true, canonical: 'data-structures-algorithms', subject: 'cs' });
+    // The twin was never written: the phrasing resolves straight to the curated slug.
+    expect(await aliasRow(normalized)).toEqual({
+      canonical: 'data-structures-algorithms',
+      subject: 'cs',
+    });
+    expect(await prisma.topicAlias.count({ where: { canonical: 'data-structures-and-algorithms' } })).toBe(0);
   });
 
   it('rejects a verdict whose canonical normalizes to empty, persisting nothing', async () => {
