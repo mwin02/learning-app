@@ -7,51 +7,50 @@
 //       The contested-membership review queue, grouped by root container and ordered by
 //       review priority. `n` limits GROUPS, not rows — a container is one decision.
 //       Read-only.
+//   apply <verdicts.json> [--apply]
+//       Resolve a verdict file. Dry run unless --apply; refuses outright while the plan
+//       holds any error. Writes a docs/audits/review-drain-*.json record.
 //
-// ⚠️ THIS FILE WRITES NOTHING. D1 is the read side of the drain; the verdict-apply half
-// (which calls setPrimaryTopic / settleMembership) lands in D2. Keep it that way: a
-// helper that can both propose and apply in one command is one typo from an unreviewed
-// bulk refile of live Path material.
+// ⚠️ THE TWO COMMANDS ARE SEPARATE ON PURPOSE, and `apply` is a dry run by default: a
+// helper that proposes and applies in one step is one typo from an unreviewed bulk refile
+// of live Path material.
+//
+// ⚠️ NOTHING HERE WRITES `Resource.status`. Filing doubt and content quality are orthogonal
+// axes (the plan's Uncertainty decision), and these rows already passed human quality
+// review — 113 of 131 are `active`, some attached to live Paths. Every write below goes
+// through the T1 seams and touches `ResourceTopic` only.
 
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { prisma } from '@/lib/db';
 import { centroidMargins } from '@/lib/curation/topic-centroids';
-import { knnNeighbourTopicsOf, purity, plurality, KNN_K } from '@/lib/curation/topic-knn';
+import {
+  knnNeighbourTopicsOf,
+  purity,
+  plurality,
+  KNN_K,
+  MAX_MEMBERSHIPS,
+} from '@/lib/curation/topic-knn';
+import {
+  setPrimaryTopic,
+  settleMembership,
+  assertMembershipInvariants,
+} from '@/lib/curation/resource-topics';
 import {
   groupQueue,
-  queuePriority,
+  planVerdicts,
   filingHistogram,
   type DrainRow,
   type ParentLink,
+  type Verdict,
 } from '@/lib/curation/review-drain';
 
 type Kind = 'primary' | 'secondary' | 'all';
+type ChainNode = { id: string; parentId: string | null; title: string; topic: string };
+type ResourceRow = Awaited<ReturnType<typeof loadResources>>[number];
 
-// Enough of the page to judge filing without opening it. The rubric's escape hatch is a
-// browser, but it should almost never be needed: "is this calculus or linear algebra" is
-// answerable from what the row already asserts about itself plus what its container is.
-const SUMMARY_CHARS = 400;
-
-async function loadQueue(limitGroups: number, topic: string | null, kind: Kind) {
-  const memberships = await prisma.resourceTopic.findMany({
-    where: {
-      contested: true,
-      ...(kind === 'all' ? {} : { isPrimary: kind === 'primary' }),
-      ...(topic ? { topic } : {}),
-    },
-    select: {
-      id: true,
-      resourceId: true,
-      topic: true,
-      isPrimary: true,
-      relevance: true,
-      origin: true,
-    },
-  });
-  if (memberships.length === 0) return { groups: [], resources: new Map(), total: 0 };
-
-  const resourceIds = memberships.map((m) => m.resourceId);
-  const resources = await prisma.resource.findMany({
-    where: { id: { in: resourceIds } },
+function loadResources(ids: string[]) {
+  return prisma.resource.findMany({
+    where: { id: { in: ids } },
     select: {
       id: true,
       title: true,
@@ -68,6 +67,41 @@ async function loadQueue(limitGroups: number, topic: string | null, kind: Kind) 
       source: { select: { name: true, trustScore: true } },
     },
   });
+}
+
+// Enough of the page to judge filing without opening it. The rubric's escape hatch is a
+// browser, but it should almost never be needed: "is this calculus or linear algebra" is
+// answerable from what the row already asserts about itself plus what its container is.
+const SUMMARY_CHARS = 400;
+
+async function loadQueue(topic: string | null, kind: Kind) {
+  const memberships = await prisma.resourceTopic.findMany({
+    where: {
+      contested: true,
+      ...(kind === 'all' ? {} : { isPrimary: kind === 'primary' }),
+      ...(topic ? { topic } : {}),
+    },
+    select: {
+      id: true,
+      resourceId: true,
+      topic: true,
+      isPrimary: true,
+      relevance: true,
+      origin: true,
+    },
+  });
+  if (memberships.length === 0) {
+    return {
+      rows: [] as DrainRow[],
+      resources: new Map<string, ResourceRow>(),
+      chainById: new Map<string, ChainNode>(),
+      parents: new Map<string, ParentLink>(),
+      margins: new Map<string, { margin: number | null; own: number | null; best: string | null; bestSim: number | null }>(),
+    };
+  }
+
+  const resourceIds = memberships.map((m) => m.resourceId);
+  const resources = await loadResources(resourceIds);
   const byId = new Map(resources.map((r) => [r.id, r]));
 
   const margins = await centroidMargins(resourceIds);
@@ -76,7 +110,7 @@ async function loadQueue(limitGroups: number, topic: string | null, kind: Kind) 
   // and so are absent from `resources` — without this the grouping would see every row as
   // top-level and the container-level verdict (the lesson the cfml block exists to teach)
   // would be unavailable.
-  const chains = await prisma.$queryRaw<{ id: string; parentId: string | null; title: string; topic: string }[]>`
+  const chains = await prisma.$queryRaw<ChainNode[]>`
     WITH RECURSIVE up AS (
       SELECT r.id, r."parentResourceId", r.title, r.topic
       FROM "Resource" r WHERE r.id = ANY(${resourceIds}::text[])
@@ -103,8 +137,7 @@ async function loadQueue(limitGroups: number, topic: string | null, kind: Kind) 
     margin: margins.get(m.resourceId)?.margin ?? null,
   }));
 
-  const groups = groupQueue(rows, parents).slice(0, limitGroups);
-  return { groups, resources: byId, chainById, margins, total: rows.length };
+  return { rows, resources: byId, chainById, parents, margins };
 }
 
 // Every membership the row holds BESIDES the contested one — the rival proposals T4a
@@ -151,7 +184,9 @@ async function siblingFilings(rootIds: string[]) {
 }
 
 async function queue(limitGroups: number, topic: string | null, kind: Kind) {
-  const { groups, resources, chainById, margins, total } = await loadQueue(limitGroups, topic, kind);
+  const { rows: allRows, resources, chainById, parents, margins } = await loadQueue(topic, kind);
+  const total = allRows.length;
+  const groups = groupQueue(allRows, parents).slice(0, limitGroups);
   if (groups.length === 0) {
     console.log(JSON.stringify({ total: 0, groups: [] }, null, 1));
     return;
@@ -245,6 +280,158 @@ async function queue(limitGroups: number, topic: string | null, kind: Kind) {
   );
 }
 
+// ── apply ────────────────────────────────────────────────────────────────────
+//
+// Dry run by default; `--apply` executes. It REFUSES to execute while the plan holds any
+// error — a verdict file is authored in one pass and a single bad line usually means the
+// slate was written against a stale queue, which is exactly when a partial apply is worst.
+//
+// Every write goes through the T1 seams (`setPrimaryTopic` / `settleMembership`) so the
+// `Resource.topic` mirror and the one-primary invariant hold by construction. Nothing here
+// touches `Resource.status`.
+async function apply(file: string, execute: boolean) {
+  const raw = JSON.parse(readFileSync(file, 'utf8')) as Verdict[] | { verdicts: Verdict[] };
+  const verdicts = Array.isArray(raw) ? raw : raw.verdicts;
+
+  const { rows, parents } = await loadQueue(null, 'all');
+  const counts = await prisma.resourceTopic.groupBy({
+    by: ['resourceId'],
+    where: { resourceId: { in: rows.map((r) => r.resourceId) } },
+    _count: { _all: true },
+  });
+  const membershipCounts = new Map(counts.map((c) => [c.resourceId, c._count._all]));
+
+  const plan = planVerdicts(rows, verdicts, parents, membershipCounts, MAX_MEMBERSHIPS);
+  const byMembership = new Map(rows.map((r) => [r.membershipId, r]));
+
+  // Measured purity for each destination topic. A review verdict is an operator judgement,
+  // so the topic is not in question — but the RELEVANCE we record should still be the
+  // honest measured number rather than a flattering default, exactly as T4c did when it
+  // wrote the `differentiation` fold at its measured 1.0.
+  //
+  // ⚠️ The VACATED topic is re-measured too, not carried forward. `settleMembership` would
+  // otherwise propagate whatever the old primary happened to store — and for the 5 rows the
+  // cfml retirement folded by policy fallback that stored value is a DEFAULT of 1.0, not a
+  // measurement (observed on "Linear Algebra Basics", whose retained `calculus` membership
+  // read 1.0 against a measured purity of 0.1). Carrying it forward would re-introduce the
+  // exact fake certainty T4e's re-score pass existed to remove.
+  const purities = new Map<string, number>();
+  const measure = async (resourceId: string, topic: string) => {
+    const key = `${resourceId}|${topic}`;
+    if (!purities.has(key)) {
+      purities.set(key, purity(await knnNeighbourTopicsOf(resourceId), topic));
+    }
+    return purities.get(key)!;
+  };
+  for (const w of plan.writes) {
+    if (w.targetTopic) await measure(w.resourceId, w.targetTopic);
+    if (w.verdict === 'refile' && w.heldTopic !== w.targetTopic) {
+      await measure(w.resourceId, w.heldTopic);
+    }
+  }
+
+  const report = plan.writes.map((w) => ({
+    ...w,
+    relevanceToWrite: w.targetTopic
+      ? purities.get(`${w.resourceId}|${w.targetTopic}`)
+      : byMembership.get(w.membershipId)?.relevance,
+    vacated:
+      w.verdict === 'refile' && w.heldTopic !== w.targetTopic
+        ? w.dropVacated
+          ? `drop '${w.heldTopic}'`
+          : `retain '${w.heldTopic}' uncontested @ ${purities.get(`${w.resourceId}|${w.heldTopic}`)}`
+        : null,
+  }));
+
+  console.log(
+    JSON.stringify(
+      {
+        mode: execute ? 'APPLY' : 'dry-run',
+        queueSize: rows.length,
+        writes: report,
+        skipped: plan.skipped,
+        unresolvedCount: plan.unresolved.length,
+        errors: plan.errors,
+        tally: report.reduce<Record<string, number>>(
+          (a, w) => ({ ...a, [w.verdict]: (a[w.verdict] ?? 0) + 1 }),
+          {},
+        ),
+      },
+      null,
+      1,
+    ),
+  );
+
+  if (plan.errors.length > 0) {
+    console.error(`\nREFUSING TO APPLY: ${plan.errors.length} error(s) in the verdict file.`);
+    process.exit(1);
+  }
+  if (!execute) {
+    console.error('\nDry run — nothing written. Re-run with --apply to execute.');
+    return;
+  }
+
+  for (const w of report) {
+    const row = byMembership.get(w.membershipId)!;
+    if (w.verdict === 'confirm') {
+      await settleMembership(w.resourceId, w.heldTopic, {
+        relevance: row.relevance,
+        contested: false,
+      });
+    } else if (w.verdict === 'refile') {
+      await setPrimaryTopic(w.resourceId, w.targetTopic!, {
+        origin: 'review',
+        contested: false,
+        relevance: w.relevanceToWrite,
+      });
+      // The vacated topic. Retain-but-still-contested is the one outcome that is always
+      // wrong: invisible to retrieval AND permanently queued. Promotion of a contested
+      // SECONDARY vacates nothing, so it is skipped.
+      if (w.heldTopic !== w.targetTopic) {
+        if (w.dropVacated) {
+          await prisma.resourceTopic.deleteMany({
+            where: { resourceId: w.resourceId, topic: w.heldTopic },
+          });
+        } else {
+          await settleMembership(w.resourceId, w.heldTopic, {
+            relevance: purities.get(`${w.resourceId}|${w.heldTopic}`) ?? row.relevance,
+            contested: false,
+          });
+        }
+      }
+    } else if (w.verdict === 'add') {
+      await prisma.resourceTopic.createMany({
+        data: [
+          {
+            resourceId: w.resourceId,
+            topic: w.targetTopic!,
+            relevance: w.relevanceToWrite ?? 0,
+            origin: 'review',
+            contested: false,
+            isPrimary: false,
+          },
+        ],
+        skipDuplicates: true,
+      });
+    }
+  }
+
+  const invariants = await assertMembershipInvariants();
+  const remaining = await prisma.resourceTopic.count({ where: { contested: true } });
+  const record = {
+    ran: new Date().toISOString(),
+    verdictFile: file,
+    writes: report,
+    skipped: plan.skipped,
+    invariants,
+    queueAfter: remaining,
+  };
+  mkdirSync('docs/audits', { recursive: true });
+  const path = `docs/audits/review-drain-${Date.now()}.json`;
+  writeFileSync(path, JSON.stringify(record, null, 2));
+  console.error(`\nApplied ${report.length} write(s). Queue now ${remaining}. Record: ${path}`);
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const [cmd, ...rest] = argv;
@@ -253,19 +440,27 @@ async function main() {
     return i >= 0 ? rest[i + 1] : null;
   };
 
-  if (cmd !== 'queue') {
+  if (cmd === 'queue') {
+    const n = Number(rest[0]);
+    const kindArg = (flag('kind') ?? 'all') as Kind;
+    if (!['primary', 'secondary', 'all'].includes(kindArg)) {
+      console.error(`unknown --kind '${kindArg}'`);
+      process.exit(1);
+    }
+    await queue(Number.isFinite(n) && n > 0 ? n : 10, flag('topic'), kindArg);
+  } else if (cmd === 'apply') {
+    if (!rest[0]) {
+      console.error('apply needs a verdict file path');
+      process.exit(1);
+    }
+    await apply(rest[0], rest.includes('--apply'));
+  } else {
     console.error(
-      'usage: topic-review.ts queue [n] [--topic <slug>] [--kind primary|secondary|all]',
+      'usage: topic-review.ts queue [n] [--topic <slug>] [--kind primary|secondary|all]\n' +
+        '       topic-review.ts apply <verdicts.json> [--apply]',
     );
     process.exit(1);
   }
-  const n = Number(rest[0]);
-  const kindArg = (flag('kind') ?? 'all') as Kind;
-  if (!['primary', 'secondary', 'all'].includes(kindArg)) {
-    console.error(`unknown --kind '${kindArg}'`);
-    process.exit(1);
-  }
-  await queue(Number.isFinite(n) && n > 0 ? n : 10, flag('topic'), kindArg);
   await prisma.$disconnect();
 }
 

@@ -1297,10 +1297,11 @@ lost"). The Path was deleted because the topic is retired, not because the refil
 
 ---
 
-## Open: the contested-membership review drain
+## The contested-membership review drain
 
-**This is the one thing the plan needs and does not have.** T4d item 2 surfaced it; T4e
-scopes it here rather than closing the plan with a silent gap. No code exists for it.
+**This was the one thing the plan needed and did not have.** T4d item 2 surfaced it; T4e
+scoped it here rather than closing the plan with a silent gap. **Built 2026-07-27 — see
+"As built" below.** The spec that follows is what it was built from.
 
 **The gap.** Nothing in T1–T4e converts "this `calculus` row is really `precalculus`" into a
 *retrievable* membership without a human. The reclassifier never refiles (T4a item 5), so a
@@ -1355,6 +1356,98 @@ row-by-row review when the rows share a container. Two lessons the drain should 
   that need review most (see cfml item 1), so the reviewer needs the container title,
   source and sibling filings alongside the embedding evidence.
 
+### As built — the review drain (2026-07-27)
+
+Shipped as a **Claude Code skill**, not the driver §4 sketched: `.claude/skills/review-topic-filing/`
+(`SKILL.md` + `scripts/topic-review.ts`), on `src/lib/curation/review-drain.ts` (pure) +
+`review-drain.test.ts`. Two stacked blocks — **D1** the read side, **D2** the verdicts and
+the apply. First batch applied to the dev DB 2026-07-27 with the compose workers stopped;
+invariants clean (`noMembership: 0, badPrimaryCount: 0, mirrorDrift: 0`).
+
+**Skill, not driver — the test is whether the decision is mechanizable.** A driver encodes
+a decision *function* (`reclassify-topics.ts` has one; `refile-quorum-topics.ts` has one).
+This queue is by definition the residue where the automatic instrument already ran and
+failed, so there is no function to encode — `retire-cfml-shelf.ts` only *looked* like a
+driver because its five container verdicts were typed into a slate literal by an operator.
+Two things make that shape wrong here: the queue **regenerates** (every discovery batch that
+hits an unvouchable pool or a k-NN tie writes another contested row), so decisions in
+committed source would mean editing code to drain a batch; and 61 of the rows are top-level
+with no container, which is 61 slate lines nobody can meaningfully review. The driver's real
+advantage — the whole slate visible before it executes — is kept by making verdicts **data**:
+a JSON verdict file, a dry run that prints every write, then `--apply`.
+
+Seven findings:
+
+1. **⚠️ THE CENTROID MARGIN ALONE IS NOT A USABLE SORT KEY.** The plan demotes it to exactly
+   one job, review-priority ranking lowest-first (T4a item 6, confirmed T4e item 4). But
+   `centroidMargins` only reports one when *both* sides clear `MIN_CENTROID_MEMBERS = 20`,
+   and that leaves **34 of 131 contested primaries (26%) with a null margin** — every row on
+   the six thin shelves (`differential-equations` 10/10, `multivariable-calculus` 10/10,
+   `number-theory` 9/9, `convex-optimization` 2/2, `systems-of-linear-equations` 2/2,
+   `eigenvalues-and-eigenvectors` 1/1). Those are precisely T4e's sub-0.60-purity triage
+   targets, so a margin-only sort parks the most-suspect rows in one undifferentiated block
+   at the tail. Fixed with a fallback to the membership's own measured `relevance` (every
+   membership carries one post-T4e) in a **separate tier** — a difference of cosines and a
+   fraction of k are not comparable. Explicitly **not** fixed by lowering
+   `MIN_CENTROID_MEMBERS`: a centroid over 14 vectors is a mean of too few to threshold on,
+   which is the constant's whole purpose.
+2. **The container verdict here is mostly CONFIRM — the opposite verb from cfml.** Khan
+   *"Vectors and spaces"* holds 11 contested rows that name **no alternative at all**, inside
+   a container whose 27 uncontested siblings are all `linear-algebra`; **59 of the 131
+   contested primaries carry no rival membership**. This is why `planShelfRetirement` was
+   *not* generalized: its output shape is moves off a retiring shelf toward a fallback, which
+   cannot express "confirm this row where it is". Its ancestor walk is copied (twelve lines,
+   a different stop condition); `shelf-retire.ts` is untouched.
+3. **A container verdict must name `applyTo` — it never covers a subtree wholesale.**
+   `Khan Academy: Cryptography` holds 17 contested rows across `cryptography` (8),
+   `data-structures-algorithms` (7) and `discrete-mathematics` (2), and a Khan cryptography
+   course genuinely does teach modular arithmetic and algorithms — a blanket verdict would
+   refile rows nobody looked at. Requiring the held topic makes cfml item 3's
+   container-vs-fallback distinction impossible to get wrong, and preserves shelf-retire's
+   `untouched` discipline. A container verdict matching **zero** rows is a hard error, not a
+   silent no-op: a typo'd `applyTo` otherwise reads as "handled" while the rows stay queued.
+4. **There is no policy fallback in this pass, so the who-decided rule collapses.** Every
+   verdict is an operator judgement, so all three writing verbs clear `contested` and only
+   `skip` preserves it. `viaContainer` is retained as audit provenance, not as an input.
+5. **⚠️ The VACATED membership must be re-measured, not carried forward — found by
+   inspection after the first apply.** On a refile, `settleMembership` propagates whatever
+   the old primary stored, and for the 5 rows cfml folded by *policy fallback* that stored
+   value is a **default of 1.0, not a measurement**. Observed live: *"Linear Algebra Basics &
+   Vector Operations"* retained a `calculus` secondary reading relevance **1.0** against a
+   measured purity of **0.1**. Carrying that forward re-introduces exactly the fake certainty
+   T4e's §1 re-score existed to remove. The apply now re-measures both sides of a refile; the
+   one row already written was corrected by hand.
+6. **A resource can hold both a contested primary and a contested secondary — target the
+   PRIMARY.** Five resources are in that position, and they correctly group as one decision.
+   Refiling the primary onto the secondary's topic promotes it *and* settles the vacated one,
+   clearing both doubts; issuing the verdict against the secondary instead would promote it
+   while leaving the old primary's `contested` flag set, queued forever. Measured: three of
+   the eight first-batch writes resolved two queue rows each.
+7. **The refile relevance is the measured purity, never a flattering default** — the T4c
+   precedent, which wrote the `differentiation` fold at its measured 1.0. First batch wrote
+   0.9 / 0.8 / 0.8 / 0.9 / 1.0.
+
+**First batch — 6 groups, 8 writes, queue 142 → 131.** Two container verdicts and five row
+verdicts:
+
+| target | rows | held → target | verdict | decided by |
+| --- | --- | --- | --- | --- |
+| `Matrices \| Precalculus \| Math` (container) | 1 | `precalculus` → `linear-algebra` | refile | provenance: 45 of 49 subtree rows already uncontested `linear-algebra` |
+| … same container, `applyTo: systems-of-linear-equations` | 2 | — | confirm | titles are literally "representing systems of equations with matrices"; the 6/10 rival plurality is the thin-shelf artifact T4a item 7 predicted |
+| `Linear Algebra Basics & Vector Operations` | 1 | `calculus` → `linear-algebra` | refile | title + 8/10 neighbourhood; **one of the 5 cfml fallback-folded rows**, so cfml's deliberately-preserved doubt closed here |
+| `sklearn.linear_model.LogisticRegression` | 1 | `probability-and-statistics` → `python-data-ml` | refile | 8/10 neighbourhood — **named as a hand-fix candidate in the T2 calibration section** |
+| `Time series / date functionality — pandas` | 1 | `probability-and-statistics` → `python-data-ml` | refile | 9/10 neighbourhood, purity 0.0 on the held topic |
+| `Intro to Matrices` | 1 | `precalculus` → `linear-algebra` | refile | unanimous 10/10 neighbourhood |
+| `Logistic Regression in 3 Minutes` | 1 | — | confirm | diffuse neighbourhood (5/10 across 5 topics) dominated by python library docs — a different *kind* of resource, not a better shelf |
+
+Queue after: **123 contested primaries + 8 contested secondaries**. `Resource.status`
+untouched on every row (all 8 still `active`). Note the batch closed two of the plan's own
+outstanding predictions — the T2 calibration's named sklearn hand-fix, and one of the five
+doubts cfml item 3 deliberately preserved for this drain.
+
+**What remains is ops, not code.** 131 rows across 66 groups; the tool is the deliverable and
+draining continues in batches.
+
 ---
 
 ## Rejected alternatives
@@ -1384,9 +1477,13 @@ row-by-row review when the rows share a container. Two lessons the drain should 
   across vocabularies**: ours went 11 → 20 topics, which depresses purity mechanically and
   made a healthy corpus read as a regression. The script now prints vocabulary size and a
   confusion table so the mistake is visible; it remains idempotent and read-only.
-- **An undrained review queue.** 208 contested primaries and no mechanism to resolve them —
-  the queue only grows, and it is the only path that makes a mis-filing retrievably
-  corrected. See "Open: the contested-membership review drain".
+- ~~**An undrained review queue**~~ — **mechanism shipped 2026-07-27.** The
+  `/review-topic-filing` skill drains it: `confirm` / `refile` / `add`, at row or container
+  level, written through the T1 seams. The residual risk is now *throughput*, not absence —
+  131 rows across 66 groups remain, and unlike cfml the bulk is genuinely row-by-row. Note
+  the queue **regenerates**: every discovery batch hitting an unvouchable pool or a k-NN tie
+  writes another contested row, so this is standing ops, not a one-off backlog. See
+  "The contested-membership review drain".
 - **Cost.** One classifier call per discovery batch (already batched) plus a cached centroid
   aggregate — small next to the discovery LLM spend. T4's one-off backfill is the real line
   item and should be budgeted with the warm campaign.

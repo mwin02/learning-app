@@ -4,8 +4,10 @@ import {
   queuePriority,
   groupQueue,
   filingHistogram,
+  planVerdicts,
   type DrainRow,
   type ParentLink,
+  type Verdict,
 } from './review-drain';
 
 function row(over: Partial<DrainRow> & Pick<DrainRow, 'resourceId'>): DrainRow {
@@ -189,5 +191,119 @@ describe('filingHistogram', () => {
 
   it('returns nothing for a container with no other children', () => {
     expect(filingHistogram([])).toEqual([]);
+  });
+});
+
+describe('planVerdicts', () => {
+  const queue = [
+    row({ resourceId: 'r1', membershipId: 'm1', parentId: 'c1', topic: 'cryptography' }),
+    row({ resourceId: 'r2', membershipId: 'm2', parentId: 'c1', topic: 'cryptography' }),
+    row({ resourceId: 'r3', membershipId: 'm3', parentId: 'c1', topic: 'data-structures-algorithms' }),
+    row({ resourceId: 'r4', membershipId: 'm4', topic: 'calculus' }),
+  ];
+  const tree = parents([['c1', null]]);
+  const counts = new Map([['r1', 1], ['r2', 1], ['r3', 1], ['r4', 3]]);
+  const plan = (verdicts: Verdict[]) => planVerdicts(queue, verdicts, tree, counts, 3);
+
+  it('applies a row verdict and reports the rest as unresolved', () => {
+    const p = plan([{ verdict: 'confirm', membershipId: 'm1' }]);
+    expect(p.errors).toEqual([]);
+    expect(p.writes.map((w) => w.membershipId)).toEqual(['m1']);
+    expect(p.unresolved.map((r) => r.membershipId)).toEqual(['m2', 'm3', 'm4']);
+  });
+
+  // The Khan Cryptography case: a container verdict must reach only the held topic it
+  // names, never the whole subtree.
+  it('scopes a container verdict to its applyTo topic', () => {
+    const p = plan([{ verdict: 'confirm', containerId: 'c1', applyTo: 'cryptography' }]);
+    expect(p.errors).toEqual([]);
+    expect(p.writes.map((w) => w.membershipId)).toEqual(['m1', 'm2']);
+    expect(p.writes.every((w) => w.viaContainer === 'c1')).toBe(true);
+    // The dsa row in the same subtree is untouched and still owed a verdict.
+    expect(p.unresolved.map((r) => r.membershipId)).toContain('m3');
+  });
+
+  it('rejects a container verdict with no applyTo', () => {
+    const p = plan([{ verdict: 'confirm', containerId: 'c1' }]);
+    expect(p.writes).toEqual([]);
+    expect(p.errors[0]).toMatch(/requires applyTo/);
+  });
+
+  it('rejects a container verdict that matches nothing rather than silently passing', () => {
+    const p = plan([{ verdict: 'confirm', containerId: 'c1', applyTo: 'typo-topic' }]);
+    expect(p.writes).toEqual([]);
+    expect(p.errors[0]).toMatch(/no contested 'typo-topic' rows/);
+  });
+
+  it('requires a destination topic for refile and add', () => {
+    const p = plan([
+      { verdict: 'refile', membershipId: 'm1' },
+      { verdict: 'add', membershipId: 'm2' },
+    ]);
+    expect(p.writes).toEqual([]);
+    expect(p.errors).toHaveLength(2);
+  });
+
+  it('reports a membership claimed twice instead of writing it twice', () => {
+    const p = plan([
+      { verdict: 'confirm', containerId: 'c1', applyTo: 'cryptography' },
+      { verdict: 'refile', membershipId: 'm1', topic: 'number-theory' },
+    ]);
+    expect(p.writes.map((w) => w.membershipId)).toEqual(['m1', 'm2']);
+    expect(p.errors[0]).toMatch(/already claimed by verdict\[0\]/);
+  });
+
+  it('rejects a refile of a primary onto the topic it already holds', () => {
+    const p = plan([{ verdict: 'refile', membershipId: 'm4', topic: 'calculus' }]);
+    expect(p.writes).toEqual([]);
+    expect(p.errors[0]).toMatch(/already primary on 'calculus'/);
+  });
+
+  it('allows a refile of a contested SECONDARY onto its own topic — that is a promotion', () => {
+    const secondary = [
+      row({ resourceId: 'r5', membershipId: 'm5', topic: 'precalculus', isPrimary: false }),
+    ];
+    const p = planVerdicts(
+      secondary,
+      [{ verdict: 'refile', membershipId: 'm5', topic: 'precalculus' }],
+      parents([]),
+      new Map([['r5', 2]]),
+      3,
+    );
+    expect(p.errors).toEqual([]);
+    expect(p.writes[0]).toMatchObject({ verdict: 'refile', targetTopic: 'precalculus' });
+  });
+
+  it('refuses an add that would breach the membership cap', () => {
+    const p = plan([{ verdict: 'add', membershipId: 'm4', topic: 'precalculus' }]);
+    expect(p.writes).toEqual([]);
+    expect(p.errors[0]).toMatch(/membership cap \(3\/3\)/);
+  });
+
+  it('refuses an add of a topic the row already holds', () => {
+    const p = plan([{ verdict: 'add', membershipId: 'm1', topic: 'cryptography' }]);
+    expect(p.writes).toEqual([]);
+    expect(p.errors[0]).toMatch(/already holds/);
+  });
+
+  it('separates skip from the writes so doubt is preserved, not cleared', () => {
+    const p = plan([{ verdict: 'skip', membershipId: 'm1', note: 'title uninformative' }]);
+    expect(p.writes).toEqual([]);
+    expect(p.skipped[0]).toMatchObject({ membershipId: 'm1', note: 'title uninformative' });
+  });
+
+  it('defaults dropVacated to false — the vacated topic is retained', () => {
+    const p = plan([{ verdict: 'refile', membershipId: 'm1', topic: 'number-theory' }]);
+    expect(p.writes[0].dropVacated).toBe(false);
+  });
+
+  it('rejects a verdict targeting both a row and a container', () => {
+    const p = plan([{ verdict: 'confirm', membershipId: 'm1', containerId: 'c1', applyTo: 'x' }]);
+    expect(p.errors[0]).toMatch(/exactly one of/);
+  });
+
+  it('rejects a membershipId that is not in the queue', () => {
+    const p = plan([{ verdict: 'confirm', membershipId: 'nope' }]);
+    expect(p.errors[0]).toMatch(/not in the queue/);
   });
 });
