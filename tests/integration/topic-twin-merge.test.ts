@@ -90,18 +90,22 @@ describeDb('twin merge', () => {
 
   it('preserves filing evidence when moving a primary', async () => {
     const id = await makeResource('evidence', FROM, [{ topic: FROM, isPrimary: true }]);
+    // `origin: 'inherited'` is deliberately NOT the schema default ('classifier'): a merge
+    // renames a topic and gathers no evidence, so dropping origin on the way through
+    // setPrimaryTopic would let the default apply and silently upgrade a T1 backfill row
+    // to a classifier verdict nothing ever produced.
     await prisma.resourceTopic.updateMany({
       where: { resourceId: id, topic: FROM },
-      data: { relevance: 0.62, contested: true },
+      data: { relevance: 0.62, origin: 'inherited', contested: true },
     });
 
     await applyTwinMerge(FROM, TO);
 
     const moved = await prisma.resourceTopic.findFirst({
       where: { resourceId: id },
-      select: { topic: true, relevance: true, contested: true },
+      select: { topic: true, relevance: true, origin: true, contested: true },
     });
-    expect(moved).toEqual({ topic: TO, relevance: 0.62, contested: true });
+    expect(moved).toEqual({ topic: TO, relevance: 0.62, origin: 'inherited', contested: true });
   });
 
   it('moves a secondary membership without touching the primary or the mirror', async () => {

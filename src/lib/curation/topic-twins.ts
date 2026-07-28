@@ -77,12 +77,24 @@ export async function applyTwinMerge(from: string, to: string): Promise<TwinMerg
 
   // 2. Primary memberships + their mirrors, through the T1 write seam so `Resource.topic`
   // moves in the same transaction as the flag.
+  //
+  // All three evidence fields ride along — `origin` included. A merge RENAMES a topic; it
+  // gathers no new evidence, so the moved membership must keep the provenance it had.
+  // Dropping it would let setPrimaryTopic's schema default apply on the created row and
+  // silently promote an `inherited` backfill membership to `classifier`, claiming a
+  // verdict nothing ever produced — precisely the mislabel T4's origin-aware
+  // `minRelevance` will read (see the relevance note on the ResourceTopic model).
+  // Symmetric with the secondary branch below, which preserves origin by moving the row.
   const primaries = await prisma.resourceTopic.findMany({
     where: { topic: from, isPrimary: true },
-    select: { resourceId: true, relevance: true, contested: true },
+    select: { resourceId: true, relevance: true, origin: true, contested: true },
   });
   for (const m of primaries) {
-    await setPrimaryTopic(m.resourceId, to, { relevance: m.relevance, contested: m.contested });
+    await setPrimaryTopic(m.resourceId, to, {
+      relevance: m.relevance,
+      origin: m.origin,
+      contested: m.contested,
+    });
     // setPrimaryTopic upserts `to` and clears other primaries; the dead row still exists.
     await prisma.resourceTopic.deleteMany({ where: { resourceId: m.resourceId, topic: from } });
   }
