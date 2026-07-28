@@ -29,6 +29,7 @@ import {
   MAX_MEMBERSHIPS,
   type FilingMembership,
 } from '@/lib/curation/topic-knn';
+import type { ReclassifyDecision } from '@/lib/curation/reclassify';
 
 type TxClient = Omit<
   PrismaClient,
@@ -151,6 +152,54 @@ export async function addCollisionMembership(
     skipDuplicates: true,
   });
   return membership;
+}
+
+// ── bulk reclassification (T4a) ──────────────────────────────────────────────
+//
+// The write half of one row's reclassification; the decision half is pure and lives in
+// src/lib/curation/reclassify.ts. Here rather than in the driver so it is reachable from
+// an integration test, and so the transaction boundary is stated once.
+//
+// ONE transaction for the re-score and the new memberships together. Split, a crash
+// between them would leave the primary re-scored — and therefore no longer `inherited`,
+// which is the driver's resume selector — so the run would skip the row forever and its
+// secondaries would be silently lost.
+//
+// Never moves the primary: `decision.primary.topic` is the row's current topic by
+// construction (see the reclassify module header). setPrimaryTopic is still the right
+// seam for a same-topic re-score — it is the only path allowed to touch the mirror, and
+// going around it for "just an update" is how mirrors rot.
+export async function applyReclassification(
+  resourceId: string,
+  decision: Pick<ReclassifyDecision, 'primary' | 'secondaries'>,
+): Promise<void> {
+  const { primary, secondaries } = decision;
+  // `no-evidence`: nothing measured, so the inherited placeholder stays. Replacing it
+  // with a measured-looking 0.0 would be worse than leaving it unknown.
+  if (!primary) return;
+
+  await prisma.$transaction(async (tx) => {
+    await setPrimaryTopic(resourceId, primary.topic, {
+      relevance: primary.relevance,
+      origin: primary.origin,
+      contested: primary.contested,
+      tx,
+    });
+    if (secondaries.length === 0) return;
+    // skipDuplicates so a re-run — or a concurrent discovery that filed the same topic —
+    // races harmlessly against the unique [resourceId, topic].
+    await tx.resourceTopic.createMany({
+      data: secondaries.map((s) => ({
+        resourceId,
+        topic: s.topic,
+        relevance: s.relevance,
+        origin: s.origin,
+        contested: s.contested,
+        isPrimary: false,
+      })),
+      skipDuplicates: true,
+    });
+  });
 }
 
 // The three properties T1 carries by assertion instead of by DB constraint. Shared by the

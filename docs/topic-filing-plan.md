@@ -717,6 +717,89 @@ embeddings, and a preview of the ~11% disagreement T4's reclassifier will be dra
    Record the new numbers in the T2 calibration table with their run date, replacing rather
    than appending — one current calibration, not a changelog.
 
+### As built — T4a (2026-07-27)
+
+T4 was split into sub-blocks in discussion: **T4a** = the reclassifier (§1), **T4b** =
+quorum seed/mint, **T4c** = orphans (§4), **T4d** = retrieval narrowing (§5), **T4e** =
+recalibration (§6). T4a shipped `src/lib/curation/reclassify.ts` (pure),
+`applyReclassification` in `resource-topics.ts`, `centroidMargins` in `topic-centroids.ts`,
+and `scripts/reclassify-topics.ts`. Applied to the dev DB 2026-07-27; the full decision
+record is `docs/audits/reclassify-t4a.json` (git-ignored).
+
+**Measured over all 1,152 rows** — dry-run and apply produced identical verdicts:
+
+| verdict | rows | |
+| --- | --- | --- |
+| `agree` | 633 | 54.9% |
+| `disagree` | 134 | 11.6% — matches the 88.7% k-NN agreement the calibration predicted |
+| `unvouchable-pool` | 383 | 33.2% |
+| `no-evidence` | 2 | 0.2% |
+
+Seven deviations, all load-bearing for T4b–T4e:
+
+1. **`unvouchable-pool` must NOT be read as T2b reads it.** At discovery time that verdict
+   means "accept the proposal, contested" — how a new shelf starts filling. Reused
+   verbatim here it contested the **current** primary when nothing had contradicted it,
+   on 10–55% of rows per topic (measured before the fix). It would have buried the 134
+   real disagreements under ~380 rows of "the classifier named an empty shelf". It is a
+   VOCABULARY signal, not doubt about the row: the primary is left uncontested and the
+   proposal is routed to T4b's seed channel via a new `unvouchable` field.
+2. **The motivating case is fixed by SEEDING, not minting — the plan's §6 check was
+   looking for the wrong thing.** All 49 Khan "Functions" leaves propose **`precalculus`**,
+   unanimously, with `newTopic` null. `algebra` was never the answer: `precalculus` is a
+   curated `TOPIC_SLUGS` entry with a Path and an **empty pool**, so k-NN could not vouch
+   for it and pre-T2b the classifier was never asked. This also closes the open question
+   in [resource.ts](../src/types/resource.ts): the `precalculus`→`calculus` edge was
+   compensating for exactly this mis-filing.
+3. **T4a writes ZERO uncontested secondaries** (58 written, all contested, all from the
+   disagreement path). §5/T4d's stated precondition — "once the backfill has written
+   cross-topic memberships" — is therefore satisfied by **T4b, not T4a**. An uncontested
+   secondary needs the classifier to volunteer a second topic that independently holds
+   ≥ `MIN_SECONDARY_PURITY`, and the prompt tells it to return one topic unless a resource
+   squarely belongs on several shelves; that combination essentially never fires. This is
+   also the calibration input §6 wanted: at 0.2 the measured yield is **nothing at all**.
+   T4e's question is whether to lower the bar or loosen the classifier's one-topic rule.
+4. **Re-scored primaries flip `inherited` → `classifier`.** The origin-aware `minRelevance`
+   clause exempts `inherited` precisely because its 1.0 is a placeholder; leaving a
+   MEASURED purity under that origin would park it in the one bucket the gate ignores.
+   Post-run: 1,150 `classifier` primaries (avg relevance 0.82), 777 `inherited` remaining
+   — that 777 is exactly the §1 stretch population.
+5. **The pass never refiles, and that buys batch CONCURRENCY for free.** Decisions read the
+   pool snapshot, the neighbours' `Resource.topic` labels, and the row's own memberships;
+   since no batch can change any row's `Resource.topic`, no batch can move the evidence
+   another batch reads. T2b had to purchase that property with a pre-insert snapshot.
+   Serial: ~90 minutes. At 4 batches in flight: ~20. Verified post-apply: 0 rows refiled,
+   0 mirror drift, all 134 contested primaries still retrievable.
+6. **The margin pre-filter is a review-priority signal, NOT the cost gate the plan
+   sketched.** Two measurements killed that role: every membership written needs a measured
+   `relevance` and only k-NN produces one, so k-NN runs for every written row regardless;
+   and at δ=0.05 **95.7% of rows clear the margin**, so gating the classifier call on it
+   would skip classification for nearly the whole backlog. `TopicCentroid` is finally
+   consumed (`centroidMargins`), just not as specced. δ as a cost gate is T4e's call.
+7. **Small topics are systematically contested — an instrument artifact, not a finding.**
+   All 12 `differential-equations` rows flag against `calculus`. The pool is exactly 10,
+   vouchable by the letter of `MIN_VOUCHABLE_POOL`, but a thin topic embedded inside a
+   large adjacent one cannot hold a plurality in any 10-neighbour window. This is
+   independent support for §4's decision to **park** `differential-equations` rather than
+   fold it, and a specific case for T4e: `MIN_VOUCHABLE_POOL = k` is exactly the boundary
+   where this bites.
+
+**T4b's quorum slate** (bar = 10, i.e. `MIN_VOUCHABLE_POOL` — below it k-NN could never
+vouch for the topic, so a handful of rows would be stranded on a permanently distrusted
+shelf):
+
+| seed (canonical exists, shelf empty) | | mint (subject absent from the vocabulary) | |
+| --- | --- | --- | --- |
+| `statistics` | 254 | `cryptography` | 29 |
+| `precalculus` | 49 | `convex-optimization` | 19 |
+| `data-structures-algorithms` | 34 | `number-theory` | 14 |
+| `multivariable-calculus` | 17 | *(below quorum: computational-complexity 6, computability-theory 5, optimization 4, …)* | |
+| `systems-of-linear-equations` | 15 | | |
+| `eigenvalues-and-eigenvectors` | 14 | | |
+
+`statistics` at 254 is the headline: a curated slug with zero resources while
+`probability-and-statistics` holds 456.
+
 ---
 
 ## Rejected alternatives
