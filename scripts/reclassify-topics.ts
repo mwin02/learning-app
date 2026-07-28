@@ -25,7 +25,7 @@
 import { writeFile } from 'node:fs/promises';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../src/lib/db';
-import { relatedTopics } from '../src/types/resource';
+import { TOPIC_RELATIONS } from '../src/types/resource';
 import { listCanonicals } from '../src/lib/agents/topic-registry';
 import { classifyDiscoveryTopics } from '../src/lib/agents/tools/classify-topic';
 import { knnNeighbourTopicsOf, topicPools } from '../src/lib/curation/topic-knn';
@@ -68,12 +68,24 @@ function arg(name: string): string | undefined {
   return hit?.slice(name.length + 3);
 }
 
-// The default backlog: every topic in the library that has NO relations. That is exactly
-// the population where `relatedTopics(topic).length === 1` made the pre-T2b classifier a
-// no-op, and it is derived rather than hardcoded so it stays correct if an edge is added.
+// The default backlog: every topic in the library that had NO relations at the time the
+// rows were filed — exactly the population where the pre-T2b classifier was a no-op.
+//
+// ⚠️ This is a claim about HISTORY, so it must use the pre-T4d SYMMETRIC closure, not
+// `relatedTopics`. T4d (2026-07-27) made relatedTopics directed, which drops
+// `calculus` and `sql` to a single member — under the live function they would now
+// silently join this backlog even though the classifier was NOT skipped for them under
+// the symmetric closure in force when they were filed. Those rows do deserve a re-score
+// (they are the §1 stretch population), but that is `--all`'s job, not a change of
+// meaning smuggled into the default selector.
+function hadRelationsAtFilingTime(topic: string): boolean {
+  if ((TOPIC_RELATIONS[topic] ?? []).length > 0) return true;
+  return Object.values(TOPIC_RELATIONS).some((vs) => vs.includes(topic));
+}
+
 async function defaultBacklogTopics(): Promise<string[]> {
   const rows = await prisma.resource.groupBy({ by: ['topic'] });
-  return rows.map((r) => r.topic).filter((t) => relatedTopics(t).length === 1);
+  return rows.map((r) => r.topic).filter((t) => !hadRelationsAtFilingTime(t));
 }
 
 async function main() {

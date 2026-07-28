@@ -101,7 +101,11 @@ async function main() {
       const cos = ca && cb ? cosine(ca, cb) : 0;
       const sa = subjectOf.get(a);
       const sb = subjectOf.get(b);
-      pairs.push({ a, b, coef, shared, cos, related: relatedTopics(a).includes(b), xsubj: Boolean(sa && sb && sa !== sb) });
+      // Pairs are unordered but edges are DIRECTED since topic filing T4d, so testing
+      // only relatedTopics(a) would report `precalculus -> calculus` as unrelated
+      // whenever this loop happened to emit it as (calculus, precalculus).
+      const related = relatedTopics(a).includes(b) || relatedTopics(b).includes(a);
+      pairs.push({ a, b, coef, shared, cos, related, xsubj: Boolean(sa && sb && sa !== sb) });
     }
   }
   pairs.sort((x, y) => y.coef - x.coef || y.shared - x.shared);
