@@ -17,6 +17,12 @@
 //   - MEMOIZED per batch. A discovery batch commonly proposes the same missing subject for
 //     several rows; the gate's tier 3 is an LLM call, so the first row pays and the rest
 //     read the cache (including the negative result — a rejected label is not retried).
+//     ⚠️ Only a VERDICT is cached. A gate that THREW returned no judgement about the
+//     label, and memoizing that would let one rate-limit blip on the first row suppress
+//     minting for every later row proposing the same subject — turning a transport hiccup
+//     into a permanent "this subject does not exist" for the rest of the batch. Retrying
+//     costs at most one gate call per remaining row, and only on a path that is already
+//     failing.
 //   - BEST-EFFORT. A gate failure returns null and the caller keeps its unmodified filing
 //     decision. Minting is an upgrade to filing, never a precondition for it: a flaky
 //     structured-output call must not fail a sourcing run that already paid for discovery.
@@ -39,17 +45,20 @@ export function createTopicMinter(
     const cached = cache.get(key);
     if (cached !== undefined) return cached;
 
-    let canonical: string | null = null;
+    let verdict: { valid: boolean; canonical?: string };
     try {
-      const verdict = await gate(label);
-      canonical = verdict.valid ? (verdict.canonical ?? null) : null;
-      console.log('[topic-mint] gate verdict', { proposed: label, canonical, valid: verdict.valid });
+      verdict = await gate(label);
     } catch (err) {
       console.warn('[topic-mint] gate failed, keeping the guardrail decision', {
         proposed: label,
         error: err instanceof Error ? err.message : String(err),
       });
+      // Deliberately NOT cached — see the header. No verdict was reached about this label.
+      return null;
     }
+
+    const canonical = verdict.valid ? (verdict.canonical ?? null) : null;
+    console.log('[topic-mint] gate verdict', { proposed: label, canonical, valid: verdict.valid });
     cache.set(key, canonical);
     return canonical;
   };
