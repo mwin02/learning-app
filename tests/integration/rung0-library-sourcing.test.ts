@@ -111,6 +111,9 @@ describeDb('rung 0 — library-first sourcing', () => {
           conceptsTaught: [],
           status: 'pending_review',
           sourceId: source.id,
+          // Topic filing T1: retrieval scopes on ResourceTopic membership, not on the
+          // scalar mirror — a fixture row without one is invisible to searchResources.
+          topics: { create: [{ topic: TOPIC, isPrimary: true, origin: 'inherited' }] },
         },
         select: { id: true },
       });

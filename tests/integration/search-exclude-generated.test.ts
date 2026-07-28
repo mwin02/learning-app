@@ -24,6 +24,9 @@ async function seed() {
   });
   const base = {
     topic: MARK,
+    // Topic filing T1: searchResources scopes on ResourceTopic membership, not on the
+    // scalar mirror — a fixture row without one is invisible to it.
+    topics: { create: [{ topic: MARK, isPrimary: true, origin: 'inherited' as const }] },
     type: 'article' as const,
     durationMin: 30,
     summary: 'seeded for F6',
