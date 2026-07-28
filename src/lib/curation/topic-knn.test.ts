@@ -4,6 +4,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   decideFiling,
+  decideMintedFiling,
+  decideCollision,
   KNN_K,
   MAX_MEMBERSHIPS,
   MIN_SECONDARY_PURITY,
@@ -176,6 +178,87 @@ describe('decideFiling — the proposal is rejected', () => {
     });
     expect(d.reason).toBe('rejected');
     expect(d.primary).toMatchObject({ topic: 'calculus', contested: true });
+  });
+});
+
+describe('decideMintedFiling — T3', () => {
+  const evidence = {
+    proposals: [],
+    requestTopic: 'calculus',
+    neighbourTopics: neighbours({ calculus: 4, 'linear-algebra': 3, sql: 3 }),
+    pools: POOLS,
+  };
+
+  it('files under the minted topic, always contested', () => {
+    // A freshly minted topic has no pool, so k-NN cannot vouch for it by construction —
+    // the flag is honest, and a contested PRIMARY stays retrievable so the pool can fill.
+    const d = decideMintedFiling(evidence, 'algebra');
+    expect(d.reason).toBe('minted');
+    expect(d.primary).toMatchObject({ topic: 'algebra', origin: 'classifier', contested: true });
+    expect(d.primary.relevance).toBe(0);
+  });
+
+  it('keeps the request topic as a secondary when the neighbourhood supports it', () => {
+    // Otherwise the run that paid for this discovery cannot retrieve its own find: a
+    // minted topic is not reachable through relatedTopics widening either.
+    const d = decideMintedFiling(evidence, 'algebra');
+    expect(d.secondaries).toHaveLength(1);
+    expect(d.secondaries[0]).toMatchObject({ topic: 'calculus', contested: false });
+    expect(d.secondaries[0].relevance).toBeCloseTo(0.4);
+  });
+
+  it('drops the request topic when the neighbourhood does not support it', () => {
+    const d = decideMintedFiling(
+      { ...evidence, requestTopic: 'python', neighbourTopics: neighbours({ calculus: 10 }) },
+      'algebra',
+    );
+    expect(d.secondaries).toEqual([]);
+  });
+
+  it('does not duplicate the request topic when the gate resolved onto it', () => {
+    // Tier 1/2 (or T1.5's snap) can map the proposed label onto the request topic itself.
+    const d = decideMintedFiling(evidence, 'calculus');
+    expect(d.primary.topic).toBe('calculus');
+    expect(d.secondaries).toEqual([]);
+  });
+});
+
+describe('decideCollision — T3', () => {
+  it('admits the rediscovering topic when it holds the plurality', () => {
+    const m = decideCollision('calculus', neighbours({ calculus: 7, sql: 3 }), POOLS);
+    expect(m).toMatchObject({ topic: 'calculus', origin: 'collision', contested: false });
+    expect(m!.relevance).toBeCloseTo(0.7);
+  });
+
+  it('records the measured purity, never the schema default of 1.0', () => {
+    // A collision row carrying 1.0 would outrank guarded classifier rows under any
+    // future minRelevance — backwards, since it is the least-evidenced membership kind.
+    const m = decideCollision('calculus', neighbours({ calculus: 6, sql: 4 }), POOLS);
+    expect(m!.relevance).toBeCloseTo(0.6);
+    expect(m!.relevance).not.toBe(1);
+  });
+
+  it('admits a topic with too small a pool, flagged contested', () => {
+    const m = decideCollision('statistics', neighbours({ calculus: 10 }), POOLS);
+    expect(m).toMatchObject({ topic: 'statistics', origin: 'collision', contested: true });
+  });
+
+  it('declines when the neighbourhood disagrees — no free pass for the searched topic', () => {
+    // The whole point: "two topics found the same page" is a hypothesis, not evidence.
+    expect(decideCollision('sql', neighbours({ calculus: 7, sql: 3 }), POOLS)).toBeNull();
+  });
+
+  it('declines on a tie', () => {
+    expect(decideCollision('calculus', neighbours({ calculus: 5, sql: 5 }), POOLS)).toBeNull();
+  });
+
+  it('declines when the existing row has no embedding', () => {
+    // knnNeighbourTopicsOf returns [] for an unembedded row — no evidence, no membership.
+    expect(decideCollision('calculus', [], POOLS)).toBeNull();
+  });
+
+  it('declines when the library has fewer than k neighbours', () => {
+    expect(decideCollision('calculus', ['calculus', 'calculus'], POOLS)).toBeNull();
   });
 });
 

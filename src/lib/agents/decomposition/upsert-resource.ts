@@ -15,7 +15,7 @@
 
 import { prisma } from '@/lib/db';
 import { safeEmbedResource, storeEmbedding } from '@/lib/ai/embeddings';
-import { setPrimaryTopic } from '@/lib/curation/resource-topics';
+import { setPrimaryTopic, addCollisionMembership } from '@/lib/curation/resource-topics';
 import { MAX_MEMBERSHIPS, type FilingDecision } from '@/lib/curation/topic-knn';
 import { safeClassifyAndPersist } from '@/lib/curation/embeddability';
 import { computeTrustScore } from '@/lib/curation/trust-score';
@@ -51,8 +51,13 @@ export type UpsertResourceInput = {
 // resolved to — the freshly-created row on 'inserted', the existing row on a
 // dedup 'skipped' (so provenance can record a rediscovery of a parked
 // container). Null when there is no addressable row (transaction failure).
+//
+// T3: 'membership_added' is a dedup hit whose requested topic CLEARED the collision
+// guardrail and became a `ResourceTopic` membership — no row inserted, but the row is now
+// reachable from a topic it wasn't reachable from before. It exists so the discovery
+// counters can stop reporting that as a plain 'skipped'.
 export type UpsertOutcome = {
-  outcome: 'inserted' | 'skipped';
+  outcome: 'inserted' | 'skipped' | 'membership_added';
   atomicIds: string[];
   resourceId: string | null;
   decompositionStatus: DecompositionStatus | null;
@@ -106,12 +111,33 @@ export async function upsertResource(
     select: { id: true, topic: true, decompositionStatus: true },
   });
   if (existing) {
+    // T3: a cross-topic collision is no longer a dead end. The rediscovering topic may
+    // JOIN the existing row — but only by clearing the same guardrail a fresh filing
+    // does, measured against the existing row's own embedding. Gated on `filing` because
+    // that is what marks an evidence-gathering caller: the seed/verify paths supply no
+    // filing and keep the pre-T3 log-and-skip exactly.
     if (existing.topic !== topic) {
-      console.log('[upsert-resource] skip cross-topic URL collision', {
+      const added = filing ? await addCollisionMembership(existing.id, topic) : null;
+      console.log('[upsert-resource] cross-topic URL collision', {
         url,
         existingTopic: existing.topic,
         requestedTopic: topic,
+        membershipAdded: Boolean(added),
+        relevance: added ? Number(added.relevance.toFixed(2)) : null,
+        contested: added?.contested ?? null,
       });
+      if (added) {
+        return {
+          // Nothing was INSERTED — the row already existed — but nothing was skipped
+          // either: the requested topic can now retrieve it. `atomicIds` stays empty; it
+          // means "newly created pickable ids", and this row may well be a parked
+          // container. (Attaching it to the demanding concept is rung 0's job.)
+          outcome: 'membership_added',
+          atomicIds: [],
+          resourceId: existing.id,
+          decompositionStatus: existing.decompositionStatus,
+        };
+      }
     }
     return {
       outcome: 'skipped',

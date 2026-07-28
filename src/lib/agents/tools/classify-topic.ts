@@ -45,20 +45,39 @@ const ClassificationSchema = z.object({
     z.object({
       url: z.string().url(),
       topics: z.array(z.string()).min(1).max(MAX_PROPOSALS),
+      // Topic filing T3: the ONE place the model may name a slug that is not in the
+      // vocabulary — an explicit "this resource's subject does not exist in our library
+      // yet" signal. It is a PROPOSAL, not a topic: the caller routes it through the
+      // topic gate (curated match / known alias / grounded mint + kebab coercion +
+      // T1.5's snap-to-curated-slug), which is free to reject it outright. Without this
+      // channel T3's minting is unreachable — every proposal below is filtered to the
+      // existing vocabulary, so the classifier can never surface a topic we lack, which
+      // is precisely the motivating case (45 Khan "Functions" leaves whose right answer,
+      // `algebra`, no code path could utter).
+      newTopic: z.string().nullable(),
     }),
   ),
 });
 
-// Returns url -> ranked candidate topics. A url absent from the map (or any failure)
-// means the caller should fall back to the request topic. Topics outside `candidates`
-// are dropped, not trusted — the model is grounded on the vocabulary, but a hallucinated
-// slug would mint a shelf nothing else can reach.
+export type TopicProposal = {
+  // Ranked in-vocabulary proposals, most confident first. Possibly empty.
+  topics: string[];
+  // A slug the model wants minted, or null. Only meaningful when nothing in `topics`
+  // clears the guardrail — evidence about an existing topic always wins over a mint.
+  newTopic: string | null;
+};
+
+// Returns url -> proposals. A url absent from the map (or any failure) means the caller
+// should fall back to the request topic. Topics outside `candidates` are dropped, not
+// trusted — the model is grounded on the vocabulary, and a hallucinated slug arriving
+// through `topics` would mint a shelf nothing else can reach. `newTopic` is the audited
+// exception (see the schema comment).
 export async function classifyDiscoveryTopics(
   resources: ClassifiableResource[],
   candidates: string[],
   fallback: string,
-): Promise<Map<string, string[]>> {
-  const map = new Map<string, string[]>();
+): Promise<Map<string, TopicProposal>> {
+  const map = new Map<string, TopicProposal>();
   // An empty vocabulary has nothing to propose from. (The old `candidates.length <= 1`
   // early return is deliberately gone: with the full canonical list there is always
   // something to decide, and that guard — plus its caller-side twin — is exactly what
@@ -100,7 +119,12 @@ export async function classifyDiscoveryTopics(
 
     for (const r of result.object.results) {
       const topics = [...new Set(r.topics)].filter((t) => allowed.has(t)).slice(0, MAX_PROPOSALS);
-      if (topics.length > 0) map.set(r.url, topics);
+      // A `newTopic` that is already in the vocabulary is not a mint — the model just
+      // answered in the wrong field; drop it rather than sending the gate on a round-trip
+      // to rediscover a slug we already have.
+      const raw = r.newTopic?.trim();
+      const newTopic = raw && !allowed.has(raw) ? raw : null;
+      if (topics.length > 0 || newTopic) map.set(r.url, { topics, newTopic });
     }
   } catch (err) {
     console.warn('[classify-topic] classification failed, filing under request topic', {
@@ -122,4 +146,5 @@ Rules:
 - Choose the most SPECIFIC candidate the resource squarely belongs to. A specialization slug (e.g. "javascript-react") is for resources that actually teach or require that specialization; a foundational slug (e.g. "javascript") is for resources covering only the general subject.
 - When a resource covers only the foundational subject and does NOT require the specialization, choose the foundational topic — even though it was discovered while building the specialization's library.
 - The topic a resource was DISCOVERED under carries no weight. File it where it belongs, not where it was found.
-- Be conservative: when genuinely unsure, return the fallback topic given in the prompt rather than guessing.`;
+- Be conservative: when genuinely unsure, return the fallback topic given in the prompt rather than guessing.
+- "newTopic": null on almost every resource. Set it ONLY when the resource's actual subject is missing from the candidate list entirely — not when a candidate is merely a loose fit — and then give one new kebab-case slug naming that subject at the same level of generality as the candidates (e.g. "algebra", not "solving-quadratic-equations" and not "math"). It must be a legitimate mathematics, natural-science or computer-science topic. Still fill "topics" with your best available choice; "newTopic" is a proposal reviewed separately, not a replacement.`;

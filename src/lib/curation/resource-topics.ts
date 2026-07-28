@@ -22,6 +22,13 @@
 
 import { prisma } from '@/lib/db';
 import type { PrismaClient, TopicFilingOrigin } from '@prisma/client';
+import {
+  decideCollision,
+  knnNeighbourTopicsOf,
+  topicPools,
+  MAX_MEMBERSHIPS,
+  type FilingMembership,
+} from '@/lib/curation/topic-knn';
 
 type TxClient = Omit<
   PrismaClient,
@@ -90,6 +97,60 @@ async function writePrimary(
 
   // The mirror, in the same transaction as the flag it mirrors.
   await tx.resource.update({ where: { id: resourceId }, data: { topic } });
+}
+
+// ── collisions (T3) ──────────────────────────────────────────────────────────
+//
+// A URL rediscovered under a second topic. Pre-T3 this was a dead end: upsertResource
+// logged `skip cross-topic URL collision` and returned, so the rediscovering topic could
+// never reach the row — mechanic #5 of the plan's defect list, and the reason a mislabel
+// stayed permanent even once the right topic existed.
+//
+// It is NOT, however, a free membership: the searched topic asserting relevance is exactly
+// the signal the whole plan rejects, so the claim goes through the same k-NN guardrail a
+// fresh filing does — against THIS row's embedding, since this row (not the incoming
+// metadata) is what is being labelled.
+//
+// Never touches `isPrimary` or the mirror: a collision membership is a secondary by
+// definition, so it needs no `setPrimaryTopic` and cannot refile the row. Returns the
+// membership written, or null when nothing was written (already a member, cap reached, or
+// the guardrail declined).
+export async function addCollisionMembership(
+  resourceId: string,
+  topic: string,
+): Promise<FilingMembership | null> {
+  const existing = await prisma.resourceTopic.findMany({
+    where: { resourceId },
+    select: { topic: true },
+  });
+  // Already filed here — the "collision" is just a rediscovery under the same topic.
+  if (existing.some((m) => m.topic === topic)) return null;
+  // The cap is per RESOURCE, and collision rows count against it (locked decision): the
+  // guard against a generic "intro to programming" page joining every CS topic, one
+  // rediscovery at a time.
+  if (existing.length >= MAX_MEMBERSHIPS) {
+    console.log('[resource-topics] collision membership skipped: cap reached', {
+      resourceId,
+      topic,
+      memberships: existing.length,
+    });
+    return null;
+  }
+
+  const [neighbourTopics, pools] = await Promise.all([
+    knnNeighbourTopicsOf(resourceId),
+    topicPools(),
+  ]);
+  const membership = decideCollision(topic, neighbourTopics, pools);
+  if (!membership) return null;
+
+  // skipDuplicates so a concurrent rediscovery of the same URL under the same topic
+  // races harmlessly (the unique [resourceId, topic] would otherwise throw).
+  await prisma.resourceTopic.createMany({
+    data: [{ resourceId, topic, relevance: membership.relevance, origin: 'collision', contested: membership.contested, isPrimary: false }],
+    skipDuplicates: true,
+  });
+  return membership;
 }
 
 // The three properties T1 carries by assertion instead of by DB constraint. Shared by the
