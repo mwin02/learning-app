@@ -216,7 +216,15 @@ export async function upsertResource(
           embedTasks,
         });
       }
-    });
+    // T2b: raised off Prisma's 5s default, the same trade decomposeExisting already
+    // makes. Filing added ~4 round-trips per row (setPrimaryTopic locks the Resource,
+    // clears other primaries, upserts the membership, writes the mirror) on top of the
+    // insert, so the motivating 45-leaf Khan container now spends ~5x the statements
+    // inside this transaction. Blowing the budget is silent in the worst way: the catch
+    // below turns a P2028 into `outcome: 'skipped'`, so the whole decomposition would
+    // vanish with one log line. 60s is well clear of the observed shape while still
+    // bounding a hung connection.
+    }, { maxWait: 10_000, timeout: 60_000 });
   } catch (err) {
     console.log('[upsert-resource] transaction failed', {
       url,
