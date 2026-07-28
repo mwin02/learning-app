@@ -306,14 +306,21 @@ async function apply(file: string, execute: boolean) {
   const verdicts = Array.isArray(raw) ? raw : raw.verdicts;
 
   const { rows, parents } = await loadQueue(null, 'all');
-  const counts = await prisma.resourceTopic.groupBy({
-    by: ['resourceId'],
+  // Topics, not counts: the planner's cap arithmetic needs to know whether a destination
+  // topic is already held (an add of one is a duplicate; a refile onto one is cap-neutral
+  // while a retained refile to a fresh topic nets +1).
+  const memberships = await prisma.resourceTopic.findMany({
     where: { resourceId: { in: rows.map((r) => r.resourceId) } },
-    _count: { _all: true },
+    select: { resourceId: true, topic: true },
   });
-  const membershipCounts = new Map(counts.map((c) => [c.resourceId, c._count._all]));
+  const heldTopics = new Map<string, string[]>();
+  for (const m of memberships) {
+    const list = heldTopics.get(m.resourceId);
+    if (list) list.push(m.topic);
+    else heldTopics.set(m.resourceId, [m.topic]);
+  }
 
-  const plan = planVerdicts(rows, verdicts, parents, membershipCounts, MAX_MEMBERSHIPS);
+  const plan = planVerdicts(rows, verdicts, parents, heldTopics, MAX_MEMBERSHIPS);
   const byMembership = new Map(rows.map((r) => [r.membershipId, r]));
 
   // Measured purity for each destination topic. A review verdict is an operator judgement,

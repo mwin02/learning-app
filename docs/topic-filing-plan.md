@@ -1486,12 +1486,18 @@ Secondaries now carry `contested = pool < MIN_VOUCHABLE_POOL`, and the sort feed
 membership. Contested rather than dropped, because per As-built T4e a secondary never grows a
 pool either way — so the only thing a drop buys is losing the receipt.
 
-**PR #280 — `MAX_MEMBERSHIPS` was advisory on two paths.** `addCollisionMembership` read the
-count, spent two round-trips on guardrail work, then wrote — two workers rediscovering one
-URL under different topics both saw 2/3 and both wrote. `planVerdicts` checked each `add`
-against the caller's snapshot without incrementing it, and 5 live rows hold two contested
-memberships each. Both now count against something current (a `FOR UPDATE` re-count; a
-working copy). `writeMemberships` and `decideReclassification` were already bounded.
+**PR #280 — `MAX_MEMBERSHIPS` was advisory on three paths.** `addCollisionMembership` read
+the count, spent two round-trips on guardrail work, then wrote — two workers rediscovering
+one URL under different topics both saw 2/3 and both wrote. `planVerdicts` checked each
+`add` against the caller's snapshot without incrementing it, and 5 live rows hold two
+contested memberships each. And `refile` was never cap-checked at all, though it is not
+always cap-neutral: onto a held topic it upserts in place, but to a fresh topic with the
+vacated membership *retained* (the default for a contested primary) it nets +1 — a single
+ordinary refile verdict could push a 3/3 resource to 4. All three now count against
+something current: a `FOR UPDATE` re-count for collisions, and for the drain a projected
+per-resource *set of held topics* (topics, not counts — the arithmetic turns on whether the
+destination is already held) that adds and refiles consume as the file is planned.
+`writeMemberships` and `decideReclassification` were already bounded.
 
 **PR #278 — the T3 minter memoized transient failures.** `createTopicMinter` fell through its
 catch into `cache.set(key, null)`, so one rate-limit blip on the first row proposing a subject
