@@ -800,6 +800,92 @@ shelf):
 `statistics` at 254 is the headline: a curated slug with zero resources while
 `probability-and-statistics` holds 456.
 
+### As built — T4b (2026-07-27)
+
+Shipped `src/lib/curation/quorum-refile.ts` (pure), `settleMembership` in
+`resource-topics.ts`, and `scripts/refile-quorum-topics.ts`. Applied to the dev DB
+2026-07-27; the move record is `docs/audits/refile-t4b.json` (git-ignored). **445 rows
+refiled across 9 shelves, 0 drift skips, 0 invariant violations.** The whole slate cleared
+quorum, so nothing above the bar was left behind.
+
+Eight deviations, and the first two change what a future block should assume:
+
+1. **T4b re-derives NOTHING — it reads the T4a record, which IS the snapshot.** The plan
+   left open whether to re-run the classifier; every number this pass needs was already
+   measured (`unvouchable`, `newTopic`, and `relevance` = purity against the current
+   topic). Reading them means phase 1 touches no live neighbour labels and therefore
+   cannot be perturbed by its own writes — which dissolves the order-dependence hazard
+   that moving primaries would otherwise have created, without a snapshot mechanism.
+   Cost: **3 LLM calls** (the gate, once per mint label) instead of 445 classifier rows.
+   The compensating control is a per-row **live-drift guard** — skip when `Resource.topic`
+   no longer matches the record — which also makes a re-run a reported no-op and a
+   crashed run resumable with the same command.
+2. **The vacated topic is retained as an UNCONTESTED SECONDARY, for free.**
+   `setPrimaryTopic` clears `isPrimary` on the old membership but leaves the row, with the
+   origin, measured relevance and uncontested flag T4a wrote — so `decideRefile` writes no
+   secondary at all. This is load-bearing twice: `probability-and-statistics` dropped from
+   445 primaries to 202 while its **retrievable pool stayed at 445**, so its live Path lost
+   nothing to the `statistics` split; and uncontested secondaries went **0 → 441**, which
+   is what finally satisfies T4d's precondition (As-built T4a item 3). The gap to 445 is
+   exactly the 4 rows whose T4a verdict was `disagree` — their contested primary is
+   correctly retained as a *contested* secondary, still doubted.
+3. **Two phases, and the settle phase is the acceptance measurement, not cleanup.** Purity
+   against an empty shelf is 0 by construction, so phase 1 can only write
+   `relevance: 0.0, contested: true` — the one bucket an origin-aware `minRelevance` gates
+   hardest. Phase 2 re-measures every moved row against the now-populated library and
+   clears `contested` where the guardrail finally vouches. It runs strictly after all
+   writes and touches only `relevance`/`contested`, so it cannot move the evidence it
+   reads. **366 of 445 rows (82%) came back vouched** — the bootstrapping deadlock,
+   measured rather than asserted.
+4. **The "thin topics can't settle" prediction was WRONG, and the real variable is
+   COHERENCE, not size.** Predicted from As-built T4a item 7 that the 14–19-row cohorts
+   would stay contested; instead `systems-of-linear-equations` (15) settled **13/15** and
+   `eigenvalues-and-eigenvectors` (14) **13/14**, while the larger
+   `data-structures-algorithms` (34) managed **19/34** and `multivariable-calculus` (17)
+   only **7/17**. A tight cohort holds its own neighbourhood at any size; a cohort that is
+   really two subjects does not. Per-shelf settlement rates:
+
+   | shelf | rows | vouched | mean relevance |
+   | --- | --- | --- | --- |
+   | `statistics` | 254 | 236 | 0.81 |
+   | `precalculus` | 49 | 37 | 0.71 |
+   | `data-structures-algorithms` | 34 | 19 | 0.51 |
+   | `cryptography` | 29 | 19 | 0.59 |
+   | `convex-optimization` | 19 | 17 | 0.68 |
+   | `multivariable-calculus` | 17 | 7 | 0.40 |
+   | `systems-of-linear-equations` | 15 | 13 | 0.72 |
+   | `eigenvalues-and-eigenvectors` | 14 | 13 | 0.71 |
+   | `number-theory` | 14 | 5 | 0.47 |
+
+   **T4e input:** the three shelves under 0.60 mean relevance are where the calibration's
+   "per-topic own-similarity drifting below the band" check should look first — and
+   `multivariable-calculus` at 0.40 is the one to triage, not to re-tune around.
+5. **The motivating case is FIXED.** All **49/49** Khan "Functions" leaves now carry
+   `precalculus` as primary (relevance p50 0.8), with `discrete-mathematics` /
+   `linear-algebra` retained uncontested behind them. `precalculus` went from **1 resource
+   with a live Path** to 47 in the vouchable pool. Per As-built T4a item 2 this was always
+   a seeding problem, not a minting one — `algebra` was never the answer.
+6. **`QUORUM` is `MIN_VOUCHABLE_POOL`, exported from one module.** T4a's driver carried a
+   local `QUORUM = 10`; it now imports the same constant, so T4e re-tuning `k` moves the
+   bar in lockstep instead of leaving a stale literal behind. The bar is not tunable
+   separately *by construction*: below it k-NN can never vouch for the shelf, which is the
+   entire argument for the quorum.
+7. **Seed beats mint when a row carries both signals.** Same principle as T3's "evidence
+   beats a mint" — an existing canonical outranks inventing a new one — plus a counting
+   reason: a row voting in two cohorts could push a mint label over the bar on strength it
+   does not exclusively have. Fired on 2 rows (`calculus-of-variations`, which is below
+   quorum anyway), so the rule is a guard against silent future drift, not a live effect.
+8. **The mint channel routes through T3's `createTopicMinter`, and a dry run never calls
+   it.** The gate persists a `TopicAlias`, so minting is a write; a dry run reports the raw
+   label instead. All three labels passed the gate unchanged (`cryptography` → cs,
+   `convex-optimization` → math, `number-theory` → math), so `snapToKnownSlug` had nothing
+   to snap — the twin-guard was exercised but silent.
+
+**What T4c/T4d/T4e inherit:** 441 uncontested secondaries (T4d's precondition is now
+genuinely met), 209 contested primaries for the review queue (134 from T4a's disagreements
++ 79 unsettled refiles), and 3 new canonicals with no Path — harmless per the plan's
+locked decision, waiting for a learner request.
+
 ---
 
 ## Rejected alternatives
