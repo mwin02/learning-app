@@ -101,6 +101,38 @@ describe('decideFiling — the proposal is accepted', () => {
     expect(d.secondaries).toEqual([]);
   });
 
+  // A thin shelf can hold 2 of 10 neighbours, so purity alone would hand it an
+  // UNCONTESTED secondary — retrievable under T1's predicate — while the identical topic
+  // as a PRIMARY would be flagged `unvouchable-pool`. Same bar on both sides.
+  it('flags a secondary whose shelf is too thin for k-NN to vouch for', () => {
+    const d = decideFiling({
+      proposals: ['calculus', 'statistics'],
+      requestTopic: 'calculus',
+      neighbourTopics: neighbours({ calculus: 6, statistics: 3, sql: 1 }),
+      pools: new Map([...POOLS, ['statistics', MIN_VOUCHABLE_POOL - 1]]),
+    });
+    expect(d.reason).toBe('classifier');
+    expect(d.secondaries).toHaveLength(1);
+    expect(d.secondaries[0]).toMatchObject({ topic: 'statistics', contested: true });
+    // Recorded, not dropped: the review drain is what promotes it.
+    expect(d.secondaries[0].relevance).toBeCloseTo(0.3);
+  });
+
+  // The cap (MAX_MEMBERSHIPS - 1 secondaries) is applied after this sort, so ordering is
+  // what decides which membership survives: a hypothesis nothing can vouch for must never
+  // displace one that would be retrievable, however well it scores.
+  it('ranks vouched secondaries ahead of unvouchable ones regardless of purity', () => {
+    const d = decideFiling({
+      proposals: ['calculus', 'statistics', 'precalculus'],
+      requestTopic: 'calculus',
+      // statistics out-scores precalculus on purity, but nothing can vouch for it.
+      neighbourTopics: neighbours({ calculus: 5, statistics: 3, precalculus: 2 }),
+      pools: new Map([...POOLS, ['statistics', MIN_VOUCHABLE_POOL - 1]]),
+    });
+    expect(d.secondaries.map((s) => s.topic)).toEqual(['precalculus', 'statistics']);
+    expect(d.secondaries.map((s) => s.contested)).toEqual([false, true]);
+  });
+
   it('caps total memberships and keeps the strongest secondaries', () => {
     const d = decideFiling({
       proposals: ['calculus', 'sql', 'precalculus'],
