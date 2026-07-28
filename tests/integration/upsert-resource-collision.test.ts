@@ -89,7 +89,9 @@ async function seedPool(topic: string, vector: number[]) {
       },
       select: { id: true },
     });
-    // The membership is what topicPools() counts — Resource.topic alone is invisible to it.
+    // Both halves matter, for different consumers: `Resource.topic` is what topicPools()
+    // counts and what the k-NN neighbour query votes with (T4e made those the same
+    // currency), while the membership is what T1's retrieval predicate matches on.
     await prisma.resourceTopic.create({
       data: { resourceId: row.id, topic, isPrimary: true, relevance: 1, origin: 'inherited' },
     });

@@ -25,9 +25,35 @@
 //      unrelated). If resource-to-centroid separation is similarly compressed,
 //      the centroid guardrail is not viable as specified and T2 needs a
 //      different instrument (per-row k-NN label density is the fallback).
+//
+// ── T4e (2026-07-27): TWO CORRECTIONS TO HOW THIS SCRIPT IS READ ────────────
+//
+// A. IT WAS SCORING THE WRONG TARGET. Everything above scores against the
+//    scalar `Resource.topic`. Post-T1 that column is a denormalized MIRROR of
+//    the primary membership, and the label of record is the `ResourceTopic`
+//    SET. Scoring the mirror understates agreement by ~5 points, because a row
+//    legitimately filed on two shelves is counted wrong whenever its
+//    neighbours name the other one. The k-NN block below now reports all three
+//    targets; ANY-membership is the one that matches the model T1 implements.
+//
+// B. AGREEMENT IS NOT COMPARABLE ACROSS RUNS WITH DIFFERENT VOCABULARIES, and
+//    ours changed from 11 topics to 20 between the 2026-07-25 and 2026-07-27
+//    runs (T4b seeded 6 shelves and minted 3). Splitting one shelf into two
+//    adjacent shelves MECHANICALLY depresses purity: a `statistics` row's
+//    neighbours are now half `probability-and-statistics`, which is right in
+//    every sense that matters and still scores as a miss. The 2026-07-27 run
+//    fell on every instrument for that reason, NOT because label noise rose —
+//    against ANY-membership it in fact went 88.7% -> 89.4%.
+//
+//    So: the vocabulary size is printed in the header, and the disagreements
+//    are broken out as a confusion table. Before concluding an instrument has
+//    regressed, check whether the top confusions are sibling shelves that a
+//    previous block deliberately created. Do NOT compare the headline number
+//    to a run taken over a different vocabulary — re-derive both or neither.
 
 import type { ResourceStatus } from '@prisma/client';
 import { prisma } from '../src/lib/db';
+import { MIN_SECONDARY_PURITY } from '../src/lib/curation/topic-knn';
 
 const STATUSES: ResourceStatus[] = ['active', 'pending_review'];
 // Topics smaller than this can't characterize a centroid; reported separately.
@@ -92,6 +118,24 @@ async function main() {
   }
   const dim = rows[0].v.length;
 
+  // T4e (caveat A): the membership sets the k-NN block scores against. `all` is every
+  // membership; `retrievable` applies T1's predicate (a primary always admits, a
+  // secondary only when uncontested) so the third number answers the question a caller
+  // actually cares about — "would a search for the neighbours' topic find this row?".
+  const memberships = await prisma.$queryRaw<
+    { resourceId: string; topic: string; isPrimary: boolean; contested: boolean }[]
+  >`SELECT "resourceId", topic, "isPrimary", contested FROM "ResourceTopic"`;
+  const allTopics = new Map<string, Set<string>>();
+  const retrievableTopics = new Map<string, Set<string>>();
+  for (const m of memberships) {
+    if (!allTopics.has(m.resourceId)) allTopics.set(m.resourceId, new Set());
+    allTopics.get(m.resourceId)!.add(m.topic);
+    if (m.isPrimary || !m.contested) {
+      if (!retrievableTopics.has(m.resourceId)) retrievableTopics.set(m.resourceId, new Set());
+      retrievableTopics.get(m.resourceId)!.add(m.topic);
+    }
+  }
+
   // Per-topic sum vectors (unnormalized) + counts.
   const sums = new Map<string, Float64Array>();
   const counts = new Map<string, number>();
@@ -110,7 +154,13 @@ async function main() {
   const centroids = new Map<string, Float64Array>();
   for (const t of topics) centroids.set(t, normalize(sums.get(t)!));
 
+  // T4e (caveat B): vocabulary size is printed FIRST because it is the denominator that
+  // makes agreement numbers comparable — or not — across runs.
   console.log(`rows=${rows.length} dim=${dim} topics=${topics.length} (>=${MIN_MEMBERS} members: ${big.length})`);
+  console.log(
+    `⚠️  agreement below is comparable only to runs over these same ${topics.length} topics ` +
+      `— see caveat B in the header`,
+  );
   console.log();
 
   // ---- per-row scores -----------------------------------------------------
@@ -253,6 +303,13 @@ async function main() {
   const K = 10;
   const purity: number[] = [];
   const knnBest = new Map<string, string>();
+  // Confusion counts (caveat B) and the second-label distribution that calibrates
+  // MIN_SECONDARY_PURITY — the share of neighbours held by the best NON-own label.
+  const confusion = new Map<string, number>();
+  const secondLabel: number[] = [];
+  const rivalIsMember: number[] = [];
+  let memberAgree = 0;
+  let retrievableAgree = 0;
   for (let i = 0; i < rows.length; i++) {
     const best: { sim: number; topic: string }[] = [];
     for (let j = 0; j < rows.length; j++) {
@@ -271,29 +328,102 @@ async function main() {
     purity.push((tally.get(rows[i].topic) ?? 0) / K);
     let top = '';
     let topN = -1;
-    for (const [t, n] of tally) if (n > topN) { topN = n; top = t; }
+    // Sorted so ties break deterministically rather than on Map insertion order.
+    for (const [t, n] of [...tally].sort(([a], [b]) => a.localeCompare(b))) {
+      if (n > topN) { topN = n; top = t; }
+    }
     knnBest.set(rows[i].id, top);
+
+    const own = rows[i].topic;
+    const mem = allTopics.get(rows[i].id) ?? new Set([own]);
+    const retr = retrievableTopics.get(rows[i].id) ?? new Set([own]);
+    if (mem.has(top)) memberAgree++;
+    if (retr.has(top)) retrievableAgree++;
+    if (top !== own) {
+      const key = `${own} -> ${top}`;
+      confusion.set(key, (confusion.get(key) ?? 0) + 1);
+    }
+    // Best rival label's share, for the MIN_SECONDARY_PURITY sweep below. Whether that
+    // rival is ALREADY a membership is tracked alongside the share, so the sweep can
+    // report it per-bar rather than as one library-wide total.
+    let rival = '';
+    let rivalN = 0;
+    for (const [t, n] of tally) if (t !== own && n > rivalN) { rivalN = n; rival = t; }
+    if (rival) {
+      secondLabel.push(rivalN / K);
+      if (mem.has(rival)) rivalIsMember.push(rivalN / K);
+    }
   }
   const knnAgree = rows.filter((r) => knnBest.get(r.id) === r.topic).length;
   const sortedPurity = purity.slice().sort((a, b) => a - b);
+  const pct = (n: number) => `${n}/${rows.length} (${((100 * n) / rows.length).toFixed(1)}%)`;
   console.log(`INSTRUMENT 3 — k-NN LABEL PURITY (k=${K})`);
-  console.log(
-    `  plurality neighbour label == current topic for ${knnAgree}/${rows.length} ` +
-      `(${((100 * knnAgree) / rows.length).toFixed(1)}%)`,
-  );
+  console.log('  plurality neighbour label matches...');
+  console.log(`    scalar Resource.topic        ${pct(knnAgree)}   (the pre-T4e number)`);
+  console.log(`    ANY membership               ${pct(memberAgree)}   <- the T1 model; headline`);
+  console.log(`    any RETRIEVABLE membership   ${pct(retrievableAgree)}`);
   console.log('                       p05    p10    p25    p50    p75    p90    p95   mean');
   line('own-label purity', sortedPurity);
   console.log();
 
+  // Caveat B's evidence: if these are sibling shelves a previous block split apart, the
+  // "disagreement" is vocabulary granularity, not label noise, and tightening the
+  // guardrail in response would be a mistake.
+  console.log('TOP CONFUSIONS (scalar disagreements — check for deliberately-split siblings)');
+  for (const [pair, n] of [...confusion].sort((a, b) => b[1] - a[1]).slice(0, 12)) {
+    console.log(`  ${String(n).padStart(4)}  ${pair}`);
+  }
+  console.log();
+
+  // MIN_SECONDARY_PURITY calibration (the plan's T4e question). The bar only bites on
+  // rows the CLASSIFIER also proposed a second topic for, so compare the "clears bar"
+  // column against how few are actually memberships today.
+  const sortedSecond = secondLabel.slice().sort((a, b) => a - b);
+  console.log(`SECOND-LABEL PURITY — best non-own neighbour label (n=${sortedSecond.length})`);
+  console.log('                       p05    p10    p25    p50    p75    p90    p95   mean');
+  line('rival-label share', sortedSecond);
+  console.log('   bar    clears      share    already a membership');
+  for (const bar of [0.1, 0.2, 0.3, 0.4, 0.5]) {
+    const n = sortedSecond.filter((x) => x >= bar).length;
+    const held = rivalIsMember.filter((x) => x >= bar).length;
+    console.log(
+      `  ${bar.toFixed(2)}   ${String(n).padStart(6)}    ${((100 * n) / sortedSecond.length).toFixed(1).padStart(5)}%` +
+        `    ${String(held).padStart(6)}` +
+        `${bar === MIN_SECONDARY_PURITY ? '   <- MIN_SECONDARY_PURITY today' : ''}`,
+    );
+  }
+  // The gap between "clears" and "already a membership" is the finding: the BAR is not
+  // what stops secondaries being written, the classifier's one-topic prompt rule is. A
+  // topic only ever reaches this bar if the classifier proposed it in the first place.
+  console.log();
+
   // ---- the motivating case ------------------------------------------------
-  // The Khan Academy "Algebra 1: Functions" leaves, filed under
-  // discrete-mathematics because that was the topic being built. Would the
-  // guardrail have caught them?
+  // The Khan Academy "Algebra 1: Functions" leaves, originally filed under
+  // discrete-mathematics because that was the topic being built.
+  //
+  // ⚠️ T4e: this block is now a REGRESSION CHECK, not a detection test, and the
+  // plan's §6 instruction to "check the Khan leaves have an algebra-ish topic
+  // available" was aimed at the wrong mechanism. `algebra` was never the answer
+  // — the leaves unanimously want `precalculus`, a curated TOPIC_SLUGS entry
+  // that simply had an EMPTY POOL, so k-NN could not vouch for it and pre-T2b
+  // the classifier was never asked. It was a SEEDING problem, and T4b's quorum
+  // refile fixed it (49/49 refiled, relevance p50 0.8). What we watch for here
+  // is the filing coming UNDONE: the leaves should now sit on their own shelf
+  // with a positive margin and a low flag rate. A return to negative margins
+  // means something re-broke the seeding, not that minting needs work.
   const motivating = comparable.filter((s) => s.row.id in motivatingIds);
   if (motivating.length > 0) {
     const xs = motivating.map((s) => s.own).sort((a, b) => a - b);
     const below = (t: number) => xs.filter((x) => x < t).length;
-    console.log(`MOTIVATING CASE — Khan "Functions" leaves filed under discrete-mathematics (n=${xs.length})`);
+    const filed = new Map<string, number>();
+    for (const s of motivating) filed.set(s.row.topic, (filed.get(s.row.topic) ?? 0) + 1);
+    console.log(`MOTIVATING CASE — Khan "Functions" leaves (n=${xs.length})`);
+    console.log(
+      `  filed under: ${[...filed.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([t, n]) => `${t}=${n}`)
+        .join(' ')}`,
+    );
     console.log(
       `  own-centroid sim: p10=${fmt(quantile(xs, 0.1))} p50=${fmt(quantile(xs, 0.5))} ` +
         `p90=${fmt(quantile(xs, 0.9))}`,
