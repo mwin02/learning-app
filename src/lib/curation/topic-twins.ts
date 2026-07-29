@@ -90,13 +90,34 @@ export async function applyTwinMerge(from: string, to: string): Promise<TwinMerg
     select: { resourceId: true, relevance: true, origin: true, contested: true },
   });
   for (const m of primaries) {
-    await setPrimaryTopic(m.resourceId, to, {
-      relevance: m.relevance,
-      origin: m.origin,
-      contested: m.contested,
+    // ⚠️ ONLY WHEN THE SURVIVOR HAS NO EVIDENCE OF ITS OWN. A resource can hold `from` as
+    // its primary AND `to` as a secondary — for these two twins that is one pool split in
+    // half, so either row's numbers describe the same shelf and it does not matter. It
+    // matters the moment this module is reused for a merge where the shelves genuinely
+    // differed: setPrimaryTopic's UPDATE branch writes whatever opts it is given, so
+    // carrying the dead slug's evidence across would overwrite a measured relevance/origin
+    // on the surviving membership with one taken against a different topic. The seam with
+    // no evidence opts sets `isPrimary` and the mirror and nothing else, which is exactly
+    // "promote what is already there". Symmetric with the secondary branch below, which
+    // resolves the same collision by dropping the dead row rather than merging over it.
+    const existing = await prisma.resourceTopic.findUnique({
+      where: { resourceId_topic: { resourceId: m.resourceId, topic: to } },
+      select: { id: true },
     });
-    // setPrimaryTopic upserts `to` and clears other primaries; the dead row still exists.
-    await prisma.resourceTopic.deleteMany({ where: { resourceId: m.resourceId, topic: from } });
+    // One transaction: setPrimaryTopic clears `isPrimary` on the dead row but leaves it
+    // (the retention mechanic), so a crash between the two statements would strand the
+    // resource holding both memberships with neither primary. A re-run repairs that — the
+    // pass is idempotent — but the window is free to close.
+    await prisma.$transaction(async (tx) => {
+      await setPrimaryTopic(
+        m.resourceId,
+        to,
+        existing
+          ? { tx }
+          : { relevance: m.relevance, origin: m.origin, contested: m.contested, tx },
+      );
+      await tx.resourceTopic.deleteMany({ where: { resourceId: m.resourceId, topic: from } });
+    });
   }
 
   // 3. Secondary memberships: move the row's topic, preserving its filing evidence. Safe

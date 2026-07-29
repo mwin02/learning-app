@@ -144,6 +144,38 @@ describeDb('twin merge', () => {
     expect(memberships[0].isPrimary).toBe(true);
   });
 
+  // The mirror image of the collapse above: the dead slug is the PRIMARY and the survivor
+  // is already held as a secondary. Promoting the survivor must not overwrite the evidence
+  // it carries with the dead row's — those numbers were measured against a different
+  // topic, and for a reuse of this module on shelves that genuinely differ that would be a
+  // silent loss.
+  it('promotes an existing secondary without overwriting its own filing evidence', async () => {
+    const id = await makeResource('promote', FROM, [
+      { topic: FROM, isPrimary: true },
+      { topic: TO, isPrimary: false },
+    ]);
+    await prisma.resourceTopic.updateMany({
+      where: { resourceId: id, topic: FROM },
+      data: { relevance: 0.11, origin: 'discovery', contested: true },
+    });
+    await prisma.resourceTopic.updateMany({
+      where: { resourceId: id, topic: TO },
+      data: { relevance: 0.87, origin: 'classifier', contested: false },
+    });
+
+    await applyTwinMerge(FROM, TO);
+
+    const memberships = await prisma.resourceTopic.findMany({
+      where: { resourceId: id },
+      select: { topic: true, isPrimary: true, relevance: true, origin: true, contested: true },
+    });
+    expect(memberships).toEqual([
+      { topic: TO, isPrimary: true, relevance: 0.87, origin: 'classifier', contested: false },
+    ]);
+    const row = await prisma.resource.findUnique({ where: { id }, select: { topic: true } });
+    expect(row?.topic).toBe(TO);
+  });
+
   it('adopts a stranded scalar mirror that has no membership under the dead slug', async () => {
     const id = await makeResource('stranded', FROM, [{ topic: OTHER, isPrimary: true }]);
     // Simulate the pre-T1 shape: mirror says FROM, no membership says so.
