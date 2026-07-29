@@ -200,12 +200,14 @@ export type Verdict = {
   applyTo?: string;
   // Destination topic. Required for `refile` / `add`, meaningless for `confirm` / `skip`.
   topic?: string;
-  // Refile only. Default false: the vacated topic is RETAINED as an uncontested secondary
-  // (T4b's rule — the shelf is still a place, and retention is what kept
-  // probability-and-statistics' retrievable pool whole through its split). True deletes it
-  // instead, which is T4c's rule for a topic that never was a place. Retention with the
-  // contested flag left ON is the one option that is always wrong: it would be invisible
-  // to retrieval AND permanently queued, re-litigating a decided row.
+  // Refile only. True deletes the vacated membership; false retains it as an UNCONTESTED
+  // secondary. Retention with the contested flag left ON is the one option that is always
+  // wrong: it would be invisible to retrieval AND permanently queued, re-litigating a
+  // decided row.
+  //
+  // ⚠️ THE DEFAULT DEPENDS ON WHAT IS BEING VACATED — see `defaultDropVacated`. Omitting
+  // this field is the common case, so the default has to be the safe reading for both
+  // kinds of queue row, and they are opposites.
   dropVacated?: boolean;
   note?: string;
 };
@@ -233,6 +235,27 @@ export type DrainPlan = {
   unresolved: DrainRow[];
   errors: string[];
 };
+
+// ⚠️ RETAINING A VACATED SECONDARY WOULD INVERT THE REVIEWER'S VERDICT, which is why this
+// is not a plain `?? false`.
+//
+// For a contested PRIMARY, retention is right and is T4b's rule: the row was retrievable
+// under the vacated topic before the verdict, that shelf is still a place (it may hold live
+// Paths — retention is what kept probability-and-statistics' pool whole through its split),
+// and clearing the doubt is all the verdict asked for.
+//
+// For a contested SECONDARY the same write means the opposite. T1's retrieval predicate
+// EXCLUDES contested secondaries, so that membership was invisible; settling it uncontested
+// does not preserve reach, it GRANTS reach — to the very topic the reviewer just judged
+// wrong. "This row is really linear-algebra" would publish it to `calculus` on the way out.
+// So a secondary's vacated membership is dropped by default (T4c's rule for a topic that
+// never was a place), and an operator who does want to keep it must say so explicitly.
+//
+// Promotion of a contested secondary (`refile` onto the topic it already holds) vacates
+// nothing and never reaches this — the caller skips the vacated branch when held == target.
+export function defaultDropVacated(row: Pick<DrainRow, 'isPrimary'>): boolean {
+  return !row.isPrimary;
+}
 
 function isInSubtree(
   resourceId: string,
@@ -348,7 +371,7 @@ export function planVerdicts(
         verdict: v.verdict,
         heldTopic: row.topic,
         targetTopic: v.topic ?? null,
-        dropVacated: v.dropVacated ?? false,
+        dropVacated: v.dropVacated ?? defaultDropVacated(row),
         viaContainer: hasContainer ? v.containerId! : null,
         ...(v.note ? { note: v.note } : {}),
       };
