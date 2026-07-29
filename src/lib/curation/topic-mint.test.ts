@@ -42,6 +42,20 @@ describe('createTopicMinter', () => {
     expect(await mint('algebra')).toBeNull();
   });
 
+  // A throw is not a verdict about the label. Caching it would let one rate-limit blip on
+  // the first row suppress minting for every later row of the batch proposing the same
+  // subject — a transport hiccup promoted to "this subject does not exist".
+  it('does NOT cache a throw, so a later row can still mint the same subject', async () => {
+    const gate = vi
+      .fn<(t: string) => Promise<{ valid: boolean; canonical?: string }>>()
+      .mockRejectedValueOnce(new Error('429 rate limited'))
+      .mockResolvedValue({ valid: true, canonical: 'algebra' });
+    const mint = createTopicMinter(gate);
+    expect(await mint('algebra')).toBeNull();
+    expect(await mint('algebra')).toBe('algebra');
+    expect(gate).toHaveBeenCalledTimes(2);
+  });
+
   it('ignores an empty proposal without calling the gate', async () => {
     const gate = vi.fn(async () => ({ valid: true, canonical: 'algebra' }));
     const mint = createTopicMinter(gate);
