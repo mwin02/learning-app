@@ -36,6 +36,15 @@
 // Conflict policy is LOCAL WINS (plan-locked). With ids preserved that falls out
 // of upsert-by-id; the preflight is what keeps it honest.
 //
+// ⚠️ THIS IS A ONE-SHOT, NOT A SYNC. Local-wins was correct against an empty
+// target. Once the Cloud Run workers and beta users write to Supabase —
+// `trustScore` moving on votes, `status` flipping on eviction, `ResourceTopic`
+// refiles — re-running this would overwrite live rows with stale local values.
+// After the C2 warm campaign, Supabase is the library of record and the local DB
+// is a disposable dev/test fixture; the direction that stays useful is the
+// REVERSE (prod → local, to reproduce a bug against real data), which this
+// script does not implement. If you need to re-run it, be sure you know why.
+//
 // Use the Supabase DIRECT connection (port 5432), not the transaction pooler
 // (6543): the pooler rewrites session state under long-running clients, and the
 // preflight/verification queries here assume a stable session.
