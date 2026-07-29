@@ -210,10 +210,24 @@ export function decideFiling(input: FilingInput): FilingDecision {
       topic,
       relevance: purity(neighbourTopics, topic),
       origin: 'classifier' as const,
-      contested: false,
+      // ⚠️ SECONDARIES ARE HELD TO MIN_VOUCHABLE_POOL TOO — the same bar the primary
+      // clears above. A thin shelf can still supply 2 of 10 neighbours, so purity alone
+      // would let a topic k-NN cannot adjudicate acquire an UNCONTESTED membership, which
+      // T1's retrieval predicate admits. That is the one route by which an unvouched topic
+      // gains retrievable reach with no flag on it, and it read as an asymmetry with how
+      // the identical topic is treated as a primary (`unvouchable-pool` → contested).
+      //
+      // Contested is the honest verdict rather than a drop: the proposal is recorded for
+      // the review drain, which is the mechanism that promotes it. It costs the topic
+      // nothing either — `topicPools` counts the scalar mirror (T4e), so a secondary of
+      // any flavour never grows a pool, and dropping it would only lose the receipt.
+      contested: (pools.get(topic) ?? 0) < MIN_VOUCHABLE_POOL,
     }))
     .filter((m) => m.relevance >= MIN_SECONDARY_PURITY)
-    .sort((a, b) => b.relevance - a.relevance)
+    // Vouched first, then by measured purity. Ordering matters because of the cap below:
+    // a hypothesis nothing can vouch for must never displace a membership that would be
+    // retrievable.
+    .sort((a, b) => Number(a.contested) - Number(b.contested) || b.relevance - a.relevance)
     .slice(0, MAX_MEMBERSHIPS - 1);
 
   return {
@@ -242,7 +256,7 @@ export function decideFiling(input: FilingInput): FilingDecision {
 // discover this row could not retrieve its own find, since a minted topic is by
 // definition not reachable through `relatedTopics` widening either.
 export function decideMintedFiling(input: FilingInput, minted: string): FilingDecision {
-  const { requestTopic, neighbourTopics } = input;
+  const { requestTopic, neighbourTopics, pools } = input;
   const requestPurity = purity(neighbourTopics, requestTopic);
   return {
     primary: {
@@ -253,7 +267,17 @@ export function decideMintedFiling(input: FilingInput, minted: string): FilingDe
     },
     secondaries:
       minted !== requestTopic && requestPurity >= MIN_SECONDARY_PURITY
-        ? [{ topic: requestTopic, relevance: requestPurity, origin: 'classifier', contested: false }]
+        ? [
+            {
+              topic: requestTopic,
+              relevance: requestPurity,
+              origin: 'classifier',
+              // Same bar as `decideFiling`'s secondaries: a request topic whose own shelf
+              // is too thin for k-NN to adjudicate is a hypothesis, not a verdict, even
+              // though the neighbourhood happens to support it here.
+              contested: (pools.get(requestTopic) ?? 0) < MIN_VOUCHABLE_POOL,
+            },
+          ]
         : [],
     reason: 'minted',
   };
