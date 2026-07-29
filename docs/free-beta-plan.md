@@ -233,8 +233,10 @@ the base image); Apple-Silicon cross-build noted in worker-deploy.md applies her
 
 ### D2 — Supabase schema deploy + library migration (~150 LOC script + ops)
 
-> **As-built corrections (measured 2026-07-29, script block merged; the copy
-> itself is still pending).** Three of the premises below changed:
+> **As-built corrections (measured 2026-07-29; script merged as #283 and the
+> copy since executed — Supabase holds 26 `Source` / 36 `TopicAlias` / 2,008
+> `Resource` / 2,405 `ResourceTopic`, all embedded, 23 `TopicCentroid`).** Three
+> of the premises below changed:
 >
 > 1. **Step 1 is already done.** Supabase is at **36/36 migrations** (through
 >    topic-filing T2a, including A1's `resource_rating`), both hand-written
@@ -298,12 +300,46 @@ local library is the curated, backfilled, reviewed one).
 
 ### D3 — Cloud Run app service live (ops; runbook into `docs/app-deploy.md`)
 
-> **Split (2026-07-29): the custom domain is not yet acquired.** D3 lands the
-> service on its `*.run.app` URL; domain mapping + the Supabase OAuth cutover
-> become a follow-up, written up but unexecuted in `docs/app-deploy.md` §6.
-> Two D1 findings bind this block: the image takes `NEXT_PUBLIC_*` as **build
-> args** (it is bound to one Supabase project — rotating the anon key is a
-> rebuild), and `GET /api/health?probe=db` exists for the startup probe.
+> **DONE 2026-07-29, except the deferred domain half.** The service is live at
+> `https://learning-app-74223797331.us-west1.run.app` and verified: SSR, DB
+> probe, Google sign-in round-trip, program creation 202 (which proves ADC →
+> Vertex in-cloud), admin gate 404, structured logs in Cloud Logging.
+> `docs/app-deploy.md` is stamped; §6 (domain mapping, OAuth cutover, Vercel
+> decommission) stays unexecuted because the domain is not acquired.
+>
+> **Decisions settled here, which D4 and B1 inherit:**
+> - **Region is `us-west1`, not `us-central1`.** Both runbooks derived `REGION`
+>   from `GOOGLE_VERTEX_LOCATION`; those are unrelated. Service region tracks
+>   the DB (Supabase is `aws-1-us-west-1`); Vertex location stays `us-central1`.
+>   **D4's worker pool belongs in `us-west1` too** — it is more DB-chatty than
+>   the app. The Artifact Registry repo is already there.
+> - **Migrations moved into `cloudbuild.yaml`**, replacing `vercel.json`'s
+>   `buildCommand`, using the Dockerfile's `deps` stage as the Prisma CLI. It
+>   needs the **session-mode pooler** (`:5432` on the pooler host): the `:6543`
+>   transaction pooler breaks migrate's advisory lock, and Supabase's `direct`
+>   endpoint is IPv6-only, so it is unreachable from Cloud Build.
+> - **Separate SAs, shared `supabase-database-url` secret** (same Postgres role
+>   either way, so separate secrets buy no isolation). `worker-deploy.md` §4–5
+>   updated to match.
+> - Scaling **min 1 / max 4** (40 pooler connections; add D4's before raising).
+>
+> **Two code bugs D1 could not have caught**, both fixed in this block:
+> `src/lib/api/public-origin.ts` (the `/auth/*` routes built redirects from
+> `req.url`, which on Cloud Run is the container's bind address — sign-in went
+> to `https://0.0.0.0:8080`; Vercel masked it), and the Dockerfile `COPY`ing the
+> generated, gitignored `next-env.d.ts`, so the image could not build from a
+> clean checkout. A `.gcloudignore` now stops `gcloud` inheriting `.gitignore`
+> for the upload context.
+>
+> **Ops facts worth carrying:** Supabase matches the **full** redirect URL
+> including query string, so the allowlist needs `https://<host>/**`, and a miss
+> silently falls back to Site URL (still `http://localhost:3000`). Cloud Build
+> runs as the **compute default SA**, not the legacy cloudbuild one, and its
+> `roles/editor` does not include Secret Manager. `--allow-unauthenticated`
+> warns rather than fails when the build SA can't set IAM policy.
+>
+> **B1 confirmation:** `jsonPayload` lines arrive in Cloud Logging with `event`
+> and `traceId` but **empty `severity`** — exactly the gap B1 exists to close.
 
 - Cloud Build → Artifact Registry (reuse the `$REPO` from worker-deploy.md), Cloud Run
   **service** (not worker pool) with Secret Manager-mounted env (Supabase URL + anon/service

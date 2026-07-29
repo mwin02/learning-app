@@ -6,10 +6,12 @@ to it. Companion to [`worker-deploy.md`](worker-deploy.md), which covers the
 worker-pool half of the same migration; the two share a GCP project, an
 Artifact Registry repo, and the Supabase database.
 
-> **Status: D1 complete, D3 not yet executed.** The image builds and runs
-> locally (verification below). Everything from §3 on is the D3 runbook and is
-> written but **unexecuted** — treat the commands as reviewed-not-verified until
-> D3 stamps them, the way worker-deploy.md is stamped "verified 2026-07-13".
+> **Status: §0–§5 and §7 verified against GCP 2026-07-29** (free-beta D3). The
+> service is live on its `*.run.app` URL and every command below was run as
+> written. **§6 (custom domain + OAuth cutover + Vercel decommission) is still
+> unexecuted** — the domain is not acquired yet, so D3 was deliberately split.
+> Vercel is still running and still owns nothing; see §4a for what replaced its
+> `buildCommand`.
 
 ## 0. What the image is
 
@@ -52,7 +54,12 @@ restarting the service.
 | `APP_ORIGIN` | runtime | optional; set once the custom domain is live if the proxy's forwarded host differs |
 | `GOOGLE_APPLICATION_CREDENTIALS_JSON` | — | **leave unset in cloud.** Its absence selects the ADC path (`src/lib/ai/vertex.ts`), authenticating as the runtime service account |
 | `DIRECT_URL` | — | not needed: Prisma-CLI-only (migrations); the build's `prisma generate` uses `prisma.config.ts`'s placeholder fallback |
-| `DEV_AUTH` / `TRACE_RESPONSE` | — | **never set in cloud.** `DEV_AUTH` is inert anyway (Next's standalone server hardcodes `NODE_ENV=production`); `TRACE_RESPONSE` leaks pipeline internals |
+| `DEV_AUTH` | — | **never set in cloud.** Inert anyway: Next's standalone server hardcodes `NODE_ENV=production` |
+
+`TRACE_RESPONSE` used to have a row here. It is **dead** — removed along with
+the synchronous path-generation route in the playground revamp (`d1d4715`), and
+no code has read it since. The D3 env-drift audit deleted it from
+`.env.example`; don't reintroduce the name.
 
 The builder stage sets placeholder `DATABASE_URL` / `GOOGLE_VERTEX_PROJECT` /
 `GOOGLE_VERTEX_LOCATION` values because `src/lib/db.ts` and `src/lib/ai/vertex.ts`
@@ -101,57 +108,174 @@ if the worker is already deployed, the APIs and repo exist and you can skip
 straight to §3.
 
 ```bash
-export PROJECT_ID=$(grep -oE '^GOOGLE_VERTEX_PROJECT=.*' .env.local | cut -d= -f2)
-export REGION=$(grep -oE '^GOOGLE_VERTEX_LOCATION=.*' .env.local | cut -d= -f2)  # us-central1
+export PROJECT_ID=learning-app-prod-mzw
+export REGION=us-west1            # the SERVICE's region — see below
+export VERTEX_LOCATION=us-central1
 export REPO=learning-app
 export IMAGE=$REGION-docker.pkg.dev/$PROJECT_ID/$REPO/learning-app
 export SA=learning-app@$PROJECT_ID.iam.gserviceaccount.com
 ```
 
-## 3. Build & push (D3 — TODO)
+> ⚠️ **`REGION` is not `GOOGLE_VERTEX_LOCATION`.** Both runbooks used to derive
+> one from the other (`REGION=$(grep GOOGLE_VERTEX_LOCATION …)`). They are
+> unrelated. The service region tracks the **database** — Supabase is in
+> `aws-1-us-west-1`, and every SSR render makes several Prisma round trips, so
+> a `us-central1` service pays a cross-country hop on each one. Vercel's `sfo1`
+> was co-located for exactly this reason. `GOOGLE_VERTEX_LOCATION` stays
+> `us-central1` because that is where the models are served. **D4's worker pool
+> should land in `us-west1` too** — it is far more DB-chatty than the app.
 
-Cloud Build, for the same reason as the worker (server-side amd64; a plain
-`docker build` on Apple Silicon produces an arm64 image Cloud Run can't run).
-Unlike the worker, **the app's Dockerfile is the default `Dockerfile`**, so no
-`-f` config is needed — but the two `NEXT_PUBLIC_*` build args are, which means
-a `--config` build with substitutions rather than a bare `--tag` submit.
+APIs and the Artifact Registry repo are `worker-deploy.md` §1–2, run here for
+the first time on 2026-07-29 (the project was greenfield: only `aiplatform`,
+`logging` and `monitoring` were on). D4 inherits both — the repo is
+`us-west1-docker.pkg.dev/learning-app-prod-mzw/learning-app`.
 
-- [ ] Write the `cloudbuild` inline config with `--build-arg` for both `NEXT_PUBLIC_*`
-- [ ] Tag with the git SHA (not `latest`) so rollback is a re-deploy of a known tag
-- [ ] Confirm `.dockerignore` still excludes `.env*` (the context uploads to GCS)
+## 3. Build, migrate & deploy — one pipeline
 
-## 4. Service account & secrets (D3 — TODO)
+`cloudbuild.yaml` at the repo root does all of it: build the `deps` stage as a
+throwaway migrator image, build the app image, push, `prisma migrate deploy`,
+then `gcloud run deploy`. Read its header comments before changing it.
 
-A **separate** SA from `course-worker` — same Vertex role, but the app also
-needs its own `DATABASE_URL` secret binding. Least privilege means not sharing
-the worker's identity.
+```bash
+set -a; . ./.env.local; set +a
+gcloud builds submit --project $PROJECT_ID --config cloudbuild.yaml \
+  --substitutions=_TAG=$(git rev-parse --short HEAD),\
+_SUPABASE_URL="$NEXT_PUBLIC_SUPABASE_URL",_SUPABASE_ANON_KEY="$NEXT_PUBLIC_SUPABASE_ANON_KEY" .
+```
 
-- [ ] `gcloud iam service-accounts create learning-app`
-- [ ] `roles/aiplatform.user` on the project (ADC → Vertex)
-- [ ] `roles/secretmanager.secretAccessor` **on each secret**, not the project
-- [ ] Reuse the existing `course-worker-database-url` secret, or mint an
-      app-scoped one — decide at deploy; sharing is simpler, separate rotation
-      is safer
-- [ ] `YOUTUBE_API_KEY` as a second secret
+~4m30s end to end. Cloud Build rather than a local `docker build` for the same
+reason as the worker: Apple Silicon produces an arm64 image Cloud Run can't
+run. Substitutions rather than a bare `--tag` because the two `NEXT_PUBLIC_*`
+values are **build args** (§0).
 
-## 5. Create the service (D3 — TODO)
+Two traps this ran into, both now fixed in the repo but worth knowing:
+
+- **`gcloud builds submit` falls back to `.gitignore`** when no `.gcloudignore`
+  exists. Generated-but-required files are gitignored by definition, so the
+  upload silently differs from your disk — `next-env.d.ts` was `COPY`d by the
+  Dockerfile and absent from the context, and the build failed at step 9. The
+  repo now has a `.gcloudignore` (keep `.env*` in it — the context is uploaded
+  to a GCS bucket) and the Dockerfile no longer copies that generated file.
+- The **`--allow-unauthenticated` IAM binding fails with a warning, not an
+  error**, because the build service account can't set IAM policy. The deploy
+  "succeeds" and the service 403s every request. On a first deploy in a fresh
+  project, run this once as an owner:
+
+  ```bash
+  gcloud run services add-iam-policy-binding learning-app \
+    --region=$REGION --member=allUsers --role=roles/run.invoker --project $PROJECT_ID
+  ```
+
+### 3a. Migrations — who owns them now
+
+`vercel.json`'s `buildCommand` (`prisma migrate deploy && next build`) was the
+**only** thing applying migrations to Supabase. The `migrate` step in
+`cloudbuild.yaml` inherits that job; decommissioning Vercel (§6) without it
+would leave the schema silently drifting from `main`.
+
+It runs the Dockerfile's own `deps` stage, which is already a complete Prisma
+CLI environment (`node_modules`, `prisma/`, `prisma.config.ts`), so there is no
+second image to maintain and step 1's layers are reused from the same daemon's
+cache. It sits **after** the build (never migrate for a revision that can't
+compile) and **before** the deploy (never serve a revision the schema lags).
+
+> **Which connection string.** `prisma.config.ts` reads `DIRECT_URL`, and it
+> gets the **session-mode pooler** — `aws-1-us-west-1.pooler.supabase.com:5432`
+> — stored as the `supabase-session-url` secret. Not the `6543` transaction
+> pooler, which multiplexes at statement level and breaks the advisory lock
+> migrate takes. And **not** `db.<ref>.supabase.co:5432`, the "direct"
+> connection: it is **IPv6-only** on current Supabase projects, so it works from
+> a laptop with IPv6 and fails from IPv4-only Cloud Build workers with a
+> baffling `P1001: Can't reach database server`. Session mode is a real session
+> over IPv4, which is exactly what migrate needs.
+
+## 4. Service account & secrets (as built)
+
+A **separate** SA from `course-worker`, but a **shared** DB secret: two secrets
+holding the same pooler URL would give zero isolation (it is one Postgres role
+either way) and two places to forget at rotation.
+
+```bash
+gcloud iam service-accounts create learning-app \
+  --display-name="learning-app (Cloud Run service)" --project $PROJECT_ID
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member serviceAccount:$SA --role roles/aiplatform.user --condition=None
+```
+
+| Secret | Value | Who reads it |
+| --- | --- | --- |
+| `supabase-database-url` | Supabase **transaction** pooler, `:6543` | the app's runtime SA — and D4's `course-worker` SA |
+| `supabase-session-url` | Supabase **session** pooler, `:5432` | Cloud Build only, for `migrate deploy` (§3a) |
+| `youtube-api-key` | plain API key | the app's runtime SA |
+
+Bindings go **on each secret**, never the project:
+
+```bash
+gcloud secrets add-iam-policy-binding <secret> --member serviceAccount:$SA \
+  --role roles/secretmanager.secretAccessor --project $PROJECT_ID --condition=None
+```
+
+Two identity gotchas, both cost a build here:
+
+- **Cloud Build runs as the compute default SA** (`<PROJECT_NUMBER>-compute@developer.gserviceaccount.com`),
+  *not* the legacy `<PROJECT_NUMBER>@cloudbuild.gserviceaccount.com` that the
+  project IAM policy still lists with `cloudbuild.builds.builder`. Grant the
+  compute SA. Confirm with `gcloud builds list --format='table(id,serviceAccount)'`.
+  It carries `roles/editor`, which does **not** include Secret Manager access —
+  basic roles deliberately exclude it — so the `secretAccessor` binding is
+  required even though editor looks like it should cover everything. Narrowing
+  builds to a dedicated least-privilege SA is worthwhile follow-up work.
+- **Write secret values from a validated variable, never a hand-rolled `sed`.**
+  BSD `sed` (macOS) doesn't support `\s`, so `sed -E 's/^#\s*NAME=//'` silently
+  no-ops and you store the comment line instead of the URL. This produced a
+  `supabase-database-url` whose value began `# SUPABASE_POOLER_URL="postgresql://…`
+  and would have failed at runtime with `P1013: scheme is not recognized`.
+  Check the scheme and port before writing:
+
+  ```bash
+  case "$VALUE" in postgresql://*:6543/*) ;; *) echo ABORT; exit 1;; esac
+  ```
+
+## 5. The service (as built)
+
+Created by `cloudbuild.yaml`'s deploy step; the flags live there, repeated on
+every build so the revision's shape is declared in the repo rather than
+accumulated in console state.
 
 ```
-gcloud run deploy learning-app \
-  --image $IMAGE:<tag> --region $REGION --service-account $SA \
-  --allow-unauthenticated --port 8080 --cpu 1 --memory 512Mi \
-  --min-instances 1 --max-instances <N> \
-  --set-env-vars GOOGLE_VERTEX_PROJECT=$PROJECT_ID,GOOGLE_VERTEX_LOCATION=$REGION \
-  --set-secrets DATABASE_URL=…:latest,YOUTUBE_API_KEY=…:latest
+learning-app  ·  us-west1  ·  1 vCPU / 512Mi  ·  min 1 / max 4
+  SA        learning-app@learning-app-prod-mzw.iam.gserviceaccount.com
+  env       GOOGLE_VERTEX_PROJECT, GOOGLE_VERTEX_LOCATION=us-central1
+  secrets   DATABASE_URL=supabase-database-url:latest
+            YOUTUBE_API_KEY=youtube-api-key:latest
+  probe     startup httpGet /api/health?probe=db, period 5s, failureThreshold 6
+  URL       https://learning-app-74223797331.us-west1.run.app
 ```
 
 - **`--min-instances 1`** (locked): a cold start in front of a beta user's
   first impression isn't worth the saving, and GCP credits absorb it.
-- **Startup probe** on `/api/health?probe=db` — a booted server that can't
-  reach Postgres should not take traffic.
-- **DB connections:** the app's pool shares the Supabase transaction pooler
-  with the worker pool. `worker-deploy.md` §7 has the arithmetic; add the app's
-  `max-instances × pool size` to it before raising either.
+- **`--max-instances 4`**: 4 × the adapter-pg pool (10) = 40 client connections
+  into the Supabase pooler, which D4's worker pool shares. `worker-deploy.md`
+  §7 has the arithmetic; add both sides before raising either.
+- The **startup probe accepts a query string** in `httpGet.path` — a booted
+  server that can't reach Postgres never takes traffic.
+
+### 5a. Verification (2026-07-29, revision `learning-app-00002-hjp`)
+
+| Check | Result |
+| --- | --- |
+| `GET /` | 200, SSR, TTFB ~230ms |
+| `GET /file.svg` | 200 — `public/` is served by the container (no CDN in front) |
+| `GET /programs` anonymous | 307 → `/signin?next=%2Fprograms` |
+| `GET /api/health?probe=db` | `{"ok":true,"db":"up"}` |
+| `GET /api/health?probe=ai` as non-admin | plain liveness — admin gate holds |
+| Google sign-in round-trip | lands signed in; `syncUser` wrote the first `User` row |
+| `POST /api/generate-program` | **202**, `topicCount: 2` — decomposition ran, so **ADC → Vertex works in-cloud** |
+| `/playground` → `/playground/dashboard` as signed-in non-admin | **404** (not 401/403 — non-enumerable, as designed) |
+| Cloud Logging | structured lines arrive as `jsonPayload` with `event` + `traceId` |
+
+`severity` is **empty** on those `jsonPayload` lines — Block B1's severity
+mapping is what fills it, and this confirms B1 is still needed.
 
 ## 6. Domain mapping & OAuth cutover (D3 — DEFERRED)
 
@@ -163,10 +287,11 @@ Sequence matters — Vercel must keep working until the new domain verifies:
 
 - [ ] `gcloud beta run domain-mappings create --service learning-app --domain <domain>`
 - [ ] Add the returned records at the registrar; wait for the cert to issue
-- [ ] **Additively** add `https://<domain>/auth/callback` to Supabase →
-      Authentication → URL Configuration → Redirect URLs, and the domain to the
-      Google OAuth client's authorized origins/redirects. Do **not** remove the
-      Vercel entries yet
+- [ ] **Additively** add `https://<domain>/**` to Supabase → Authentication →
+      URL Configuration → Redirect URLs, and the domain to the Google OAuth
+      client's authorized origins/redirects. Do **not** remove the Vercel
+      entries yet. **Use the `/**` wildcard, not a bare `/auth/callback`** —
+      see the box below
 - [ ] Flip Supabase's **Site URL** to the new domain
 - [ ] Smoke on the new domain: Google sign-in round-trip, program creation
       returns 202, `/playground/*` 404s for a non-admin
@@ -177,16 +302,42 @@ Sequence matters — Vercel must keep working until the new domain verifies:
 - [ ] No 301 grace period from the Vercel URL — there are no users or inbound
       links to preserve (Supabase `User` count was 0 at cutover planning)
 
-## 7. Operations (D3 — TODO)
+> **Supabase matches the FULL redirect URL, query string included.** `/auth/login`
+> builds `redirectTo` as `<origin>/auth/callback?next=%2F`, and a registered
+> entry of `https://<host>/auth/callback` does **not** match it. Supabase does
+> not error on a miss — it silently substitutes the project's **Site URL**, so
+> the symptom is a successful Google sign-in that lands somewhere unrelated with
+> a `?code=` on it. Measured on the `*.run.app` cutover: the exact-path entry
+> failed, `https://<host>/**` worked.
+>
+> This is sharper than it looks because the **Site URL is currently
+> `http://localhost:3000`**, so every allowlist miss strands the user on a dead
+> address. Flipping it (a step above) is what makes a miss merely wrong rather
+> than invisible. A durable alternative, if this bites again: move `next` out of
+> the redirect URL into a short-lived cookie set by `/auth/login`, so
+> `redirectTo` is a bare `…/auth/callback` that matches an exact entry.
+
+> **The app must know its own public origin.** `src/lib/api/public-origin.ts`
+> resolves it as `APP_ORIGIN` → `x-forwarded-host`/`-proto` → `Host` →
+> `req.url`. Before D3 the three `/auth/*` routes built redirects from
+> `new URL(req.url).origin`, which on Cloud Run is the container's bind address
+> — sign-in bounced to `https://0.0.0.0:8080/auth/callback`. Vercel hid this by
+> rewriting `req.url` to the public URL. Cloud Run sends `x-forwarded-host`, so
+> **no `APP_ORIGIN` is needed** on either the `*.run.app` URL or a custom domain;
+> set it only if a future proxy forwards something other than the public host.
+
+## 7. Operations
 
 | Task | Command |
 | --- | --- |
-| Deploy a new image | `gcloud run deploy learning-app --image $IMAGE:<new-tag> --region $REGION` |
-| Roll back | same, previous known-good tag |
+| Ship a change (normal path) | the §3 `gcloud builds submit` — build + migrate + deploy |
+| Redeploy an existing image | `gcloud run deploy learning-app --image $IMAGE:<tag> --region $REGION` |
+| Roll back | same, previous known-good tag. **Check whether the bad revision migrated**: `migrate deploy` is forward-only, so rolling the image back does not roll the schema back |
 | Scale to zero (pause) | `gcloud run services update learning-app --min-instances 0 --region $REGION` |
 | Tail logs | `gcloud run services logs tail learning-app --region $REGION` |
-| Rotate a secret | `gcloud secrets versions add … --data-file=-`, then redeploy to restart |
+| Rotate a runtime secret | `gcloud secrets versions add … --data-file=-`, then redeploy to restart (mounts read `latest` at boot) |
 | Rotate the Supabase **anon key** | **rebuild the image** (§3) — it is inlined at build time |
+| List revisions | `gcloud run revisions list --service learning-app --region $REGION` |
 
 Structured logs (`src/lib/log.ts`) land in Cloud Logging as `jsonPayload`, same
 as the worker; `worker-deploy.md` §10 has the filter patterns. Block B1 adds
