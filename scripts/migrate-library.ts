@@ -37,8 +37,18 @@
 // of upsert-by-id; the preflight is what keeps it honest.
 //
 // Use the Supabase DIRECT connection (port 5432), not the transaction pooler
-// (6543): pgbouncer in transaction mode breaks the batched multi-statement
-// transactions below.
+// (6543): the pooler rewrites session state under long-running clients, and the
+// preflight/verification queries here assume a stable session.
+//
+// Writes run CONCURRENTLY AND UNTRANSACTED, which looks reckless and isn't. The
+// first attempt batched 100 upserts per `$transaction`; that dies against a real
+// network — Supabase is ~186 ms away, so a 100-statement batch spends ~5.5 s in
+// flight and trips Prisma's 5 s transaction ceiling (P2028), a limit the array
+// form gives no way to raise. Atomicity buys nothing here anyway: every write is
+// an idempotent upsert on the primary key, so a half-finished run is repaired by
+// re-running, and the per-topic/tree checks at the end are what actually prove
+// the copy landed. Concurrency is capped at the node-postgres pool's default
+// (10) — raising it past that just queues on the pool.
 
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
@@ -60,19 +70,27 @@ function describe(raw: string): string {
   return `${u.hostname}:${u.port || '5432'}${u.pathname}`;
 }
 
-// Chunked so a batch is one round trip to us-west-1 rather than 2,000 of them.
-const BATCH = 100;
+const CONCURRENCY = 10;
 
-async function inBatches<T>(rows: T[], label: string, op: (row: T) => unknown): Promise<void> {
-  for (let i = 0; i < rows.length; i += BATCH) {
-    const chunk = rows.slice(i, i + BATCH);
-    await target.$transaction(chunk.map((r) => op(r) as never));
-    // Carriage-return progress only on a terminal; piped to a log it would be
-    // one unreadable line. Redirected runs get the single summary below.
-    if (process.stdout.isTTY) {
-      process.stdout.write(`\r  ${label}: ${Math.min(i + BATCH, rows.length)}/${rows.length}`);
+/** Runs `op` over every row, CONCURRENCY in flight, resolving in order-agnostic
+ *  fashion. Rejects on the first failure — a partial copy is safe to resume by
+ *  re-running, so failing fast beats limping on and reporting success. */
+async function inParallel<T>(rows: T[], label: string, op: (row: T) => unknown): Promise<void> {
+  let next = 0;
+  let done = 0;
+  const worker = async () => {
+    while (next < rows.length) {
+      const row = rows[next++];
+      await op(row);
+      done++;
+      // Carriage-return progress only on a terminal; piped to a log it would be
+      // one unreadable line. Redirected runs get the single summary below.
+      if (process.stdout.isTTY && done % 50 === 0) {
+        process.stdout.write(`\r  ${label}: ${done}/${rows.length}`);
+      }
     }
-  }
+  };
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, rows.length) }, worker));
   if (process.stdout.isTTY && rows.length) process.stdout.write('\r');
   console.log(`  ${label}: ${rows.length} row(s)`);
 }
@@ -91,13 +109,12 @@ if (rawTarget === process.env.DATABASE_URL) {
   process.exit(1);
 }
 // Not fatal — a non-Supabase target legitimately has other ports — but the
-// pooler is the one wrong answer that fails deep into a batch rather than at
-// connect time (pgbouncer in transaction mode cannot hold the batched
-// transactions below), so it is worth naming before the copy starts.
+// pooler misbehaves partway through rather than at connect time, so it is worth
+// naming before the copy starts.
 if (new URL(rawTarget).port === '6543') {
   console.warn(
-    '⚠ target port 6543 is the Supabase TRANSACTION POOLER. Batched transactions\n' +
-      '  will fail against it — use the DIRECT connection (5432) for this copy.\n',
+    '⚠ target port 6543 is the Supabase TRANSACTION POOLER — use the DIRECT\n' +
+      '  connection (5432) for this copy.\n',
   );
 }
 const target = makeTargetClient(rawTarget);
@@ -167,12 +184,12 @@ async function counts(client: PrismaClient) {
 
 async function copy(): Promise<void> {
   const sources = await source.source.findMany();
-  await inBatches(sources, 'Source', (row) =>
+  await inParallel(sources, 'Source', (row) =>
     target.source.upsert({ where: { id: row.id }, create: row, update: row }),
   );
 
   const aliases = await source.topicAlias.findMany();
-  await inBatches(aliases, 'TopicAlias', (row) =>
+  await inParallel(aliases, 'TopicAlias', (row) =>
     target.topicAlias.upsert({ where: { id: row.id }, create: row, update: row }),
   );
 
@@ -188,7 +205,7 @@ async function copy(): Promise<void> {
   // alone, so re-running this script does not invalidate work the backfill has
   // already done on the target.
   const resources = await source.resource.findMany();
-  await inBatches(resources, 'Resource (pass 1: rows)', (row) => {
+  await inParallel(resources, 'Resource (pass 1: rows)', (row) => {
     // `undefined` is Prisma's "leave this column alone" on UPDATE — the tree is
     // pass 2's job, and `embeddedAt` belongs to whatever re-embedding has
     // already happened on the target. On CREATE they start explicitly null.
@@ -205,7 +222,7 @@ async function copy(): Promise<void> {
   });
 
   const children = resources.filter((r) => r.parentResourceId !== null);
-  await inBatches(children, 'Resource (pass 2: tree)', (row) =>
+  await inParallel(children, 'Resource (pass 2: tree)', (row) =>
     target.resource.update({
       where: { id: row.id },
       data: { parentResourceId: row.parentResourceId, orderInParent: row.orderInParent },
@@ -213,7 +230,7 @@ async function copy(): Promise<void> {
   );
 
   const memberships = await source.resourceTopic.findMany();
-  await inBatches(memberships, 'ResourceTopic', (row) =>
+  await inParallel(memberships, 'ResourceTopic', (row) =>
     target.resourceTopic.upsert({ where: { id: row.id }, create: row, update: row }),
   );
 }
