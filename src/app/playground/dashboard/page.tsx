@@ -84,6 +84,12 @@ export default async function DashboardPage() {
     remQueued,
     remRunning,
     remSucceeded24h,
+    contestedByKind,
+    contestedByTopic,
+    contestedResources,
+    oldestContested,
+    refiledByReview7d,
+    contestedGroups,
     resourcesByStatus,
     deprecated7d,
     votesTotal,
@@ -128,6 +134,40 @@ export default async function DashboardPage() {
     prisma.remediationJob.count({ where: { state: 'queued' } }),
     prisma.remediationJob.count({ where: { state: 'running' } }),
     prisma.remediationJob.count({ where: { state: 'succeeded', updatedAt: { gte: dayAgo } } }),
+    // Topic-filing review queue — the rows /review-topic-filing drains. Same
+    // predicate the skill's helper uses (`loadQueue`): contested === queued.
+    prisma.resourceTopic.groupBy({
+      by: ['isPrimary'],
+      where: { contested: true },
+      _count: { _all: true },
+    }),
+    prisma.resourceTopic.groupBy({
+      by: ['topic'],
+      where: { contested: true },
+      _count: { _all: true },
+      orderBy: { _count: { topic: 'desc' } },
+    }),
+    prisma.resourceTopic.groupBy({ by: ['resourceId'], where: { contested: true } }),
+    prisma.resourceTopic.findFirst({
+      where: { contested: true },
+      orderBy: { createdAt: 'asc' },
+      select: { createdAt: true },
+    }),
+    prisma.resourceTopic.count({ where: { origin: 'review', createdAt: { gte: weekAgo } } }),
+    // Groups = drain decisions: the queue is worked one root container at a time,
+    // so walk each contested row up to its topmost ancestor and count the distinct
+    // roots (a loose top-level row is its own root).
+    prisma.$queryRaw<{ groups: bigint }[]>`
+      WITH RECURSIVE up AS (
+        SELECT r.id, r."parentResourceId"
+        FROM "Resource" r
+        WHERE r.id IN (SELECT DISTINCT "resourceId" FROM "ResourceTopic" WHERE contested = true)
+        UNION
+        SELECT p.id, p."parentResourceId"
+        FROM "Resource" p JOIN up ON up."parentResourceId" = p.id
+      )
+      SELECT COUNT(DISTINCT id)::bigint AS groups FROM up WHERE "parentResourceId" IS NULL
+    `,
     // Library.
     prisma.resource.groupBy({ by: ['status'], _count: { _all: true } }),
     prisma.resource.count({ where: { status: 'deprecated', updatedAt: { gte: weekAgo } } }),
@@ -147,6 +187,11 @@ export default async function DashboardPage() {
   const statusCount = (s: string) =>
     resourcesByStatus.find((r) => r.status === s)?._count._all ?? 0;
   const voteCount = (v: number) => votesByValue.find((r) => r.value === v)?._count._all ?? 0;
+
+  const contestedPrimary = contestedByKind.find((r) => r.isPrimary)?._count._all ?? 0;
+  const contestedSecondary = contestedByKind.find((r) => !r.isPrimary)?._count._all ?? 0;
+  const contestedTotal = contestedPrimary + contestedSecondary;
+  const contestedGroupCount = Number(contestedGroups[0]?.groups ?? 0);
 
   return (
     <main className="p-6 flex flex-col gap-8">
@@ -215,6 +260,44 @@ export default async function DashboardPage() {
           <Stat label="remediation queued/running" value={`${remQueued}/${remRunning}`} />
           <Stat label="remediation done, 24h" value={remSucceeded24h} />
         </div>
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="text-lg font-semibold">Topic filing review queue</h2>
+        <div className="grid grid-cols-3 gap-4 md:grid-cols-6">
+          <Stat label="contested memberships" value={contestedTotal} />
+          <Stat label="contested primaries" value={contestedPrimary} />
+          <Stat label="contested secondaries" value={contestedSecondary} />
+          <Stat label="resources affected" value={contestedResources.length} />
+          <Stat label="groups (drain decisions)" value={contestedGroupCount} />
+          <Stat
+            label="oldest queued"
+            value={oldestContested ? fmtAge(now - oldestContested.createdAt.getTime()) : '—'}
+          />
+        </div>
+        {contestedByTopic.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {contestedByTopic.slice(0, 12).map((t) => (
+              <span
+                key={t.topic}
+                className="rounded border border-gray-200 px-2 py-0.5 text-xs text-gray-600"
+              >
+                {t.topic} <span className="font-semibold text-gray-900">{t._count._all}</span>
+              </span>
+            ))}
+            {contestedByTopic.length > 12 && (
+              <span className="px-2 py-0.5 text-xs text-gray-500">
+                +{contestedByTopic.length - 12} more topic(s)
+              </span>
+            )}
+          </div>
+        )}
+        <p className="text-xs text-gray-500">
+          Drained with the <code>/review-topic-filing</code> skill — no tab, the drain runs from
+          the CLI. A contested <em>secondary</em> is excluded from retrieval entirely; a contested{' '}
+          <em>primary</em> stays retrievable. {refiledByReview7d} membership(s) written by review
+          in the last 7d (refiles and adds — confirms clear the flag without a new row).
+        </p>
       </section>
 
       <section className="flex flex-col gap-3">
