@@ -21,6 +21,7 @@
 // flipped to true, and both transactions can leave a primary behind.)
 
 import { prisma } from '@/lib/db';
+import { Prisma } from '@prisma/client';
 import type { PrismaClient, TopicFilingOrigin } from '@prisma/client';
 import {
   decideCollision,
@@ -233,25 +234,45 @@ export type MembershipInvariants = {
   mirrorDrift: number; // Resource.topic disagreeing with its primary membership
 };
 
+// ⚠️ SCOPE: LIBRARY ROWS ONLY — `origin = 'generated'` is excluded from all three counts.
+// An on-ramp lesson (generateOnRampResource) is authored FOR one concept of one Path, is
+// injected directly into that build, and is kept out of every ordinary candidate search by
+// `excludeGenerated` (search-resources.ts). It is deliberately not cross-usable material,
+// so "unreachable by topic search" is its intended state, not a violation — and it is the
+// one creator that writes `Resource.topic` without going through `setPrimaryTopic`.
+// Measured 2026-07-28: an 8-path E2E run left 7 such rows, which turned this assert into a
+// hard block on every curation driver (reclassify, quorum refile, twin merge, the review
+// drain's --apply) for a condition none of them can fix. Excluding them here states the
+// rule the design already relies on; the alternative — minting a self-membership per
+// on-ramp row — would put non-library rows in the filing vocabulary's population counts
+// (topicPools, k-NN neighbourhoods) purely to satisfy a checker.
+const LIBRARY_ROWS = Prisma.sql`r.origin::text <> 'generated'`;
+
 export async function checkMembershipInvariants(): Promise<MembershipInvariants> {
   type Count = { c: number };
   const [{ c: noMembership }] = await prisma.$queryRaw<Count[]>`
     SELECT count(*)::int AS c FROM "Resource" r
-    WHERE NOT EXISTS (SELECT 1 FROM "ResourceTopic" rt WHERE rt."resourceId" = r.id)
+    WHERE ${LIBRARY_ROWS}
+      AND NOT EXISTS (SELECT 1 FROM "ResourceTopic" rt WHERE rt."resourceId" = r.id)
   `;
   const [{ c: badPrimaryCount }] = await prisma.$queryRaw<Count[]>`
     SELECT count(*)::int AS c FROM (
       SELECT r.id
       FROM "Resource" r
       LEFT JOIN "ResourceTopic" rt ON rt."resourceId" = r.id
+      WHERE ${LIBRARY_ROWS}
       GROUP BY r.id
       HAVING count(rt.*) FILTER (WHERE rt."isPrimary") <> 1
     ) bad
   `;
+  // Kept in the same scope as the two above so "healthy" means one population, not two.
+  // A generated row has no membership to drift from today; if one ever acquires one, it is
+  // out of scope here for the same reason it is out of scope above.
   const [{ c: mirrorDrift }] = await prisma.$queryRaw<Count[]>`
     SELECT count(*)::int AS c FROM "Resource" r
     JOIN "ResourceTopic" rt ON rt."resourceId" = r.id AND rt."isPrimary"
-    WHERE rt.topic <> r.topic
+    WHERE ${LIBRARY_ROWS}
+      AND rt.topic <> r.topic
   `;
   return { noMembership, badPrimaryCount, mirrorDrift };
 }

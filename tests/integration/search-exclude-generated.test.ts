@@ -8,6 +8,7 @@
 import { beforeAll, afterAll, it, expect } from 'vitest';
 import { prisma } from '@/lib/db';
 import { searchResources } from '@/lib/agents/tools/search-resources';
+import { checkMembershipInvariants } from '@/lib/curation/resource-topics';
 import { describeDb } from './db';
 
 const MARK = '__verify_f6__';
@@ -61,5 +62,37 @@ describeDb('searchResources — excludeGenerated', () => {
     const rows = await searchResources({ topics: [MARK], statuses: ['active'], excludeGenerated: true });
     expect(rows.map((r) => r.slug)).toEqual([`${MARK}sourced`]);
     expect(rows.some((r) => r.slug === `${MARK}generated`)).toBe(false);
+  });
+
+  // The membership invariants are scoped to LIBRARY rows for the same reason this search
+  // filter exists: an on-ramp lesson belongs to one concept of one Path, never to a topic's
+  // shelf. generateOnRampResource writes Resource.topic without setPrimaryTopic, so every
+  // cold build leaves one membership-less row — measured 2026-07-28, 7 of them, which made
+  // assertMembershipInvariants throw and hard-blocked every curation driver. This is the
+  // regression guard for that scoping decision.
+  it('leaves a membership-less generated row out of the invariant counts', async () => {
+    const before = await checkMembershipInvariants();
+    const source = await prisma.source.findFirstOrThrow({ where: { slug: `${MARK}src` }, select: { id: true } });
+    const bare = await prisma.resource.create({
+      data: {
+        topic: MARK,
+        slug: `${MARK}bare-onramp`,
+        title: 'Generated on-ramp with no membership',
+        url: `generated://${MARK}/bare`,
+        origin: 'generated',
+        type: 'article',
+        durationMin: 30,
+        summary: 'seeded for the invariant scope',
+        difficulty: 'beginner',
+        status: 'active',
+        decompositionStatus: 'atomic',
+        prerequisiteConcepts: [],
+        conceptsTaught: [],
+        sourceId: source.id,
+      },
+      select: { id: true, topics: { select: { id: true } } },
+    });
+    expect(bare.topics).toHaveLength(0); // the shape generateOnRampResource produces
+    expect(await checkMembershipInvariants()).toEqual(before);
   });
 });
