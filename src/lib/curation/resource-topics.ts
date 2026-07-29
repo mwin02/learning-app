@@ -129,13 +129,10 @@ export async function addCollisionMembership(
   if (existing.some((m) => m.topic === topic)) return null;
   // The cap is per RESOURCE, and collision rows count against it (locked decision): the
   // guard against a generic "intro to programming" page joining every CS topic, one
-  // rediscovery at a time.
+  // rediscovery at a time. This read is only the CHEAP EARLY-OUT — it saves the k-NN and
+  // pool queries below; the binding check is the one inside the transaction.
   if (existing.length >= MAX_MEMBERSHIPS) {
-    console.log('[resource-topics] collision membership skipped: cap reached', {
-      resourceId,
-      topic,
-      memberships: existing.length,
-    });
+    logCapReached(resourceId, topic, existing.length);
     return null;
   }
 
@@ -146,13 +143,46 @@ export async function addCollisionMembership(
   const membership = decideCollision(topic, neighbourTopics, pools);
   if (!membership) return null;
 
-  // skipDuplicates so a concurrent rediscovery of the same URL under the same topic
-  // races harmlessly (the unique [resourceId, topic] would otherwise throw).
-  await prisma.resourceTopic.createMany({
-    data: [{ resourceId, topic, relevance: membership.relevance, origin: 'collision', contested: membership.contested, isPrimary: false }],
-    skipDuplicates: true,
+  // ⚠️ THE CAP IS RE-CHECKED UNDER A ROW LOCK, because the read above and this write are
+  // separated by two DB round-trips. Two workers rediscovering the same URL under two
+  // different topics both saw 2/3 and both wrote, leaving a resource on 4 memberships —
+  // the exact "one rediscovery at a time" accumulation the cap exists to stop, just
+  // arriving concurrently instead of serially. The lock is the same `FOR UPDATE` on the
+  // Resource that setPrimaryTopic takes, so collision writes also serialize against
+  // refiles rather than racing them.
+  const written = await prisma.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM "Resource" WHERE id = ${resourceId} FOR UPDATE
+    `;
+    // The row was deleted while the guardrail ran. Nothing to join.
+    if (locked.length === 0) return false;
+
+    const held = await tx.resourceTopic.count({ where: { resourceId } });
+    if (held >= MAX_MEMBERSHIPS) {
+      logCapReached(resourceId, topic, held);
+      return false;
+    }
+
+    // skipDuplicates so a concurrent rediscovery of the same URL under the same topic
+    // races harmlessly (the unique [resourceId, topic] would otherwise throw).
+    const { count } = await tx.resourceTopic.createMany({
+      data: [{ resourceId, topic, relevance: membership.relevance, origin: 'collision', contested: membership.contested, isPrimary: false }],
+      skipDuplicates: true,
+    });
+    return count > 0;
   });
-  return membership;
+
+  // Nothing written means the caller must not report a membership it does not have —
+  // `membership_added` drives the discovery counters and the outcome upsertResource returns.
+  return written ? membership : null;
+}
+
+function logCapReached(resourceId: string, topic: string, memberships: number): void {
+  console.log('[resource-topics] collision membership skipped: cap reached', {
+    resourceId,
+    topic,
+    memberships,
+  });
 }
 
 // ── bulk reclassification (T4a) ──────────────────────────────────────────────

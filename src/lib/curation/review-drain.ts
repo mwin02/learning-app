@@ -203,7 +203,8 @@ export type Verdict = {
   // Refile only. True deletes the vacated membership; false retains it as an UNCONTESTED
   // secondary. Retention with the contested flag left ON is the one option that is always
   // wrong: it would be invisible to retrieval AND permanently queued, re-litigating a
-  // decided row.
+  // decided row. Note a retained refile to a topic the resource does not already hold nets
+  // +1 membership, so it counts against MAX_MEMBERSHIPS exactly as an `add` does.
   //
   // ⚠️ THE DEFAULT DEPENDS ON WHAT IS BEING VACATED — see `defaultDropVacated`. Omitting
   // this field is the common case, so the default has to be the safe reading for both
@@ -279,7 +280,12 @@ export function planVerdicts(
   rows: DrainRow[],
   verdicts: Verdict[],
   parents: Map<string, ParentLink>,
-  membershipCounts: Map<string, number>,
+  // EVERY topic each resource holds (all memberships, not just the contested ones on the
+  // queue). Topics, not counts: the cap arithmetic depends on whether a destination is
+  // already held — an `add` of a held topic is a duplicate, and a refile onto a held
+  // secondary nets no new membership while a refile to a fresh topic that RETAINS the
+  // vacated one nets +1.
+  heldTopics: Map<string, string[]>,
   maxMemberships: number,
 ): DrainPlan {
   const writes: PlannedWrite[] = [];
@@ -295,6 +301,23 @@ export function planVerdicts(
   // Which verdict claimed each membership, so a row covered twice is a reported conflict
   // rather than two writes racing in file order.
   const claimed = new Map<string, number>();
+  // ⚠️ A WORKING COPY, updated as membership-changing verdicts are planned — the caller's
+  // map is a snapshot taken before any of them. A resource can hold TWO contested
+  // memberships (5 do on the live queue), so a file with a cap-consuming verdict for each
+  // read the same starting state and both cleared a cap they jointly breached. Projecting
+  // as we go makes the cap hold across the whole file, not just per verdict. Seeded lazily
+  // from `heldTopics`, floored with each queue row's own topic so an under-supplied map
+  // cannot make a row's held topic look free.
+  const projectedHeld = new Map<string, Set<string>>();
+  const heldOf = (resourceId: string): Set<string> => {
+    let held = projectedHeld.get(resourceId);
+    if (!held) {
+      held = new Set(heldTopics.get(resourceId) ?? []);
+      projectedHeld.set(resourceId, held);
+    }
+    return held;
+  };
+  for (const r of rows) heldOf(r.resourceId).add(r.topic);
 
   verdicts.forEach((v, i) => {
     const label = `verdict[${i}] (${v.verdict})`;
@@ -350,18 +373,39 @@ export function planVerdicts(
         errors.push(`${label}: ${row.resourceId} is already primary on '${v.topic}'`);
         continue;
       }
+      const dropVacated = v.dropVacated ?? defaultDropVacated(row);
       if (v.verdict === 'add') {
-        if (v.topic === row.topic) {
+        const held = heldOf(row.resourceId);
+        if (held.has(v.topic!)) {
           errors.push(`${label}: ${row.resourceId} already holds '${v.topic}'`);
           continue;
         }
-        const count = membershipCounts.get(row.resourceId) ?? 0;
-        if (count >= maxMemberships) {
+        if (held.size >= maxMemberships) {
           errors.push(
-            `${label}: ${row.resourceId} is at the membership cap (${count}/${maxMemberships})`,
+            `${label}: ${row.resourceId} is at the membership cap (${held.size}/${maxMemberships})`,
           );
           continue;
         }
+        // Claimed below, so the next cap-consuming verdict for this resource sees the
+        // slot as spent.
+        held.add(v.topic!);
+      }
+      if (v.verdict === 'refile') {
+        // A refile is not always cap-neutral. Onto a topic the resource already holds
+        // (promotion, or adopting an existing secondary as primary) it upserts in place;
+        // to a FRESH topic it creates a membership, and when the vacated one is RETAINED
+        // nothing is freed in exchange — net +1, the same consumption an `add` pays for.
+        const held = heldOf(row.resourceId);
+        if (!held.has(v.topic!) && !dropVacated && held.size >= maxMemberships) {
+          errors.push(
+            `${label}: refiling ${row.resourceId} to '${v.topic}' while retaining ` +
+              `'${row.topic}' would breach the membership cap ` +
+              `(${held.size}/${maxMemberships}) — set dropVacated: true or drop another membership first`,
+          );
+          continue;
+        }
+        held.add(v.topic!);
+        if (dropVacated && v.topic !== row.topic) held.delete(row.topic);
       }
       claimed.set(row.membershipId, i);
       const planned: PlannedWrite = {
@@ -371,7 +415,7 @@ export function planVerdicts(
         verdict: v.verdict,
         heldTopic: row.topic,
         targetTopic: v.topic ?? null,
-        dropVacated: v.dropVacated ?? defaultDropVacated(row),
+        dropVacated,
         viaContainer: hasContainer ? v.containerId! : null,
         ...(v.note ? { note: v.note } : {}),
       };

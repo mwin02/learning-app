@@ -202,8 +202,14 @@ describe('planVerdicts', () => {
     row({ resourceId: 'r4', membershipId: 'm4', topic: 'calculus' }),
   ];
   const tree = parents([['c1', null]]);
-  const counts = new Map([['r1', 1], ['r2', 1], ['r3', 1], ['r4', 3]]);
-  const plan = (verdicts: Verdict[]) => planVerdicts(queue, verdicts, tree, counts, 3);
+  // Every topic each resource holds — r4 sits at the 3-membership cap.
+  const held = new Map([
+    ['r1', ['cryptography']],
+    ['r2', ['cryptography']],
+    ['r3', ['data-structures-algorithms']],
+    ['r4', ['calculus', 'real-analysis', 'topology']],
+  ]);
+  const plan = (verdicts: Verdict[]) => planVerdicts(queue, verdicts, tree, held, 3);
 
   it('applies a row verdict and reports the rest as unresolved', () => {
     const p = plan([{ verdict: 'confirm', membershipId: 'm1' }]);
@@ -267,7 +273,7 @@ describe('planVerdicts', () => {
       secondary,
       [{ verdict: 'refile', membershipId: 'm5', topic: 'precalculus' }],
       parents([]),
-      new Map([['r5', 2]]),
+      new Map([['r5', ['algebra', 'precalculus']]]),
       3,
     );
     expect(p.errors).toEqual([]);
@@ -280,10 +286,88 @@ describe('planVerdicts', () => {
     expect(p.errors[0]).toMatch(/membership cap \(3\/3\)/);
   });
 
+  // 5 resources on the live queue hold two contested memberships each, so one file can
+  // carry two `add` verdicts for the same resource. Against the caller's snapshot both
+  // read the same starting count and both cleared a cap they jointly breached.
+  it('counts planned adds against the cap, not just the starting snapshot', () => {
+    const twice = [
+      row({ resourceId: 'r6', membershipId: 'm6a', topic: 'calculus' }),
+      row({ resourceId: 'r6', membershipId: 'm6b', topic: 'precalculus' }),
+    ];
+    const p = planVerdicts(
+      twice,
+      [
+        { verdict: 'add', membershipId: 'm6a', topic: 'statistics' },
+        { verdict: 'add', membershipId: 'm6b', topic: 'number-theory' },
+      ],
+      parents([]),
+      new Map([['r6', ['calculus', 'precalculus']]]),
+      3,
+    );
+    expect(p.writes.map((w) => w.membershipId)).toEqual(['m6a']);
+    expect(p.errors[0]).toMatch(/membership cap \(3\/3\)/);
+  });
+
   it('refuses an add of a topic the row already holds', () => {
     const p = plan([{ verdict: 'add', membershipId: 'm1', topic: 'cryptography' }]);
     expect(p.writes).toEqual([]);
     expect(p.errors[0]).toMatch(/already holds/);
+  });
+
+  it('refuses an add of a topic held by ANOTHER of the resource\'s memberships', () => {
+    const one = [row({ resourceId: 'r7', membershipId: 'm7', topic: 'calculus' })];
+    const p = planVerdicts(
+      one,
+      [{ verdict: 'add', membershipId: 'm7', topic: 'statistics' }],
+      parents([]),
+      new Map([['r7', ['calculus', 'statistics']]]),
+      3,
+    );
+    expect(p.writes).toEqual([]);
+    expect(p.errors[0]).toMatch(/already holds 'statistics'/);
+  });
+
+  // A refile is only cap-neutral when the target is already held or the vacated membership
+  // is dropped in exchange. Retained + fresh topic nets +1, exactly like an `add` — the
+  // path that used to slip past the cap.
+  it('refuses a retained refile to a fresh topic when the resource is at the cap', () => {
+    const p = plan([{ verdict: 'refile', membershipId: 'm4', topic: 'number-theory' }]);
+    expect(p.writes).toEqual([]);
+    expect(p.errors[0]).toMatch(/membership cap \(3\/3\)/);
+  });
+
+  it('allows the same refile when the vacated membership is dropped in exchange', () => {
+    const p = plan([
+      { verdict: 'refile', membershipId: 'm4', topic: 'number-theory', dropVacated: true },
+    ]);
+    expect(p.errors).toEqual([]);
+    expect(p.writes[0]).toMatchObject({ membershipId: 'm4', targetTopic: 'number-theory' });
+  });
+
+  it('allows a refile at the cap onto a topic the resource already holds', () => {
+    // Adopting an existing secondary as the new primary creates nothing.
+    const p = plan([{ verdict: 'refile', membershipId: 'm4', topic: 'real-analysis' }]);
+    expect(p.errors).toEqual([]);
+    expect(p.writes[0]).toMatchObject({ membershipId: 'm4', targetTopic: 'real-analysis' });
+  });
+
+  it('counts a retained refile against a later add in the same file', () => {
+    const twice = [
+      row({ resourceId: 'r8', membershipId: 'm8a', topic: 'calculus' }),
+      row({ resourceId: 'r8', membershipId: 'm8b', topic: 'precalculus' }),
+    ];
+    const p = planVerdicts(
+      twice,
+      [
+        { verdict: 'refile', membershipId: 'm8a', topic: 'statistics', dropVacated: false },
+        { verdict: 'add', membershipId: 'm8b', topic: 'number-theory' },
+      ],
+      parents([]),
+      new Map([['r8', ['calculus', 'precalculus']]]),
+      3,
+    );
+    expect(p.writes.map((w) => w.membershipId)).toEqual(['m8a']);
+    expect(p.errors[0]).toMatch(/membership cap \(3\/3\)/);
   });
 
   it('separates skip from the writes so doubt is preserved, not cleared', () => {
@@ -308,7 +392,7 @@ describe('planVerdicts', () => {
       secondary,
       [{ verdict: 'refile', membershipId: 'm5', topic: 'number-theory' }],
       parents([]),
-      new Map([['r5', 2]]),
+      new Map([['r5', ['algebra', 'precalculus']]]),
       3,
     );
     expect(p.errors).toEqual([]);
@@ -323,7 +407,7 @@ describe('planVerdicts', () => {
       secondary,
       [{ verdict: 'refile', membershipId: 'm5', topic: 'number-theory', dropVacated: false }],
       parents([]),
-      new Map([['r5', 2]]),
+      new Map([['r5', ['algebra', 'precalculus']]]),
       3,
     );
     expect(kept.writes[0].dropVacated).toBe(false);

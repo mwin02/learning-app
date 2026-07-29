@@ -1450,6 +1450,70 @@ draining continues in batches.
 
 ---
 
+## As built — post-merge review fixes (2026-07-28)
+
+A read of the whole stack after T1–D2 landed on `main` turned up seven defects. None
+invalidates a block's design; all seven are cases where the code did not enforce what the
+surrounding comment already claimed. Recorded here because three of them are properties
+future work will otherwise re-break.
+
+**PR #276 — the review drain's `--apply` (D2).**
+
+1. **A partial apply could not be recovered by re-running its own verdict file.** The queue
+   is *defined* by `contested = true`, so every write removes its own row from it: a loop
+   that died halfway left the applied rows invisible to `loadQueue`, and the re-run returned
+   `is not in the queue` for exactly those, tripping the refuse-on-error guard and blocking
+   the writes that never happened. ⚠️ **Any future batch writer over this queue has the same
+   shape** — the fix is all-or-nothing (one interactive transaction), with the k-NN
+   measurement pass kept outside it so N pgvector reads don't hold a connection and the
+   `FOR UPDATE` locks.
+2. **`refile` on a contested SECONDARY published the vacated topic.** `dropVacated` defaulted
+   to false and the retain branch writes `contested: false` — right for a primary (T4b's
+   rule), *inverted* for a secondary, which T1's retrieval predicate excludes. Settling it
+   uncontested does not preserve reach, it **grants** reach to the topic the reviewer just
+   rejected. The default now turns on `isPrimary`. **The general rule: "retain the vacated
+   membership" is only conservative when the membership was retrievable to begin with.**
+3. The skill's `allowed-tools` named the Chrome MCP server `mcp__Claude_in_Chrome__*`; it is
+   exposed as `mcp__claude-in-chrome__*`, and allowlists match literally.
+
+**PR #277 — secondaries skipped the vouchable-pool bar (T2b).** `decideFiling` held the
+*primary* to `MIN_VOUCHABLE_POOL` (`unvouchable-pool` → contested) but filtered secondaries
+on `MIN_SECONDARY_PURITY` alone. A thin shelf can still supply 2 of 10 neighbours, so a topic
+k-NN cannot adjudicate could take an **uncontested** secondary — which retrieval admits. That
+was the only route by which an unvouched topic gained retrievable reach carrying no flag.
+Secondaries now carry `contested = pool < MIN_VOUCHABLE_POOL`, and the sort feeding the
+`MAX_MEMBERSHIPS` slice puts vouched first so a hypothesis cannot displace a retrievable
+membership. Contested rather than dropped, because per As-built T4e a secondary never grows a
+pool either way — so the only thing a drop buys is losing the receipt.
+
+**PR #280 — `MAX_MEMBERSHIPS` was advisory on three paths.** `addCollisionMembership` read
+the count, spent two round-trips on guardrail work, then wrote — two workers rediscovering
+one URL under different topics both saw 2/3 and both wrote. `planVerdicts` checked each
+`add` against the caller's snapshot without incrementing it, and 5 live rows hold two
+contested memberships each. And `refile` was never cap-checked at all, though it is not
+always cap-neutral: onto a held topic it upserts in place, but to a fresh topic with the
+vacated membership *retained* (the default for a contested primary) it nets +1 — a single
+ordinary refile verdict could push a 3/3 resource to 4. All three now count against
+something current: a `FOR UPDATE` re-count for collisions, and for the drain a projected
+per-resource *set of held topics* (topics, not counts — the arithmetic turns on whether the
+destination is already held) that adds and refiles consume as the file is planned.
+`writeMemberships` and `decideReclassification` were already bounded.
+
+**PR #278 — the T3 minter memoized transient failures.** `createTopicMinter` fell through its
+catch into `cache.set(key, null)`, so one rate-limit blip on the first row proposing a subject
+suppressed minting for every later row of the batch — a transport failure promoted to "this
+subject does not exist", which is the condition T3 exists to fix. Only verdicts are cached now.
+
+**PR #279 — twin merge overwrote a surviving membership's evidence.** When a resource holds
+the dead slug as primary and the survivor as a secondary, `setPrimaryTopic` takes its UPDATE
+branch, so carrying the dead row's `relevance`/`origin`/`contested` across overwrote numbers
+measured against a different topic. Invisible for the two live twins (one pool split in half);
+not invisible for the Supabase re-run this module exists for. The primary branch now promotes
+an existing membership without touching its evidence, symmetric with the secondary branch,
+and the promote/delete pair is one transaction.
+
+---
+
 ## Rejected alternatives
 
 | Option | Why not |
