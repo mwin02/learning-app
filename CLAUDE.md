@@ -2,7 +2,7 @@
 
 # CLAUDE.md
 
-Project context and collaboration workflow for the Adaptive Learning Path app.
+Project context and conventions for the Adaptive Learning Path app.
 
 ## Project
 
@@ -32,31 +32,18 @@ Full roadmap and phase plan: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 | Source attribution | Postgres `Source` table with hand-set `trustScore`; `Resource.trustScore` inherits from source at create                                                  |
 | Path scope         | Single-topic by design. Multi-topic goal-driven plans compose Paths via a `Program` layer in Phase 2.75 (headline differentiator vs. course aggregators). |
 
-## Workflow (read this before starting any feature)
+## Coding conventions
 
-Every feature in every phase follows this loop:
-
-1. **One feature per conversation.** Start a fresh conversation for each feature.
-2. **Discussion first.** Claude asks clarifying questions, offers insights, and surfaces criticisms before writing code. No code until consensus.
-3. **Scope the feature.** Once aligned, Claude writes a scoped plan.
-4. **Break into blocks of <300 LOC.** Smaller is better. Overruns rare and intentional.
-5. **One branch per block.** Off `main`, or off the previous block's branch when stacking.
-6. **Verification gate.** Claude provides a verification plan after each block; the user verifies manually before anything is committed.
-7. **Commit + push + PR.** Only after the user confirms verification, Claude commits, pushes, and opens a PR.
-8. **JIT dependencies.** Install libraries only when the feature that needs them is being built — never up front.
-
-### Merging a stacked PR chain into `main`
-
-When a chain of PRs is stacked (each branch off the previous), merge **bottom-up, one block at a time**, and only ever retarget the _immediate next_ PR — never the whole chain at once. For each PR, from the base of the stack upward:
-
-1. Merge it into `main` (`gh pr merge <n> --merge`), but **do not pass `--delete-branch` yet**.
-2. Retarget the immediate child (the PR based on this branch) to `main`: `gh pr edit <child> --base main`. Do this **while this branch still exists**.
-3. Only now delete the just-merged branch: `git push origin --delete <branch>`.
-
-Two failure modes this ordering prevents — both bit us merging the 2.5f stack (#85–#94):
-
-- **Never blanket-retarget the whole chain to `main` up front.** A PR retargeted _before its parent merges_ has its merge-base set to bare `main`, so its diff and commit list inflate to include every ancestor block's work. This is **permanent**: a merged PR's base branch is immutable, so the bloated "Files changed" / "Commits" record can't be fixed afterward. (`main`'s own history stays correct — only the PR record is wrong.)
-- **Never `--delete-branch` a parent while a child PR still targets it.** Deleting a branch that is the base of an open PR _closes_ that PR instead of retargeting it, and a closed PR whose base branch is gone can't be reopened without recreating the branch. Retarget the child to `main` (step 2) before deleting (step 3).
+- **Comments**: only where code can't speak for itself — non-obvious constraints, invariants, workarounds, "why" decisions. Never restate what a line does, narrate changes, or address the reviewer. Match the surrounding file's comment density.
+- **Logging**: new server-side code logs via `log`/`logWarn`/`logError` from `@/lib/log` (one JSON object per line), never `console.*`. AI call sites report token usage with `recordUsage(stage, result.usage)`.
+- **Validation at boundaries**: every API route input and every LLM structured output is parsed with a zod schema. Types derive from `z.infer<>` — never hand-write a duplicate interface next to a schema.
+- **Layering**: route handlers stay thin (auth, parse, call, respond); business logic lives in `src/lib/` (services/agents/lib modules) where it's unit-testable without HTTP. UI derivation logic goes in `*-view-model.ts` / `*-view.ts` lib files, not inside components.
+- **Server-first React**: components are Server Components by default; add `"use client"` only for interactivity, and keep client components at the leaves.
+- **Env access**: read `process.env` only in leaf config modules (`lib/db`, `lib/ai/vertex`, `lib/supabase/*`, `lib/config`, auth helpers). Feature code imports from those; never inline `process.env.X` in a feature.
+- **DB access**: Prisma via the `@/lib/db` singleton only. Raw SQL only in migrations, or where Prisma can't express it (pgvector) — with a comment saying so.
+- **Errors**: no silent catches. Catch only where you can handle or translate; otherwise let it propagate. Any caught-and-continued error goes through `logError`.
+- **Types**: `strict` is on; no `any`, no `as` casts or `!` assertions to silence the checker — fix the type. A justified exception gets a one-line comment.
+- **New pure logic gets a colocated unit test** (`src/**/*.test.ts`). If it's hard to unit-test, that's a layering smell — extract the pure part.
 
 ## Repo conventions
 
@@ -65,81 +52,23 @@ Two failure modes this ordering prevents — both bit us merging the 2.5f stack 
 - Secrets live in `.env.local` (git-ignored); `.env.example` documents required keys.
 - Never commit secrets, service-account JSON, or Stripe keys.
 - **Commit messages: no `Co-Authored-By: Claude` trailer.** Write commit messages without the AI attribution footer.
-- **Pull Requests: no `Generated with Claude Code` trailer** whenever opening new pull requests
-- This file (CLAUDE.md) and shared skills under `.claude/skills/` are tracked; everything else under `.claude/` stays git-ignored (local settings, worktrees).
+- **Pull Requests: no `Generated with Claude Code` trailer** whenever opening new pull requests.
+- Tracked under `.claude/`: shared skills (`.claude/skills/`), rules (`.claude/rules/`), and agents (`.claude/agents/`); everything else there stays git-ignored (local settings, worktrees).
 
-## Testing (Vitest — colocated unit + gated integration)
+## Feature workflow
 
-Tests run on **Vitest** (config in [`vitest.config.ts`](vitest.config.ts)), split into two projects that resolve the `@/*` alias like the app:
+Features are planned in a dedicated planning conversation that ends in a plan doc (`docs/<feature>-plan.md`) with per-block briefs (blocks ≤300 LOC), then implemented block-by-block — directly, or via the `/orchestrate-feature` skill, which spawns a `block-implementer` subagent per block. Two rules bind every conversation:
 
-- **unit** — pure, fast, no DB/LLM. Files are **colocated** next to the code as `src/**/*.test.ts`.
-- **integration** — hits the real dev DB. Files live in [`tests/integration/`](tests/integration/). A setup file loads `.env.local`, and DB blocks skip cleanly (with a message) when there's no `DATABASE_URL`. Files run **one at a time** (`fileParallelism: false`) — see the shared-DB note below.
+- **Verification gate**: nothing is committed until the user has manually verified the block. Commit/push/PR only after explicit confirmation.
+- **JIT dependencies**: install a library only when the feature that needs it is being built — never up front.
 
-**npm scripts:** `test` = unit only (the safe default — runs with no secrets); `test:unit`; `test:int`; `test:all` (both projects).
+Merging a stacked PR chain: use the `/merge-stacked-prs` skill — the ordering matters and has caused permanent PR-record damage before.
 
-**Which kind to write:**
+## Testing and styling
 
-- **Pure logic** (deterministic transforms, allocators, validators, slug/formatting helpers) → a **colocated unit test**. This is the default and where most coverage lives.
-- **Needs the DB** but no LLM → an **integration test** under `tests/integration/`.
-- **Costs LLM calls, needs a seeded DB, or drives live external APIs** → do **not** migrate to Vitest. It stays a manual `scripts/verify-*.ts` driver, run with `npx tsx --env-file=.env.local scripts/verify-*.ts`. Several scripts are split: the pure half is a colocated unit test, the live half remains a driver (see `scripts/verify-composer.ts`, `scripts/verify-sectioner.ts`). The historical assertion-style `verify-*` scripts were migrated to Vitest in the R-blocks; the survivors are all live/seeded drivers by design.
+Detailed conventions live in `.claude/rules/` and load automatically when you touch matching files — `testing.md` (unit/integration split, `describeDb`, module-eval stubs) and `styling.md` (design tokens, dark mode). Read neighboring tests/components before writing new ones so the rules trigger.
 
-**Writing a unit test:** import from `@/*`, use `describe`/`it`/`expect`. Assertions are the plain `expect(...)` matchers — no `check(name, cond)` helper (that was the old script pattern; the conversion is `check(name, cond)` → `it(name, () => expect(...))`).
+Two testing facts with blast radius beyond test files:
 
-⚠️ **Module-eval gotcha.** Importing an app module that transitively pulls in `@/lib/db` or `@/lib/ai/vertex` will **throw at import** when the env vars are absent (`DATABASE_URL` / `GOOGLE_VERTEX_PROJECT`), even if the function under test never touches them — those modules validate env at module-eval. When the code under test is pure, stub the offending leaf so the unit test stays secret-free:
-
-```ts
-vi.mock("@/lib/db", () => ({ prisma: {} }));
-// If the graph imports @/lib/ai/vertex directly (e.g. via tools/web-fallback), stub the leaf:
-vi.mock("@/lib/ai/vertex", () => ({
-  vertex: Object.assign(() => ({}), { textEmbeddingModel: () => ({}) }),
-  chatModel: () => ({}),
-  geminiFlash: {},
-  vertexAnthropic: {},
-  vertexGlobal: {},
-}));
-// Otherwise stubbing @/lib/ai/models is enough:
-vi.mock("@/lib/ai/models", () => ({
-  getModel: () => ({ model: {}, temperature: 0, maxOutputTokens: 0 }),
-}));
-```
-
-Reach for a stub only when the import throws; most pure modules import cleanly and need none.
-
-**Writing an integration test:** wrap every DB-touching block in **`describeDb`** (from [`tests/integration/db.ts`](tests/integration/db.ts)) instead of `describe`, so it skips (not fails) without a `DATABASE_URL`. `.env.local` loads automatically. **Self-clean**: prefix throwaway rows with a unique marker (e.g. `__verify_prog__`) and delete them in `beforeAll`/`afterAll` — these tests write to the shared dev DB.
-
-**The shared-DB / whole-table hazard.** The queue primitives (`claimNextQueued`, `reclaimStale`, `queueDepth`) scan the **entire `CourseRequest` table** by design, so any row anyone else creates is indistinguishable from real backlog. Two writers can trip this, and both must be shut out:
-
-1. **A live worker.** Since workers-C that includes the **dockerized compose workers**, which poll the same local DB and will steal the tests' rows. Run `docker compose --profile workers stop worker` before `npm run test:int` (restart afterwards with `docker compose --profile workers up -d`).
-2. **A sibling test file.** Vitest runs files in parallel by default, so `program-fanout` / `program-enrollment` / `worker-pipeline` / `program-stuck-sweep` were creating `CourseRequest` rows mid-assertion — inflating `queueDepth` deltas in `course-request-queue.test.ts`, while its `claimMine()` drain stole *their* `queued` child requests and broke their `status === 'queued'` asserts. Measured at ~1 failure in 3 full runs (4 of 6 when forced parallel). Fixed by **`fileParallelism: false`** on the integration project in [`vitest.config.ts`](vitest.config.ts): files run one at a time, ~6s instead of ~2.5s for the whole project.
-
-Keep it that way — **don't re-enable file parallelism**, and don't narrow those global queries to marker-prefixed rows to make a flake go away: the whole-table scope *is* the property the queue tests exist to verify. See `tests/integration/course-request-queue.test.ts` for the quarantine-and-restore pattern that keeps a stray foreign row from being stranded in `running` even so.
-
-## Styling (Tailwind v4 — centralized design tokens)
-
-Styling uses **Tailwind CSS v4**. The single source of truth for the visual language is **[`src/app/globals.css`](src/app/globals.css)**. The goal is that a global change — palette, type size, corner rounding, spacing — is **one edit there**, never a find-replace across components. Honor that when adding or changing UI.
-
-**Where things live (all in `globals.css`):**
-
-- **Colors** — `@theme` `--color-*` tokens (`brand`, `ink`, `ink-soft`, `body`, `muted`, `faint`, `faintest`, `line`, `line-soft`, `line-faint`, `surface`, `fill`, `fill-soft`, `track`, `hairline`, `success`, `success-bg`, …). Generates `text-*` / `bg-*` / `border-*` utilities.
-- **Type scale** — `@theme` `--text-*` ramp (`text-2xs` … `text-3xl`). Applies app-wide (overrides a few Tailwind defaults; adds `2xs`/`md`).
-- **Radii** — `@theme` semantic `--radius-*` tokens → `rounded-card` / `rounded-control` / `rounded-button`.
-- **Layout constants** — `:root` vars, e.g. `--nav-h` (sticky nav height; sidebar/main heights derive from it via `calc()`), `--space-section` (vertical rhythm between cards).
-- **Fonts** — IBM Plex is app-wide, wired in the **root layout** (`src/app/layout.tsx`) → use `font-sans` / `font-mono`.
-- **Semantic component classes** — `@layer components` with `@apply`, for genuinely repeated multi-utility patterns: `.eyebrow` (uppercase mono micro-label), `.meta` / `.meta-xs` (mono meta text), `.card` (panel chrome), `.stat-value`.
-
-**Rules for new/changed UI:**
-
-1. **Use token utilities, never raw values.** `text-brand` not `text-[#3f6ad8]`; `text-sm` not `text-[15px]`; `rounded-card` not `rounded-[14px]`; `min-h-[calc(100vh-var(--nav-h))]` not `…-62px`. If you're typing a hex, a px font-size, or a radius literal, stop — use or add a token.
-2. **Reuse the semantic classes** for the patterns they cover (eyebrow labels, meta text, cards) instead of re-listing their utilities. Need a per-instance tweak? Add an overriding utility (the `utilities` layer wins over `components`), e.g. `class="eyebrow text-brand"`.
-3. **Promote to a token when a value repeats** (~2–3+ uses across components) or is a meaningful design constant. Add it to the right group in `globals.css`, then reference it everywhere.
-4. **One-off decoratives may stay inline** — a single-use gradient, a lone max-width, a bespoke accent color. Keep it an arbitrary value and add a short comment if the intent isn't obvious. Don't over-abstract single uses into tokens.
-5. **To restyle globally, edit `globals.css`** — bump a `--text-*` step for sizing, a `--color-*` for palette, `--radius-*` for rounding, `--nav-h`/`--space-section` for layout rhythm. Don't reintroduce per-component hardcoded values.
-
-**Dark mode (OS preference).** The learn UI is dark-mode-aware via a `@media (prefers-color-scheme: dark)` block in `globals.css` that redefines the `--color-*` tokens (plus `--shadow-card` / `--gradient-thumb`) for dark. There are **no `dark:` variants in components** — utilities flip automatically because the tokens use plain `@theme` (var indirection), so overriding the CSS variable re-resolves every `text-*` / `bg-*` / `border-*`. To keep a new page dark-compatible:
-
-- **Build with token utilities only** (rule 1). A token-clean component is dark-clean for free. The failure mode is hardcoded surfaces: `bg-white`, `text-[#…]`, inline `style={{ background: '#fff' }}` — these don't flip. Use **`bg-card`** for raised surfaces (nav/sidebar/panels — `.card` already does), `bg-surface` for the app background, and the text/line/fill tokens for everything else.
-- **A color that must differ by theme but isn't a single `--color-*`** (a gradient, a theme-specific shadow) → make it a CSS variable in `:root` and override it in the dark block (see `--gradient-thumb`, `--shadow-card`), then reference `var(--…)`. Don't inline a light-only literal.
-- **Adding a token?** Give it a dark value in the dark block too, or it'll be stuck at its light value in dark mode.
-- ⚠️ **Never put `*/` inside a CSS comment** (e.g. writing `text-*/bg-*`) — it closes the comment early and crashes the Tailwind/PostCSS parse, after which the dev server silently serves stale CSS. Restart `next dev` after `@theme` changes if new tokens don't appear.
-
-Scope note: the centralized system currently styles the **learn UI** (`src/app/learn/`); the internal `playground` pages predate it and still use ad-hoc utilities — fine to leave, but new shared surfaces should follow the rules above.
+- `npm test` = unit only, safe with no secrets; `npm run test:int` hits the real dev DB.
+- **Before `npm run test:int`, stop the dockerized workers** (`docker compose --profile workers stop worker`) — they poll the same DB and steal the tests' queue rows. Restart afterwards with `docker compose --profile workers up -d`.
