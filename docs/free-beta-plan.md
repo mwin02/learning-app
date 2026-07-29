@@ -233,6 +233,36 @@ the base image); Apple-Silicon cross-build noted in worker-deploy.md applies her
 
 ### D2 — Supabase schema deploy + library migration (~150 LOC script + ops)
 
+> **As-built corrections (measured 2026-07-29, script block merged; the copy
+> itself is still pending).** Three of the premises below changed:
+>
+> 1. **Step 1 is already done.** Supabase is at **36/36 migrations** (through
+>    topic-filing T2a, including A1's `resource_rating`), both hand-written
+>    indexes exist, and the `vector` extension is enabled. `vercel.json`'s
+>    `buildCommand` (`prisma migrate deploy && next build`) is what has been
+>    keeping it current — **D3 must replace that or the schema silently stops
+>    tracking `main`.** Step 1 is now verification, not deployment.
+> 2. **Supabase is completely empty** — 0 rows in *every* table, `User`
+>    included. The "already backs the live Vercel deploy (real `User` rows)"
+>    gotcha below is false: there is nothing to conflict with, local-wins is
+>    trivially satisfied, and D3's OAuth cutover breaks no live sessions.
+> 3. **`ResourceTopic` must be copied** (2,405 rows). The table list below
+>    predates topic filing T1; membership now lives there and retrieval's
+>    `topic IN (…)` EXISTS subquery reads it, so copying `Resource` without it
+>    yields a library no query can reach. `TopicCentroid` is correctly excluded
+>    — pgvector, and `embed-resources.ts` regenerates it via
+>    `refreshTopicCentroids()`.
+>
+> Volumes are ~4× the estimate: `Source` 26, `TopicAlias` 36, **`Resource`
+> 2,008** (1,389 with a parent), `ResourceTopic` 2,405. The step-3 re-embed is a
+> full 2,008-row cold run, not ~500.
+>
+> OPENs settled: target lands in a new **`SUPABASE_DB_URL`** (direct 5432),
+> separate from `DATABASE_URL` so the direction can't be reversed; conflict
+> policy is local-wins, implemented as **id preservation** + upsert-by-PK, with
+> a preflight that aborts if the target holds a natural key under a different
+> id.
+
 Order of operations:
 
 1. `prisma migrate deploy` against the Supabase DB (needs its connection string —
@@ -267,6 +297,13 @@ Resources exist from the live deploy) win conflicts or local wins (lean: local w
 local library is the curated, backfilled, reviewed one).
 
 ### D3 — Cloud Run app service live (ops; runbook into `docs/app-deploy.md`)
+
+> **Split (2026-07-29): the custom domain is not yet acquired.** D3 lands the
+> service on its `*.run.app` URL; domain mapping + the Supabase OAuth cutover
+> become a follow-up, written up but unexecuted in `docs/app-deploy.md` §6.
+> Two D1 findings bind this block: the image takes `NEXT_PUBLIC_*` as **build
+> args** (it is bound to one Supabase project — rotating the anon key is a
+> rebuild), and `GET /api/health?probe=db` exists for the startup probe.
 
 - Cloud Build → Artifact Registry (reuse the `$REPO` from worker-deploy.md), Cloud Run
   **service** (not worker pool) with Secret Manager-mounted env (Supabase URL + anon/service
