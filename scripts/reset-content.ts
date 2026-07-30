@@ -5,6 +5,15 @@
 //   npx tsx --env-file=.env.local scripts/reset-content.ts            # dry run + snapshot
 //   npx tsx --env-file=.env.local scripts/reset-content.ts --yes      # actually truncate
 //
+// Every run prints the database it is pointed at. Truncating a REMOTE one also
+// requires naming it (scripts/target-guard.ts), so a stale DATABASE_URL override
+// aborts instead of wiping production:
+//   … scripts/reset-content.ts --yes --target-host=<hostname>
+// A dry run never needs the flag — it prints the target and the flag you would
+// need. Note this script wipes `Resource` too: against Supabase that is the
+// curated library, which is almost never what you want — reset-maps.ts is the
+// narrow sibling C2 actually uses.
+//
 // WIPES (content): Resource, Path, Track, Lesson, Section, LessonResource,
 //   Exercise, Concept, ConceptPrereq, ConceptResource, RemediationJob,
 //   CourseRequest, Progress, Program, ProgramPath, EnrolledProgram. (Programs

@@ -1,5 +1,7 @@
-// Ops guard for the scripts that TRUNCATE. Shared by reset-content.ts and
-// reset-maps.ts.
+// Ops guard for the scripts that mutate a whole database irreversibly. Shared by
+// reset-content.ts, reset-maps.ts, and the review-topic-filing skill's
+// topic-review.ts (a bulk refile of live Path material, not a truncate — hence
+// the `action` parameter on requireTargetAck).
 //
 // Those scripts wipe whatever `DATABASE_URL` points at, gated only by `--yes`.
 // That was harmless while `DATABASE_URL` was always the local Docker Postgres,
@@ -15,15 +17,21 @@
 // the flag you would need — because demanding it there would train everyone to
 // type it reflexively, which is exactly the habit the guard exists to prevent.
 
-const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', 'host.docker.internal', 'db']);
+// `[::1]` carries brackets because that is what URL.hostname returns for an IPv6
+// literal — a bare '::1' entry here would never match anything.
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', 'host.docker.internal', 'db']);
 
-export type Target = { label: string; isLocal: boolean };
+export type Target = { hostname: string; label: string; isLocal: boolean };
 
 export function resolveTarget(): Target {
   const raw = process.env.DATABASE_URL;
   if (!raw) throw new Error('DATABASE_URL is not set');
   const url = new URL(raw);
   return {
+    // Carried, not re-derived from `label`: splitting the label on ':' breaks for
+    // IPv6 hosts (`[::1]:5432/db` → `[`), which would make the --target-host
+    // value the guard demands impossible to type.
+    hostname: url.hostname,
     label: `${url.hostname}:${url.port || '5432'}${url.pathname}`,
     isLocal: LOCAL_HOSTS.has(url.hostname),
   };
@@ -32,10 +40,19 @@ export function resolveTarget(): Target {
 /**
  * Prints the target and, when `apply` is set against a non-local host, requires
  * `--target-host=<hostname>` to match it. Exits 1 on mismatch.
+ *
+ * `action` names the destructive verb in the refusal message. It is not cosmetic:
+ * the guard is shared by callers that do very different damage (a TRUNCATE vs. a
+ * bulk refile of live rows), and an operator reading "refusing to TRUNCATE" from
+ * a script that does not truncate learns to distrust the message.
  */
-export function requireTargetAck(script: string, apply: boolean): Target {
+export function requireTargetAck(
+  script: string,
+  apply: boolean,
+  action = 'TRUNCATE'
+): Target {
   const target = resolveTarget();
-  const hostname = target.label.split(':')[0];
+  const { hostname } = target;
 
   console.log(`[${script}] target: ${target.label}${target.isLocal ? '' : '  ⚠ REMOTE'}`);
   if (target.isLocal) return target;
@@ -56,7 +73,7 @@ export function requireTargetAck(script: string, apply: boolean): Target {
 
   if (ack !== hostname) {
     console.error(
-      `\n✗ refusing to TRUNCATE a remote database without an explicit target.\n` +
+      `\n✗ refusing to ${action} against a remote database without an explicit target.\n` +
         `  DATABASE_URL points at ${target.label}\n` +
         (ack
           ? `  but --target-host=${ack} was passed — they must match.\n`

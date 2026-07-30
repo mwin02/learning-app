@@ -3,6 +3,19 @@
 // reimplementation, so it can't drift from production):
 //   npx tsx --env-file=.env.local .claude/skills/review-topic-filing/scripts/topic-review.ts <cmd>
 //
+// Against PRODUCTION (post-cutover the queue worth draining lives on Supabase),
+// override DATABASE_URL inline — shell env beats --env-file, so .env.local stays
+// pointed at the local Docker Postgres that the integration tests and compose
+// workers depend on:
+//   DATABASE_URL="$SUPABASE_POOLER_URL" npx tsx --env-file=.env.local <this> queue
+// Use SUPABASE_POOLER_URL (:6543), NOT SUPABASE_DB_URL — the latter is the direct
+// :5432 endpoint, IPv6-only on current Supabase projects, so it works from a
+// laptop and fails everywhere else.
+//
+// Every run prints the database it connected to. A REMOTE `apply --apply` also
+// requires `--target-host=<hostname>` (scripts/target-guard.ts), so a stale or
+// forgotten DATABASE_URL override aborts instead of bulk-refiling live rows.
+//
 //   queue [n] [--topic <slug>] [--kind primary|secondary|all]
 //       The contested-membership review queue, grouped by root container and ordered by
 //       review priority. `n` limits GROUPS, not rows — a container is one decision.
@@ -22,6 +35,9 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { prisma } from '@/lib/db';
+// Relative, not `@/…`: the alias maps into src/, and this guard is ops tooling
+// shared with scripts/reset-content.ts and scripts/reset-maps.ts.
+import { requireTargetAck } from '../../../../scripts/target-guard';
 import { centroidMargins } from '@/lib/curation/topic-centroids';
 import {
   knnNeighbourTopicsOf,
@@ -473,6 +489,15 @@ async function apply(file: string, execute: boolean) {
 async function main() {
   const argv = process.argv.slice(2);
   const [cmd, ...rest] = argv;
+
+  // Announce the target on every run, and require --target-host on a REMOTE
+  // apply. This script mutates live Path material in bulk, so it needs the same
+  // guard as the reset scripts — post-cutover the queue worth draining is
+  // Supabase's, reached by overriding DATABASE_URL, and the failure mode is
+  // silent: pointed at the local DB it reports an empty queue rather than an
+  // error, which reads as "nothing to review" instead of "wrong database".
+  requireTargetAck('topic-review', cmd === 'apply' && rest.includes('--apply'), 'bulk-refile');
+
   const flag = (name: string) => {
     const i = rest.indexOf(`--${name}`);
     return i >= 0 ? rest[i + 1] : null;

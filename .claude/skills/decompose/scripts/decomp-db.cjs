@@ -4,7 +4,12 @@
 //
 // Against PRODUCTION (post-cutover the review queue lives on Supabase), override
 // DATABASE_URL inline — shell env beats --env-file, and .env.local stays local:
-//   DATABASE_URL="$SUPABASE_DB_URL" node --env-file=.env.local <this script> ...
+//   DATABASE_URL="$SUPABASE_POOLER_URL" node --env-file=.env.local <this script> ...
+// Use SUPABASE_POOLER_URL (the :6543 transaction pooler), NOT SUPABASE_DB_URL:
+// that one is the direct :5432 endpoint, which is IPv6-only on current Supabase
+// projects. It happens to work from a laptop with IPv6, which is exactly what
+// makes it a trap to standardise on — it fails from anything IPv4-only, and it is
+// the migration connection, not the runtime one.
 // Every run prints the database it connected to; check it before trusting an
 // empty queue.
 //

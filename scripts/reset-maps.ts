@@ -7,6 +7,15 @@
 //   npx tsx --env-file=.env.local scripts/reset-maps.ts          # dry run + snapshot
 //   npx tsx --env-file=.env.local scripts/reset-maps.ts --yes    # actually truncate
 //
+// Every run prints the database it is pointed at. Truncating a REMOTE one also
+// requires naming it (scripts/target-guard.ts), so a stale DATABASE_URL override
+// aborts instead of wiping production:
+//   DATABASE_URL="$SUPABASE_POOLER_URL" npx tsx --env-file=.env.local \
+//     scripts/reset-maps.ts --yes --target-host=<hostname>
+// A dry run never needs the flag — it prints the target and the flag you would
+// need. C2 step 1 runs this against Supabase on purpose; that is why the guard
+// exists rather than a blanket refusal.
+//
 // This is the narrow sibling of reset-content.ts, which also wipes `Resource` —
 // too blunt here: the library is the expensive, curated, human-reviewed asset and
 // the warm campaign is meant to rebuild maps ON TOP of it.
