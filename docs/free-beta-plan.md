@@ -488,19 +488,22 @@ Runs **after D4** (cloud workers + Supabase library) **and after topic-filing T4
 ## Feature E — operator tooling against the deployed database
 
 **Why this exists (surfaced 2026-07-30, during D3).** The five review skills are the
-operator surface for curation, and **every one of them targets `localhost:3000`**, which
-reads `.env.local` → **local Docker Postgres**. Post-D2 the library that matters lives on
-Supabase. So the tooling and the data have come apart: a review pass drains the *local*
-queue and changes nothing about what beta users will see. D3 didn't break this; it made it
-visible.
+operator surface for curation, and **every one of them reaches a local target** — four via
+`localhost:3000`, the fifth via a direct-DB script — which resolves through `.env.local` →
+**local Docker Postgres**. Post-D2 the library that matters lives on Supabase. So the
+tooling and the data have come apart: a review pass drains the *local* queue and changes
+nothing about what beta users will see. D3 didn't break this; it made it visible.
 
 ### Codebase facts (verified 2026-07-30)
 
-1. **All five skills hardcode `localhost:3000`** in both their prerequisites and every
-   `curl`: `review-pending-resources` (`/api/playground/pending-resources`),
+1. **Four of the five skills hardcode `localhost:3000`** in both their prerequisites and
+   every `curl`: `review-pending-resources` (`/api/playground/pending-resources`),
    `review-map-findings` (`/api/playground/map-review`), `author-concept-bank`
    (`/api/playground/concept-banks`), `decompose` (`/api/playground/decomposition-review`).
-   `review-topic-filing` is different — it bypasses HTTP entirely and drives
+   For `decompose` the string is in four `references/*.md` as well as `SKILL.md`, so E2's
+   base-URL change is a wider edit there than "one file per skill" suggests.
+   `review-topic-filing` is the fifth and is different — it contains no `localhost:3000` at
+   all, bypassing HTTP entirely to drive
    `.claude/skills/review-topic-filing/scripts/topic-review.ts` against the DB.
 2. **The two direct-DB helpers follow `DATABASE_URL`**, so they inherit whatever the
    invocation's env says: `pending-review-db.cjs` builds its own client from
