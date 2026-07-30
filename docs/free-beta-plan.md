@@ -24,15 +24,18 @@ first, <300 LOC per block, one branch per block, verification gate before commit
 | D4 | GCP: Cloud Run worker pools live | ops | D2, D3 |
 | B1 | Observability: GCP-native error reporting | code + ops | D3 (verified on Cloud Run) |
 | C1 | Warm campaign: `reset-maps` + `warm-paths` scripts | code | — |
-| C2 | Warm campaign: rebuild the 12 warm topics + review passes | ops | A*, D4, C1, **topic-filing T4** |
+| C2 | Warm campaign: rebuild the 12 warm topics + review passes | ops | A*, D4, C1, **topic-filing T4**, **E1** |
+| E1 | Operator tooling: document the local-app/remote-DB pattern | docs | D3 |
+| E2 | Operator tooling: real admin auth for the review skills | code | D3, E1 |
 
 Rationale for the order: ratings are platform-independent code and should be live before
 beta users arrive; the migration lands **before** the warm campaign so beta traffic and the
 warm builds both run on the final architecture (C2 doubles as the cloud workers' shakedown);
-observability is verified against Cloud Run, so it follows D3.
+observability is verified against Cloud Run, so it follows D3. **E1 gates C2** — the review
+passes in C2 step 4 are worthless if they drain the wrong queue.
 
 A-blocks stack off each other (branch per block, stacked PRs — merge bottom-up per the
-CLAUDE.md stacked-chain procedure). D/B/C blocks are independent branches off `main`.
+CLAUDE.md stacked-chain procedure). D/B/C/E blocks are independent branches off `main`.
 
 ## Locked decisions (this plan)
 
@@ -50,6 +53,7 @@ CLAUDE.md stacked-chain procedure). D/B/C blocks are independent branches off `m
 | Domain | User is acquiring a custom domain; D3 includes domain mapping + the Supabase OAuth redirect cutover. |
 | Data migration | The **library layer only** (`Source`, `TopicAlias`, `Resource`) moves from the local dev DB to Supabase, via a Node script (no `pg_dump` in this environment). Embeddings are **not** copied — re-run the embed backfill on Supabase. Map/track/program layers are NOT migrated (warm campaign rebuilds them). Local `User`/`Progress` rows are dev-only and stay behind. |
 | Error reporting | **GCP-native** (Cloud Logging auto-ingest of stdout JSON + Error Reporting + a Monitoring alert policy). Sentry rejected: its host-agnosticism advantage is moot post-migration, and GCP-native is zero-dep and burns credits. Client-side errors reach the same stream via a small report endpoint. |
+| Operator tooling target | **Local app, remote DB** for now (decided 2026-07-30): run the dev server with `DATABASE_URL` overridden to the Supabase pooler, leaving `.env.local` alone. Real admin auth against the deployed service is the durable answer and is deferred to E2. `.env.local`'s `DATABASE_URL` **stays on local Docker Postgres** — that is load-bearing for integration tests and the compose workers, not an oversight. |
 
 ## Codebase facts the plan rests on (verified 2026-07-18)
 
@@ -478,6 +482,101 @@ Runs **after D4** (cloud workers + Supabase library) **and after topic-filing T4
    campaign conversation for the beta announcement's honesty.
 
 ---
+
+---
+
+## Feature E — operator tooling against the deployed database
+
+**Why this exists (surfaced 2026-07-30, during D3).** The five review skills are the
+operator surface for curation, and **every one of them reaches a local target** — four via
+`localhost:3000`, the fifth via a direct-DB script — which resolves through `.env.local` →
+**local Docker Postgres**. Post-D2 the library that matters lives on Supabase. So the
+tooling and the data have come apart: a review pass drains the *local* queue and changes
+nothing about what beta users will see. D3 didn't break this; it made it visible.
+
+### Codebase facts (verified 2026-07-30)
+
+1. **Four of the five skills hardcode `localhost:3000`** in both their prerequisites and
+   every `curl`: `review-pending-resources` (`/api/playground/pending-resources`),
+   `review-map-findings` (`/api/playground/map-review`), `author-concept-bank`
+   (`/api/playground/concept-banks`), `decompose` (`/api/playground/decomposition-review`).
+   For `decompose` the string is in four `references/*.md` as well as `SKILL.md`, so E2's
+   base-URL change is a wider edit there than "one file per skill" suggests.
+   `review-topic-filing` is the fifth and is different — it contains no `localhost:3000` at
+   all, bypassing HTTP entirely to drive
+   `.claude/skills/review-topic-filing/scripts/topic-review.ts` against the DB.
+2. **The two direct-DB helpers follow `DATABASE_URL`**, so they inherit whatever the
+   invocation's env says: `pending-review-db.cjs` builds its own client from
+   `process.env.DATABASE_URL`; `topic-review.ts` imports the `@/lib/db` singleton. Both are
+   documented as `--env-file=.env.local`.
+3. **`DEV_AUTH` cannot work in cloud, by construction.** `devBypass()` is
+   `NODE_ENV === 'development' && DEV_AUTH === '1'` (`src/lib/api/with-auth.ts:33`), and
+   Next's standalone server hardcodes `NODE_ENV=production`. Every skill's probe expects
+   `DEV_AUTH=1`. Confirmed live against Cloud Run: `/api/playground/concept-banks` returns
+   **404** for a signed-in non-admin (non-enumerable by design, per `with-admin-auth.ts`).
+4. **There is no admin on the deployed service.** The Supabase `User` table had 0 rows until
+   D3's sign-in smoke created one, with the default role. Roles are assigned by hand — "there
+   is deliberately no API for it" (`with-admin-auth.ts` header).
+
+### E1 — document the local-app/remote-DB pattern (docs only)
+
+The locked stopgap. Run the app locally (so `NODE_ENV=development` and `DEV_AUTH=1` still
+apply) against the **Supabase pooler**, without touching `.env.local`:
+
+```bash
+DATABASE_URL="$SUPABASE_POOLER_URL" npm run dev
+```
+
+Every skill then works unchanged and writes to Supabase. Same override for the two direct-DB
+helpers, since shell env beats `--env-file`.
+
+Deliverables: a section in `docs/app-deploy.md` (or a short `docs/operator-tooling.md`) and a
+prerequisite line in each affected skill saying which DB the server was started against.
+
+**The hazards to write down, because they are the whole risk of this pattern:**
+- **The target is invisible at the call site.** A skill's `curl localhost:3000/…` looks
+  identical whichever DB the server was started against. There is no way to tell from the
+  command which library you are editing. Get in the habit of confirming before a review pass.
+- **Use the POOLER url (`:6543`), not `SUPABASE_DB_URL`.** The latter is the direct 5432
+  endpoint and is **IPv6-only** on current Supabase projects — it happens to work from a
+  laptop, which is exactly what makes it a trap to standardise on.
+- **Never solve this by editing `.env.local`.** The setting outlives the command, and the next
+  `npm run test:int` or `docker compose --profile workers up` inherits it — writing test
+  fixtures into the live library and draining the production queue from a laptop.
+- Reviews mutate production curation with `DEV_AUTH`-level (i.e. no) authentication. Fine for
+  a single operator on a laptop; not fine as a standing arrangement. Hence E2.
+
+**OPEN:** whether to add a guard that makes the target *visible* rather than merely
+documented — e.g. the dev server logging its resolved DB host at boot, or the skills probing
+a `/api/health`-style endpoint that reports which host it is connected to (careful: the D1
+probe is deliberately content-free and must not start leaking the DB host publicly — an
+admin-gated variant, or dev-only, would be the way).
+
+### E2 — real admin auth for the review skills (~100–150 LOC + ops)
+
+The durable answer, and the one that lets the skills operate the **deployed** service rather
+than a laptop pointed at production data.
+
+- Set `role='admin'` on the operator's Supabase `User` row (hand-written SQL — fact 4). Worth
+  doing early regardless: there is currently no admin on production at all.
+- Give the skills a **configurable base URL** instead of a hardcoded `localhost:3000`, and
+  make them authenticate with a real session rather than `DEV_AUTH`. The existing pattern for
+  authed live verification is the Chrome page-context `fetch` (it carries the session cookies
+  and a same-origin `Origin`, which `requireSameOrigin` needs for mutating calls).
+- Retire `DEV_AUTH` from the operator path. `.env.example` has always described it as going
+  away "once the real flow is trusted end-to-end" — after D3 it is.
+
+**OPEN (settle in E2's discussion):**
+- Where the base URL comes from: an env var, a skill argument, or a probe. It must **fail
+  closed** — a skill that silently falls back to `localhost:3000` when the intended target is
+  production reintroduces E1's invisible-target hazard in a worse form.
+- Whether `review-topic-filing` converges on HTTP like the other four, or stays a direct-DB
+  script (it is script-shaped for good reasons — bulk reclassification — and for it the
+  `DATABASE_URL` override is arguably already the right interface).
+- Whether the mutating playground routes need anything beyond `withAdminAuth` before they are
+  driven against production (audit trail on `origin: 'review'` writes already exists; check
+  whether it records *which* admin).
+- Whether an operator UI is in scope at all, or the skills remain the surface for beta.
 
 ## Explicitly deferred (post-beta)
 
