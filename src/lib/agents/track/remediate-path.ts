@@ -35,6 +35,7 @@ import { splitConcept, type SliceEvidence } from '@/lib/agents/track/split-conce
 import { sourceAndAttachConcept } from '@/lib/agents/track/source-concept';
 import { claimRemediationJob, finishJob } from '@/lib/agents/track/remediation-job';
 import { reviewAndPersistMap } from '@/lib/agents/map/run-map-review';
+import { logError } from '@/lib/log';
 
 export type RemediateResult = {
   // 'busy' when another job holds this Path; 'ready' when there was nothing to
@@ -83,7 +84,7 @@ export async function remediatePath(
       const { findings, written } = await reviewAndPersistMap(pathId, { abortSignal: opts.abortSignal });
       console.log('[remediate] freeze review', { pathId, findings: findings.map((f) => f.kind), written });
     } catch (err) {
-      console.error('[remediate] freeze review failed (non-fatal)', {
+      logError('remediate.freeze-review-failed', {
         pathId,
         error: err instanceof Error ? err.message : String(err),
       });
@@ -217,7 +218,7 @@ async function runRemediation(
     if (uncoverable.length > 0) {
       // The "page a developer" signal — a structured, greppable record. Real
       // alerting/email is deferred (Phase 3 for email; paging is infra).
-      console.error('[remediate] ESCALATION — concepts left uncoverable', {
+      logError('remediate.escalation-uncoverable', {
         pathId,
         uncoverable,
         status: final.status,
@@ -228,7 +229,7 @@ async function runRemediation(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await finishJob(claim.job.id, { state: 'failed', error: message }).catch(() => {});
-    console.error('[remediate] failed', { pathId, error: message });
+    logError('remediate.failed', { pathId, error: message, err });
     return { outcome: 'failed', status: initial.status, holes: initial.holes, relaxedConceptSlugs: [], escalatedConceptSlugs: [] };
   }
 }

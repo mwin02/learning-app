@@ -20,6 +20,7 @@ import { ZodError } from 'zod';
 import { withAdminAuth } from '@/lib/api/with-admin-auth';
 import { pendingReviewSchema } from '@/lib/api/pending-review-schema';
 import { listPendingReview, applyPendingReview } from '@/lib/curation/pending-review';
+import { logError } from '@/lib/log';
 
 // Prisma needs the Node runtime (not Edge). The recursive-CTE subtree walk and
 // the conditional updates are quick, so the default duration is fine.
@@ -112,7 +113,7 @@ export const POST = withAdminAuth(async (req) => {
         });
     }
   } catch (err) {
-    console.error('[pending-resources] failure', { resourceId: input.resourceId, action: input.action, err });
+    logError('pending-resources.failed', { resourceId: input.resourceId, action: input.action, err });
     return errorResponse(500, 'INTERNAL', 'Internal error applying review decision.');
   }
 });

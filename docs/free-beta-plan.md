@@ -410,10 +410,68 @@ a cloud worker claim + build it, structured logs visible in Cloud Logging.
   forcing one server error and one client error in prod and seeing both grouped +
   alerted.
 
-**OPEN:** rate-limit mechanism for `/api/client-error` (reuse the H1 burst-limit pattern
-vs. simple in-memory token bucket — note multi-instance Cloud Run makes in-memory weak);
-whether the worker (a tsx process, not Next) needs any change (it already writes JSON to
-stdout — likely just the severity mapping, which it inherits from `log.ts`).
+> **DONE 2026-07-30 (code + runbook); the notification channel is the one
+> remaining console step.** `docs/app-deploy.md` §8 is the runbook.
+>
+> **The plan's design was incomplete, and the gap is the interesting part.** A
+> client error boundary CANNOT capture server errors: in production Next replaces
+> a Server Component's error with a generic message plus a `digest` before the
+> boundary sees it, so a boundary POSTing what it was handed reports no stack and
+> nothing groups. B1 therefore adds `src/instrumentation.ts` (`onRequestError`),
+> which sees the real error, its stack, the digest, `request.path` and
+> `context.routeType` — and also covers unhandled throws in route handlers and
+> Server Actions, which nothing covered before. Both sides log the `digest`, so
+> the two records join. Verified locally: the same forced error produced a
+> `server.unhandled` line and a `client.unhandled` line sharing digest
+> `1871428373`.
+>
+> **The `@type` question is settled**: a stack in `message`/`stack_trace`/
+> `exception` auto-groups on its own; `@type` ReportedErrorEvent is needed only
+> for a stack-less error. `log.ts` does both conditionally.
+>
+> **`serializable()` was dropping every stack** (`{ name, message }` only), so
+> the severity mapping alone would have grouped nothing. `takeStack` now MOVES the
+> stack into `message` rather than copying it — the first cut had every stack in
+> the line twice, which Cloud Logging bills for.
+>
+> **Rate limit: per-instance token bucket** (20 burst, 1/3s), not the H1 DB
+> pattern. The endpoint must be unauthenticated (no session on a sign-in-page
+> crash, so no key to count rows against) and a Postgres round trip would put the
+> DB on the failure path of the one endpoint whose job is to work while the app is
+> broken. min-instances is now **0** (not 1 — `5742126`), so the guarantee is
+> weak by construction; accepted, because what it bounds is the log bill, and
+> client-side dedupe (3 distinct reports per page load) plus Error Reporting's own
+> 5-per-group-per-hour cap carry the rest. The throttle logs at `WARNING`, never
+> `ERROR`, so it cannot page on itself.
+>
+> **Worker: `LOG_SERVICE_NAME=course-worker` baked into `Dockerfile.worker`**
+> (Cloud Run injects `K_SERVICE`; a plain container has none), plus terminal
+> `unhandledRejection`/`uncaughtException` handlers — with `restart:
+> unless-stopped` a crash loop was previously silent. Cloud verification of the
+> worker half waits on D4.
+>
+> **Scope call: all 20 raw `console.error` sites converted to `logError`.** The
+> brief named two files; there were twenty, mostly in `src/lib/agents/`
+> (`remediate-path`, `attach-candidates`, `generate-onramp`, `topic-gate`) — the
+> autonomous pipeline that fails unattended. Against only 8 pre-existing
+> `logError` sites, skipping this would have made B1 largely decorative. The
+> remaining 78 `console.log` + 28 `console.warn` are deliberately left for a
+> follow-up sweep.
+>
+> **Alerting:** Error Reporting's own **Configure notifications** → a Monitoring
+> email channel, NOT a Monitoring alert policy on a metric — notifications on new
+> groups are project-level and **console-only** (no gcloud/API surface), so they
+> are a runbook step. Email to `david.hong199@gmail.com`, notify on every new
+> group while traffic is zero.
+>
+> **Prod verification needed something that throws on demand**, and nothing did.
+> Added `GET /api/health?probe=throw` — admin-only and non-enumerable like
+> `probe=ai`, with a fixed self-identifying message so repeated drills reuse one
+> Error Reporting group instead of firing a new-group notification each run. It
+> exercises the route-handler path (`routeType: "route"`), which is the half a
+> browser crash can never reach.
+>
+> Also noted: Next 16.2 renamed the boundary's retry prop to `unstable_retry`.
 
 ---
 

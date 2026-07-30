@@ -659,3 +659,17 @@ export const MAP_DUP_CANDIDATE_SIMILARITY = 0.3;
 // core) until the floors fit — which is what makes "re-run with a tighter budget
 // visibly drops nice_to_have" a deterministic, auditable behavior.
 export const PROGRAM_TOPIC_FLOOR_HOURS = 1;
+
+// Free-beta B1: /api/client-error's abuse budget. The endpoint is unauthenticated
+// by necessity (an anonymous visitor's crash is still a crash worth reporting),
+// so these are the only things standing between it and paid log ingestion.
+//
+// CLIENT_ERROR_MAX_BYTES: reject before parsing. A real report is a message plus
+// one browser stack; 8 KB is generous for that and refuses a payload sent to
+// inflate log volume.
+export const CLIENT_ERROR_MAX_BYTES = 8 * 1024;
+// CLIENT_ERROR_BURST / CLIENT_ERROR_REFILL_MS: a single per-instance token bucket
+// (see client-error-limit.ts for why it isn't per-IP, and why per-instance state
+// is the right weak guarantee here rather than a DB round trip on the failure path).
+export const CLIENT_ERROR_BURST = 20;
+export const CLIENT_ERROR_REFILL_MS = 3_000;

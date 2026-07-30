@@ -18,6 +18,7 @@ import { ZodError } from 'zod';
 import { withAdminAuth } from '@/lib/api/with-admin-auth';
 import { resourceUpdateSchema } from '@/lib/api/resource-update-schema';
 import { updateResource } from '@/lib/curation/update-resource';
+import { logError } from '@/lib/log';
 
 // Prisma needs the Node runtime (not Edge). A lookup + single-row update — the
 // default duration is fine.
@@ -61,7 +62,7 @@ export const PATCH = withAdminAuth(async (req) => {
       ...(result.warning !== undefined ? { warning: result.warning } : {}),
     });
   } catch (err) {
-    console.error('[resources] update failure', { resourceId: input.resourceId, err });
+    logError('resources.update-failed', { resourceId: input.resourceId, err });
     return errorResponse(500, 'INTERNAL', 'Internal error applying resource update.');
   }
 });

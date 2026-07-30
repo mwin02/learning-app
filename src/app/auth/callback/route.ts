@@ -10,6 +10,7 @@ import { createSupabaseServerClient, isSupabaseConfigured } from '@/lib/supabase
 import { syncUser } from '@/lib/auth/user-sync';
 import { publicOrigin } from '@/lib/api/public-origin';
 import { safeNextPath } from '../safe-next';
+import { logError } from '@/lib/log';
 
 export const runtime = 'nodejs';
 
@@ -28,7 +29,7 @@ export async function GET(req: Request) {
   const supabase = await createSupabaseServerClient();
   const { data, error } = await supabase.auth.exchangeCodeForSession(code);
   if (error || !data.user) {
-    console.error('[auth/callback] code exchange failed', { message: error?.message });
+    logError('auth-callback.code-exchange-failed', { message: error?.message });
     return NextResponse.redirect(new URL('/?auth_error=1', origin));
   }
 
@@ -37,7 +38,7 @@ export async function GET(req: Request) {
   } catch (err) {
     // Session is live but the mirror row failed (DB blip). Log loudly and let
     // the user in — withAuth works off the JWT, and the next sign-in re-syncs.
-    console.error('[auth/callback] user sync failed', err);
+    logError('auth-callback.user-sync-failed', { err });
   }
 
   return NextResponse.redirect(new URL(next, origin));

@@ -15,6 +15,12 @@
 //      CourseRequest.buildUsage). Outside a trace, recordUsage is a no-op, so
 //      scripts and tests that call agents directly are unaffected.
 //
+// Free-beta B1 adds a third concern to (1): the same line also carries the
+// fields Cloud Logging and Error Reporting read — `severity`, and for errors a
+// `message` holding the stack, plus `serviceContext`. The H3 fields are
+// untouched, because the jq-ability of these logs is what makes per-generation
+// cost auditable.
+//
 // ALS is Node-only, which both consumers are (the route forces runtime
 // 'nodejs'; the worker is a tsx process).
 
@@ -127,16 +133,96 @@ export function addUsageToSnapshot(
 }
 
 // JSON.stringify drops Error objects to {} — surface what matters instead.
+// `stack` is kept because Error Reporting groups on stack frames (see emit).
 function serializable(value: unknown): unknown {
-  if (value instanceof Error) return { name: value.name, message: value.message };
+  if (value instanceof Error) {
+    return { name: value.name, message: value.message, ...(value.stack ? { stack: value.stack } : {}) };
+  }
+  // A caller-supplied object carrying a stack (a client-reported error) is
+  // shallow-copied so takeStack's delete can't mutate the caller's own object.
+  if (value && typeof value === 'object' && 'stack' in value) return { ...value };
   return value;
 }
 
+// Free-beta B1: Cloud Logging's severity vocabulary. Anything below ERROR is
+// invisible to Error Reporting, which is why the mapping (not the stack) is what
+// decides whether an error page anyone.
+const SEVERITY: Record<LogLevel, string> = { info: 'INFO', warn: 'WARNING', error: 'ERROR' };
+
+// Error Reporting's auto-grouping key. Per the current docs, an entry groups
+// when `message` (or `stack_trace`/`exception`) holds a stack trace in a
+// supported language format — `@type` is only needed for a stack-less error,
+// where there are no frames to group on and the message text is all there is.
+const REPORTED_ERROR_TYPE =
+  'type.googleapis.com/google.devtools.clouderrorreporting.v1beta1.ReportedErrorEvent';
+
+/**
+ * Moves the first stack found among a line's fields OUT of its field and
+ * returns it, for the caller to put in `message`. Call sites pass the Error
+ * under varying keys (`err`, `error`, `cause`) and some pass a pre-serialized
+ * `{ name, message, stack }`, so both shapes are accepted.
+ *
+ * It moves rather than copies because a stack is by far the largest thing in an
+ * error line and Cloud Logging bills ingestion by volume: leaving it in place
+ * would put every stack in the line twice. The field keeps its `name`/`message`,
+ * so `jq` still reads the error without the frames.
+ */
+export function takeStack(line: Record<string, unknown>): string | null {
+  for (const value of Object.values(line)) {
+    if (!value || typeof value !== 'object' || !('stack' in value)) continue;
+    const holder = value as { stack?: unknown };
+    if (typeof holder.stack !== 'string' || !holder.stack) continue;
+    const stack = holder.stack;
+    delete holder.stack;
+    return stack;
+  }
+  return null;
+}
+
+// Cloud Run injects K_SERVICE/K_REVISION; the worker (a tsx process on a plain
+// VM) has neither, so it names itself via LOG_SERVICE_NAME. Without this the
+// app's and the worker's errors group under one service in Error Reporting.
+// process.env is read here rather than in a feature module per the env-access
+// convention — this file is the leaf.
+export function serviceContext(env: {
+  K_SERVICE?: string;
+  K_REVISION?: string;
+  LOG_SERVICE_NAME?: string;
+}): { service: string; version?: string } {
+  const service = env.K_SERVICE ?? env.LOG_SERVICE_NAME ?? 'learning-app';
+  const version = env.K_REVISION;
+  return version ? { service, version } : { service };
+}
+
+let cachedServiceContext: { service: string; version?: string } | null = null;
+
 function emit(level: LogLevel, event: string, fields?: Record<string, unknown>): void {
-  const line: Record<string, unknown> = { ts: new Date().toISOString(), level, event };
+  const line: Record<string, unknown> = {
+    ts: new Date().toISOString(),
+    level,
+    event,
+    severity: SEVERITY[level],
+  };
   const traceId = currentTraceId();
   if (traceId) line.traceId = traceId;
   if (fields) for (const [k, v] of Object.entries(fields)) line[k] = serializable(v);
+  if (level === 'error') {
+    cachedServiceContext ??= serviceContext({
+      K_SERVICE: process.env.K_SERVICE,
+      K_REVISION: process.env.K_REVISION,
+      LOG_SERVICE_NAME: process.env.LOG_SERVICE_NAME,
+    });
+    line.serviceContext = cachedServiceContext;
+    const stack = takeStack(line);
+    // The stack's own first line already carries "Name: message", so the event
+    // prefix rides ahead of it: the parser treats everything before the first
+    // "    at " frame as the message, and the grouping uses the frames.
+    if (stack) line.message = `${event}: ${stack}`;
+    else {
+      line.message = event;
+      line['@type'] = REPORTED_ERROR_TYPE;
+    }
+  }
   const writer = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
   writer(JSON.stringify(line));
 }
