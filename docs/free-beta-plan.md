@@ -363,8 +363,9 @@ local library is the curated, backfilled, reviewed one).
   keeps working until the new domain verifies, then decommission Vercel.
 - Smoke: sign-in round-trip on the new domain, program creation 202, admin pages gated.
 
-**OPEN:** `min-instances` 0 vs 1 (cold-start vs ~$15–30/mo before credits — decide at
-deploy); whether the Vercel URL should 301 to the new domain for a grace period; env
+**OPEN:** ~~`min-instances` 0 vs 1~~ — resolved twice: deployed at 1 (2026-07-29, credits
+absorbed the idle), flipped to 0 when the credits' expiry was announced (2026-07-30);
+see `app-deploy.md` §5. Whether the Vercel URL should 301 to the new domain for a grace period; env
 drift audit (`.env.example` completeness) belongs to this block.
 
 ### D4 — Cloud Run worker pools live (ops)
@@ -372,7 +373,20 @@ drift audit (`.env.example` completeness) belongs to this block.
 Follow `docs/worker-deploy.md` end-to-end (it's complete and was verified against the
 project's GCP state on 2026-07-13) with the Supabase DB URL as the queue/database. Start
 at 1 instance; the compose workers (`docker compose --profile workers`) are retired from
-duty (kept for local dev). Verify: enqueue a real course request on the new domain, watch
+duty (kept for local dev).
+
+> **Cost (2026-07-30, credits expiring): host the worker on the free-tier `e2-micro`,
+> not a min-1 Cloud Run service.** The worker polls the DB, so it can never scale to
+> zero — on Cloud Run that's another ~$50/mo of always-allocated idle. The always-free
+> tier includes one non-preemptible `e2-micro` VM (2 shared vCPU / 1 GB) + 30 GB standard
+> disk in `us-west1` — the region the worker wants anyway (DB co-location, same argument
+> as the app). Run the existing worker image on it via Container-Optimized OS or plain
+> Docker; `worker-deploy.md`'s image, SA, and secret wiring still apply, only the host
+> changes. One caveat to verify at creation: external IPv4 is now billed (~$3/mo) and the
+> free-tier exemption for it has shifted over time — the worker needs no inbound traffic,
+> only outbound (Supabase, Vertex), so an external IP is purely for egress; check the
+> current pricing note before assuming it's free. Revisit Cloud Run for the worker only
+> when queue depth needs >1 instance (that scaling point is also when revenue exists). Verify: enqueue a real course request on the new domain, watch
 a cloud worker claim + build it, structured logs visible in Cloud Logging.
 
 ---
