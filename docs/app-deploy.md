@@ -520,6 +520,22 @@ The **worker** groups separately, via `LOG_SERVICE_NAME=course-worker` baked int
 has none). Without it "the app is broken" and "a course build failed" land in one
 service.
 
+### Prerequisite: enable the API (one-time)
+
+`clouderrorreporting.googleapis.com` is **not** enabled by default on a project
+— it was still `DISABLED` here on 2026-07-30, after the app had been serving for
+a day. Until it is on, `severity: ERROR` lines land in Cloud Logging correctly
+but nothing groups, and there is no console surface on which to configure
+notifications. Enabling is free and reversible.
+
+```bash
+gcloud services enable clouderrorreporting.googleapis.com
+```
+
+Note also that `gcloud beta` is required for the `error-reporting` and
+`monitoring channels` command groups; without that component installed, those
+reads fail with a component-install prompt rather than an error about the API.
+
 ### Notification channel → email (one-time, console-only)
 
 Error Reporting notifies on a **new** group, or a new event in a group marked
@@ -572,6 +588,27 @@ await fetch('/api/health?probe=throw').then((r) => r.status) // 500 when admin, 
 **Client half:** any real browser crash, or a same-origin POST to
 `/api/client-error` from the deployed app's page context (the endpoint enforces
 same-origin, so an off-site curl gets 403 by design — see below).
+
+### Verified in production (2026-07-30, revision `learning-app-00008-fv9`)
+
+- Auto-deploy on merge worked unattended: all six build steps (including
+  `migrate`) SUCCESS, revision `learning-app-00008-fv9` at 100% traffic.
+- **Before B1: zero `severity>=ERROR` entries in 7 days** — the gap, measured.
+- A labelled client-error drill produced `severity: ERROR`, `serviceContext`
+  `{service: learning-app, version: learning-app-00008-fv9}` (so `K_REVISION`
+  resolves), the stack in `message` with frames, and **no `stack` left in the
+  report field** (it is moved, not copied). No `@type`, correctly, since frames
+  were present.
+- It **grouped in Error Reporting** under service `learning-app`.
+- The gated probes are non-enumerable in production, where `devBypass` is false:
+  `?probe=throw` and `?probe=ai` both return the plain liveness `200` body,
+  byte-identical to no probe at all.
+- Endpoint guards on the live service: `403` cross-origin, `413` oversize,
+  `405` GET, `204` same-origin.
+
+Still unverified: the **server** half's grouping (`probe=throw` needs an admin
+session) and notification delivery (channel not yet created). Both go through the
+same `logError` path the drill exercised end to end.
 
 ### The client endpoint's abuse surface
 
