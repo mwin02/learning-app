@@ -125,11 +125,14 @@ steps:
       - --port=8080
       - --cpu=1
       - --memory=512Mi
-      # min 1: a cold start in front of a beta user's first impression isn't
-      # worth the saving. max 4: 4 × the adapter-pg pool (10) = 40 client
-      # connections into the Supabase pooler, which the D4 worker pool shares —
-      # see worker-deploy.md §7 before raising either side.
-      - --min-instances=1
+      # min 0: request-based billing lands inside Cloud Run's always-free tier
+      # (180k vCPU-s/mo) at beta traffic; min 1 was ~$50/mo of idle, defensible
+      # only while GCP credits absorbed it. Cold start is ~3-5s (sub-second
+      # boot + startup-cpu-boost + the DB probe) — revisit min 1 when there are
+      # paying users to shield from it. max 4: 4 × the adapter-pg pool (10) =
+      # 40 client connections into the Supabase pooler, which the D4 worker
+      # pool shares — see worker-deploy.md §7 before raising either side.
+      - --min-instances=0
       - --max-instances=4
       # A booted server that can't reach Postgres must not take traffic.
       - --startup-probe=httpGet.path=/api/health?probe=db,periodSeconds=5,failureThreshold=6

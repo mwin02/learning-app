@@ -388,7 +388,7 @@ every build so the revision's shape is declared in the repo rather than
 accumulated in console state.
 
 ```
-learning-app  ·  us-west1  ·  1 vCPU / 512Mi  ·  min 1 / max 4
+learning-app  ·  us-west1  ·  1 vCPU / 512Mi  ·  min 0 / max 4
   SA        learning-app@learning-app-prod-mzw.iam.gserviceaccount.com
   env       GOOGLE_VERTEX_PROJECT, GOOGLE_VERTEX_LOCATION=us-central1
   secrets   DATABASE_URL=supabase-database-url:latest
@@ -397,8 +397,13 @@ learning-app  ·  us-west1  ·  1 vCPU / 512Mi  ·  min 1 / max 4
   URL       https://learning-app-74223797331.us-west1.run.app
 ```
 
-- **`--min-instances 1`** (locked): a cold start in front of a beta user's
-  first impression isn't worth the saving, and GCP credits absorb it.
+- **`--min-instances 0`** (changed 2026-07-30, was min 1): the original min-1
+  rationale — "credits absorb the idle cost" — died with the credits. At beta
+  traffic, request-based billing sits inside Cloud Run's always-free tier
+  (180k vCPU-s / 360k GiB-s / 2M requests per month), so min 0 is ~$0/mo vs
+  ~$50/mo idling. Cold start is ~3–5s (sub-second boot, `startup-cpu-boost`,
+  plus the DB startup probe). Flip back to min 1 when there are paying users
+  to shield from that first hit.
 - **`--max-instances 4`**: 4 × the adapter-pg pool (10) = 40 client connections
   into the Supabase pooler, which D4's worker pool shares. `worker-deploy.md`
   §7 has the arithmetic; add both sides before raising either.
