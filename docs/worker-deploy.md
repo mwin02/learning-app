@@ -28,7 +28,12 @@ Shell variables used throughout (project/region come from `.env.local`):
 
 ```bash
 export PROJECT_ID=$(grep -oE '^GOOGLE_VERTEX_PROJECT=.*' .env.local | cut -d= -f2)
-export REGION=$(grep -oE '^GOOGLE_VERTEX_LOCATION=.*' .env.local | cut -d= -f2)  # us-central1
+# NOT GOOGLE_VERTEX_LOCATION — that says where the MODELS are served. The pool's
+# region tracks the DATABASE (Supabase is aws-1-us-west-1) because the worker is
+# far more DB-chatty than it is Vertex-chatty. D3 moved the app here for the same
+# reason; the Artifact Registry repo already lives in us-west1.
+export REGION=us-west1
+export VERTEX_LOCATION=us-central1
 export REPO=learning-app          # Artifact Registry repo name
 export IMAGE=$REGION-docker.pkg.dev/$PROJECT_ID/$REPO/course-worker
 export SA=course-worker@$PROJECT_ID.iam.gserviceaccount.com
@@ -91,13 +96,20 @@ of a known-good tag.
 
 ## 4. DATABASE_URL into Secret Manager (one-time + rotations)
 
+> **Already done by D3 (2026-07-29), under a different name.** The secret is
+> **`supabase-database-url`**, shared with the Cloud Run app service — two
+> secrets holding the same pooler URL would be one Postgres role either way, so
+> sharing costs no isolation and removes a rotation you can forget. Skip the
+> create below; just grant this pool's SA access in step 5. `app-deploy.md` §4
+> has the full secret inventory.
+
 The value is the **Supabase transaction-pooler URL** (port 6543,
 `?sslmode=require`) — the same string commented out in `.env.local`. Pipe it
 in; don't put it on the command line (shell history):
 
 ```bash
 printf '%s' 'postgresql://…pooler.supabase.com:6543/postgres?sslmode=require' |
-  gcloud secrets create course-worker-database-url \
+  gcloud secrets create supabase-database-url \
     --data-file=- --project $PROJECT_ID
 ```
 
@@ -115,9 +127,9 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
   --member serviceAccount:$SA --role roles/aiplatform.user
 
 # Read ONLY this secret (binding on the secret, not the project):
-gcloud secrets add-iam-policy-binding course-worker-database-url \
+gcloud secrets add-iam-policy-binding supabase-database-url \
   --member serviceAccount:$SA --role roles/secretmanager.secretAccessor \
-  --project $PROJECT_ID
+  --project $PROJECT_ID --condition=None
 ```
 
 ## 6. Create the worker pool
@@ -128,8 +140,8 @@ gcloud run worker-pools create course-worker \
   --image $IMAGE:<tag> \
   --instances 2 \
   --service-account $SA \
-  --set-env-vars GOOGLE_VERTEX_PROJECT=$PROJECT_ID,GOOGLE_VERTEX_LOCATION=$REGION \
-  --set-secrets DATABASE_URL=course-worker-database-url:latest \
+  --set-env-vars GOOGLE_VERTEX_PROJECT=$PROJECT_ID,GOOGLE_VERTEX_LOCATION=$VERTEX_LOCATION \
+  --set-secrets DATABASE_URL=supabase-database-url:latest \
   --memory 1Gi --cpu 1
 ```
 
@@ -181,7 +193,7 @@ node-postgres pool defaults to **10 client connections max** (and stays near
 | Pause (stop billing for instances) | same, `--instances 0` |
 | Deploy a new image | `gcloud run worker-pools update course-worker --region $REGION --image $IMAGE:<new-tag>` |
 | Roll back | same command with the previous known-good tag |
-| Rotate DATABASE_URL | `gcloud secrets versions add course-worker-database-url --data-file=-`, then `update --image` (same tag) to restart instances |
+| Rotate DATABASE_URL | `gcloud secrets versions add supabase-database-url --data-file=-`, then `update --image` (same tag) to restart instances |
 | Tail logs | `gcloud beta run worker-pools logs tail course-worker --region $REGION` (or Logs Explorer) |
 | Tear down | `worker-pools delete`, then optionally delete the secret/SA/repo |
 

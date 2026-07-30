@@ -1,0 +1,152 @@
+# Cloud Build pipeline for the Next.js app (free-beta Block D3).
+#
+# Two callers, same file:
+#   - the `deploy-main` trigger, on every push to main (the normal path)
+#   - by hand, for a rebuild off an arbitrary tree:
+#       gcloud builds submit --project $PROJECT_ID --config cloudbuild.yaml \
+#         --substitutions=_TAG=$(git rev-parse --short HEAD),_SUPABASE_URL=…,_SUPABASE_ANON_KEY=… .
+#
+# The trigger passes _TAG=$SHORT_SHA, so every automatically deployed image is
+# tagged with a real commit and rollback targets are always coherent. A manual
+# submit is only as honest as the tree you run it from — see app-deploy.md §3.
+#
+# Builds server-side on amd64 (a plain `docker build` on Apple Silicon produces
+# an arm64 image Cloud Run cannot run), then MIGRATES, then deploys — in that
+# order, so a schema change that fails never reaches a running revision.
+#
+# ── Why a migrate step lives here ────────────────────────────────────────────
+# `vercel.json`'s buildCommand (`prisma migrate deploy && next build`) was the
+# only thing applying migrations to Supabase. Decommissioning Vercel removes it,
+# so this pipeline inherits ownership: without step 3 the schema silently stops
+# tracking `main`. It runs the Dockerfile's own `deps` stage — which is already
+# a complete Prisma CLI environment (node_modules, prisma/, prisma.config.ts) —
+# so there is no second image to build or keep in sync, and step 1's layers are
+# reused by step 2 from the same daemon's cache.
+#
+# prisma.config.ts reads DIRECT_URL. It gets the Supabase SESSION-mode pooler
+# (pooler host, port 5432) — NOT the 6543 transaction pooler, which multiplexes
+# at statement level and breaks the advisory lock migrate takes, and NOT the
+# `db.<ref>.supabase.co:5432` direct endpoint, which is IPv6-only on current
+# Supabase projects and therefore unreachable from IPv4-only Cloud Build
+# workers. Session mode is a real session over IPv4, which is what migrate
+# needs. That secret is granted to the Cloud Build service account ONLY — the
+# runtime service account never sees it.
+#
+# ── Why substitutions rather than a bare --tag submit ────────────────────────
+# `next build` inlines NEXT_PUBLIC_* into the client bundle, so the two Supabase
+# values are build args and the resulting image is bound to one Supabase
+# project. Rotating the anon key is a rebuild, not a restart. Both are
+# publishable by design (they ship in the client JS either way), which is why
+# they are substitutions and not secrets.
+
+# ── _REGION is not GOOGLE_VERTEX_LOCATION ───────────────────────────────────
+# Both runbooks used to derive one from the other. They are unrelated: _REGION
+# is where the service and its images live, and it tracks the DATABASE, because
+# every SSR render makes several Prisma round trips (Supabase is in
+# aws-1-us-west-1; Vercel's sfo1 was co-located for the same reason).
+# _VERTEX_LOCATION is where the models are served and stays us-central1.
+
+substitutions:
+  _REGION: us-west1
+  _VERTEX_LOCATION: us-central1
+  _REPO: learning-app
+  _SERVICE: learning-app
+  _TAG: latest
+  _SUPABASE_URL: ''
+  _SUPABASE_ANON_KEY: ''
+
+steps:
+  # 0. Refuse to build without the two NEXT_PUBLIC_* values.
+  #
+  # They have empty defaults so the file documents its own interface, but an
+  # empty anon key does NOT fail the build — `next build` happily inlines "",
+  # and isSupabaseConfigured() then reports false at runtime, which turns auth
+  # OFF for the whole deployment. Silent, and it looks like a Supabase outage.
+  # Cheap to catch here; nearly free to catch anywhere else. This matters most
+  # for TRIGGERED builds, where nobody is watching the substitutions go by.
+  - id: check-substitutions
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        test -n "${_SUPABASE_URL}" || { echo "ABORT: _SUPABASE_URL is empty"; exit 1; }
+        test -n "${_SUPABASE_ANON_KEY}" || { echo "ABORT: _SUPABASE_ANON_KEY is empty"; exit 1; }
+        test -n "${_TAG}" || { echo "ABORT: _TAG is empty"; exit 1; }
+        echo "substitutions present; building ${_SERVICE}:${_TAG} for ${_REGION}"
+
+  # 1. The Prisma CLI environment, as a throwaway local image.
+  - id: build-migrator
+    name: gcr.io/cloud-builders/docker
+    args: ['build', '--target', 'deps', '-t', 'migrator', '.']
+
+  # 2. The app image. Reuses step 1's `deps` layers from the local cache.
+  - id: build-app
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --build-arg
+      - NEXT_PUBLIC_SUPABASE_URL=${_SUPABASE_URL}
+      - --build-arg
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=${_SUPABASE_ANON_KEY}
+      - -t
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${_TAG}
+      - .
+
+  # 3. Push before deploying — the implicit `images:` push runs only after all
+  #    steps, which is too late for step 5.
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${_TAG}']
+
+  # 4. Migrate. After the build (never migrate for a revision that can't
+  #    compile), before the deploy (never serve a revision the schema lags).
+  - id: migrate
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    secretEnv: [DIRECT_URL]
+    args:
+      - -c
+      - docker run --rm -e DIRECT_URL="$$DIRECT_URL" migrator npx prisma migrate deploy
+
+  # 5. Deploy. Every flag is repeated on every build on purpose: the revision's
+  #    shape is declared here, not accumulated in console state.
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${_TAG}
+      - --region=${_REGION}
+      - --service-account=learning-app@${PROJECT_ID}.iam.gserviceaccount.com
+      - --allow-unauthenticated
+      - --port=8080
+      - --cpu=1
+      - --memory=512Mi
+      # min 1: a cold start in front of a beta user's first impression isn't
+      # worth the saving. max 4: 4 × the adapter-pg pool (10) = 40 client
+      # connections into the Supabase pooler, which the D4 worker pool shares —
+      # see worker-deploy.md §7 before raising either side.
+      - --min-instances=1
+      - --max-instances=4
+      # A booted server that can't reach Postgres must not take traffic.
+      - --startup-probe=httpGet.path=/api/health?probe=db,periodSeconds=5,failureThreshold=6
+      - --set-env-vars=GOOGLE_VERTEX_PROJECT=${PROJECT_ID},GOOGLE_VERTEX_LOCATION=${_VERTEX_LOCATION}
+      - --set-secrets=DATABASE_URL=supabase-database-url:latest,YOUTUBE_API_KEY=youtube-api-key:latest
+
+availableSecrets:
+  secretManager:
+    - versionName: projects/${PROJECT_ID}/secrets/supabase-session-url/versions/latest
+      env: DIRECT_URL
+
+timeout: 1800s
+
+# Required once a build runs under an explicitly specified service account, which
+# 2nd-gen repository triggers mandate (`--service-account`): Cloud Build then
+# refuses the build unless logging is pinned, because it can no longer fall back
+# to the legacy SA's own logs bucket. Harmless for manual `builds submit` runs,
+# which keep using the default identity.
+options:
+  logging: CLOUD_LOGGING_ONLY

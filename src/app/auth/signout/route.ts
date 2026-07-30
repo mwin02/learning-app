@@ -4,6 +4,7 @@
 
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient, isSupabaseConfigured } from '@/lib/supabase/server';
+import { publicOrigin } from '@/lib/api/public-origin';
 
 export const runtime = 'nodejs';
 
@@ -13,5 +14,5 @@ export async function POST(req: Request) {
     await supabase.auth.signOut();
   }
   // 303: browsers follow a POST redirect with GET.
-  return NextResponse.redirect(new URL('/', new URL(req.url).origin), { status: 303 });
+  return NextResponse.redirect(new URL('/', publicOrigin(req)), { status: 303 });
 }

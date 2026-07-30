@@ -8,6 +8,7 @@
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient, isSupabaseConfigured } from '@/lib/supabase/server';
 import { syncUser } from '@/lib/auth/user-sync';
+import { publicOrigin } from '@/lib/api/public-origin';
 import { safeNextPath } from '../safe-next';
 
 export const runtime = 'nodejs';
@@ -16,16 +17,19 @@ export async function GET(req: Request) {
   const reqUrl = new URL(req.url);
   const code = reqUrl.searchParams.get('code');
   const next = safeNextPath(reqUrl.searchParams.get('next'));
+  // Behind a proxy, reqUrl.origin is the container's bind address — every
+  // redirect below must use the public one or the browser lands nowhere.
+  const origin = publicOrigin(req);
 
   if (!code || !isSupabaseConfigured()) {
-    return NextResponse.redirect(new URL('/?auth_error=1', reqUrl.origin));
+    return NextResponse.redirect(new URL('/?auth_error=1', origin));
   }
 
   const supabase = await createSupabaseServerClient();
   const { data, error } = await supabase.auth.exchangeCodeForSession(code);
   if (error || !data.user) {
     console.error('[auth/callback] code exchange failed', { message: error?.message });
-    return NextResponse.redirect(new URL('/?auth_error=1', reqUrl.origin));
+    return NextResponse.redirect(new URL('/?auth_error=1', origin));
   }
 
   try {
@@ -36,5 +40,5 @@ export async function GET(req: Request) {
     console.error('[auth/callback] user sync failed', err);
   }
 
-  return NextResponse.redirect(new URL(next, reqUrl.origin));
+  return NextResponse.redirect(new URL(next, origin));
 }

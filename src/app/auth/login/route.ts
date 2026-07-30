@@ -6,6 +6,7 @@
 
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient, isSupabaseConfigured } from '@/lib/supabase/server';
+import { publicOrigin } from '@/lib/api/public-origin';
 import { safeNextPath } from '../safe-next';
 
 export const runtime = 'nodejs';
@@ -24,7 +25,9 @@ export async function GET(req: Request) {
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: {
-      redirectTo: `${reqUrl.origin}/auth/callback?next=${encodeURIComponent(next)}`,
+      // Not reqUrl.origin: behind Cloud Run that is the container's bind
+      // address (0.0.0.0:8080), which Google would send the browser back to.
+      redirectTo: `${publicOrigin(req)}/auth/callback?next=${encodeURIComponent(next)}`,
     },
   });
   if (error || !data.url) {

@@ -50,7 +50,11 @@ RUN npm ci
 FROM node:22-slim AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
-COPY package.json package-lock.json prisma.config.ts tsconfig.json next.config.ts postcss.config.mjs next-env.d.ts ./
+# next-env.d.ts is deliberately absent: it is generated (and gitignored), and
+# `next build` rewrites it before type-checking. COPYing it made the image build
+# depend on a file that exists on a developer's disk but not in a clean
+# checkout — which is exactly what a Cloud Build source upload is.
+COPY package.json package-lock.json prisma.config.ts tsconfig.json next.config.ts postcss.config.mjs ./
 COPY prisma ./prisma
 COPY public ./public
 COPY src ./src
