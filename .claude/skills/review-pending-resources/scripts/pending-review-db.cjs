@@ -2,6 +2,12 @@
 // the app's env so it reuses the same Prisma + pg-adapter setup as src/lib/db.ts:
 //   node --env-file=.env.local .claude/skills/review-pending-resources/scripts/pending-review-db.cjs <cmd> ...
 //
+// Against PRODUCTION (post-cutover the review queue lives on Supabase), override
+// DATABASE_URL inline — shell env beats --env-file, and .env.local stays local:
+//   DATABASE_URL="$SUPABASE_DB_URL" node --env-file=.env.local <this script> ...
+// Every run prints the database it connected to; check it before trusting an
+// empty queue.
+//
 //   sample <rootId> [n]  → for a container root, the subtree size and a spread of
 //                          up to n atomic LEAF resources to spot-check in the
 //                          browser. The GET API only returns a root's *direct*
@@ -15,6 +21,12 @@ const { PrismaClient } = require('@prisma/client');
 const url = new URL(process.env.DATABASE_URL);
 if (!url.searchParams.has('uselibpqcompat')) url.searchParams.set('uselibpqcompat', 'true');
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: url.toString() }) });
+
+// Always announce the target. The review queue this drains lives on Supabase in
+// production but on the local Docker Postgres by default, and the failure mode
+// is silent: pointed at the wrong one it reports an empty queue rather than an
+// error, which reads as "nothing to review" instead of "wrong database".
+console.error(`[db] ${url.hostname}:${url.port || '5432'}${url.pathname}`);
 
 const [cmd, ...rest] = process.argv.slice(2);
 

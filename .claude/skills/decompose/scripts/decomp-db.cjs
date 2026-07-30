@@ -2,6 +2,12 @@
 // so it reuses the same Prisma + pg-adapter setup as src/lib/db.ts:
 //   node --env-file=.env.local .claude/skills/decompose/scripts/decomp-db.cjs <cmd> [arg]
 //
+// Against PRODUCTION (post-cutover the review queue lives on Supabase), override
+// DATABASE_URL inline — shell env beats --env-file, and .env.local stays local:
+//   DATABASE_URL="$SUPABASE_DB_URL" node --env-file=.env.local <this script> ...
+// Every run prints the database it connected to; check it before trusting an
+// empty queue.
+//
 //   queue [n]     → the n oldest rows still queued for review (default 10)
 //   lookup <id>   → the target row's url/topic/difficulty/type/duration/status
 //   verify <id>   → post-decomposition state (parent status, child count, types,
@@ -16,6 +22,12 @@ const { PrismaClient } = require('@prisma/client');
 const url = new URL(process.env.DATABASE_URL);
 if (!url.searchParams.has('uselibpqcompat')) url.searchParams.set('uselibpqcompat', 'true');
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: url.toString() }) });
+
+// Always announce the target. The review queue this drains lives on Supabase in
+// production but on the local Docker Postgres by default, and the failure mode
+// is silent: pointed at the wrong one it reports an empty queue rather than an
+// error, which reads as "nothing to review" instead of "wrong database".
+console.error(`[db] ${url.hostname}:${url.port || '5432'}${url.pathname}`);
 
 const [cmd, arg] = process.argv.slice(2);
 

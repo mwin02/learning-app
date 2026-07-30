@@ -31,6 +31,7 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { prisma } from '../src/lib/db';
+import { requireTargetAck } from './target-guard';
 
 // Order is cosmetic (TRUNCATE CASCADE resolves dependencies); listed leaf-ward.
 const MAP_TABLES = [
@@ -83,7 +84,9 @@ async function keptCounts() {
 
 async function main() {
   const apply = process.argv.includes('--yes');
-  console.log(`\n=== map-layer reset (${apply ? 'APPLY' : 'DRY RUN'}) ===\n`);
+  console.log(`\n=== map-layer reset (${apply ? 'APPLY' : 'DRY RUN'}) ===`);
+  requireTargetAck('reset-maps', apply);
+  console.log('');
 
   await snapshot();
   console.log('\n[reset-maps] preserved tables (untouched):');
