@@ -490,5 +490,102 @@ Sequence matters — Vercel must keep working until the new domain verifies:
 | List revisions | `gcloud run revisions list --service learning-app --region $REGION` |
 
 Structured logs (`src/lib/log.ts`) land in Cloud Logging as `jsonPayload`, same
-as the worker; `worker-deploy.md` §10 has the filter patterns. Block B1 adds
-the `severity` mapping and Error Reporting grouping on top.
+as the worker; `worker-deploy.md` §10 has the filter patterns.
+
+## 8. Error Reporting & alerting (B1)
+
+`src/lib/log.ts` emits what Cloud Logging and Error Reporting read, so ingestion
+needs no agent, no SDK and no dependency — the code half is done by deploying.
+Per line: `severity` (`INFO`/`WARNING`/`ERROR`) mapped from `level`, and on error
+lines a `message` holding the stack plus a `serviceContext`. Error Reporting
+groups on the stack frames in `message`; the `@type` ReportedErrorEvent marker is
+only added for an error with no stack, where there are no frames to group on.
+
+Three sources feed it:
+
+| Source | Event | Covers |
+| --- | --- | --- |
+| `src/instrumentation.ts` (`onRequestError`) | `server.unhandled` | every server error Next captures — Server Component renders, route handlers, Server Actions |
+| `POST /api/client-error` | `client.unhandled` | browser-side crashes, posted by `src/app/error.tsx` / `global-error.tsx` |
+| any `logError` call site | its own event | the pipeline's handled-but-real failures |
+
+`server.unhandled` is the one that matters most, and it is not redundant with the
+error boundary: in production Next replaces a Server Component's error with a
+generic message plus a `digest` before the boundary sees it, so the boundary
+alone would report no usable stack. Both sides log the same `digest`, so a
+user-quoted reference number joins them.
+
+The **worker** groups separately, via `LOG_SERVICE_NAME=course-worker` baked into
+`Dockerfile.worker` (Cloud Run injects `K_SERVICE` for the app; a plain container
+has none). Without it "the app is broken" and "a course build failed" land in one
+service.
+
+### Notification channel → email (one-time, console-only)
+
+Error Reporting notifies on a **new** group, or a new event in a group marked
+resolved. There is no gcloud/API surface for selecting the channels — it is a
+console step, which is why it lives here as a runbook item rather than in code.
+
+1. Monitoring → **Alerting → Notification channels** → add an **Email** channel
+   for `david.hong199@gmail.com`. Requires `roles/monitoring.editor`.
+2. Error Reporting → **Configure notifications** → select that channel. Requires
+   Error Reporting User/Admin (or project Editor/Owner). The setting is
+   **project-level**, not per-service, so it covers app and worker at once.
+3. Error Reporting rate-limits itself to **5 notifications per group per hour** —
+   a crash loop cannot flood the inbox.
+
+Notify-on-every-new-group is the right setting *while there are no users*: volume
+is near zero, so every new group is signal. Once real traffic exists, keep this
+for visibility and add a separate Monitoring alerting policy on a log-based
+metric for rate spikes — a sudden increase matters more than a first sighting.
+
+### Verifying it end to end
+
+Force one of each and confirm both group. `severity` is the thing to check first
+— an empty `severity` is why nothing grouped before B1.
+
+```bash
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="learning-app" AND severity>=ERROR' \
+  --limit 5 --freshness=1h --format='value(jsonPayload.event, jsonPayload.message)'
+```
+
+Then check Error Reporting for the group.
+
+**Server half — `GET /api/health?probe=throw`.** Admin-only, and non-enumerable
+the same way `probe=ai` is: a non-admin gets the plain liveness `200`, so the
+probe is invisible without an admin session. It throws an uncaught error inside
+the route handler, which is exactly the path `onRequestError` catches
+(`routeType: "route"`, verified locally). The message is fixed and says it is a
+drill, so repeated probes land in ONE Error Reporting group rather than firing a
+new-group notification each time. Run it after any deploy that touches logging,
+and once against a freshly wired notification channel to prove delivery.
+
+Because it needs an admin session cookie, drive it from the deployed app's own
+page context rather than curl (the same pattern the review skills use; E1 will
+document it properly):
+
+```js
+await fetch('/api/health?probe=throw').then((r) => r.status) // 500 when admin, 200 when not
+```
+
+**Client half:** any real browser crash, or a same-origin POST to
+`/api/client-error` from the deployed app's page context (the endpoint enforces
+same-origin, so an off-site curl gets 403 by design — see below).
+
+### The client endpoint's abuse surface
+
+`/api/client-error` is unauthenticated on purpose: a crash on the sign-in page or
+during hydration happens to visitors with no session. What bounds it:
+
+- **same-origin check** (the H2 wrapper's `requireSameOrigin`) — an off-site
+  script cannot write to our logs at our expense
+- **8 KB payload cap**, checked on `content-length` and again on the body
+- **per-instance token bucket** (20 burst, 1 per 3s) — logged at `WARNING` when
+  it trips, deliberately not `ERROR`, so the throttle never pages on itself
+- **client-side dedupe**, max 3 distinct reports per page load
+
+The bucket is per-instance and the service runs min 0 / max 4, so the real
+guarantee is `instances x rate`. That is accepted: what it protects is the log
+bill, and the alternative — a DB round trip — would put Postgres on the failure
+path of the one endpoint whose job is to work while the app is broken.

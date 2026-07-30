@@ -25,7 +25,7 @@
 import { generateObject } from 'ai';
 import { z } from 'zod';
 import { getModel } from '@/lib/ai/models';
-import { recordUsage } from '@/lib/log';
+import { logError, recordUsage } from '@/lib/log';
 import { TOPIC_SLUGS } from '@/types/resource';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 import {
@@ -210,7 +210,7 @@ export async function validateTopic(
       detail: { alias: normalized, canonical, subject: v.subject },
     });
   } catch (err) {
-    console.error('[topic-gate] failed to persist canonicalization', { normalized, canonical, err });
+    logError('topic-gate.canonicalization-persist-failed', { normalized, canonical, err });
     onTrace({
       kind: 'info',
       label: 'registry: recordCanonicalization failed',

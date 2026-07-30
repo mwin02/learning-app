@@ -33,6 +33,7 @@ import {
   markUnsupported,
 } from '@/lib/agents/decomposition/upsert-resource';
 import { rejudgeForDemandingPaths, type RejudgeResult } from '@/lib/agents/decomposition/rejudge-sourced-for';
+import { logError } from '@/lib/log';
 
 // A force-decompose of a large container runs YouTube paging / doc fetch + chunked
 // concept-derivation LLM calls and can exceed Vercel's 60s cap — those are a
@@ -115,7 +116,7 @@ export const POST = withAdminAuth(async (req) => {
     try {
       return await rejudgeForDemandingPaths(resource.id);
     } catch (err) {
-      console.error('[decomposition-review] rejudge hook failed', { resourceId: resource.id, err });
+      logError('decomposition-review.rejudge-hook-failed', { resourceId: resource.id, err });
       // Audit 1.6: never echo the raw exception (route convention) — the full
       // error is in the server log above.
       return { error: 'rejudge failed' };
@@ -197,7 +198,7 @@ export const POST = withAdminAuth(async (req) => {
       }
     }
   } catch (err) {
-    console.error('[decomposition-review] failure', { resourceId: resource.id, action: input.action, err });
+    logError('decomposition-review.failed', { resourceId: resource.id, action: input.action, err });
     return errorResponse(500, 'INTERNAL', 'Internal error applying review decision.');
   }
 });

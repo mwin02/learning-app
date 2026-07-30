@@ -17,6 +17,7 @@ import { withAdminAuth } from '@/lib/api/with-admin-auth';
 import { mapReviewActionSchema } from '@/lib/api/map-review-schema';
 import { resolveFinding, applyConceptMerge, listOpenFindings } from '@/lib/agents/map/path-review';
 import { MergeCycleError } from '@/lib/agents/map/merge-concept';
+import { logError } from '@/lib/log';
 
 // Prisma needs Node, not Edge. Merge is a quick DB transaction (no LLM), so the
 // default duration is ample.
@@ -127,7 +128,7 @@ export const POST = withAdminAuth(async (req) => {
     if (err instanceof MergeCycleError) {
       return errorResponse(422, 'INVALID_STATE', 'Merge refused: it would create a prerequisite cycle. Resolve manually.');
     }
-    console.error('[map-review] failure', { reviewId: input.reviewId, action: input.action, err });
+    logError('map-review.failed', { reviewId: input.reviewId, action: input.action, err });
     return errorResponse(500, 'INTERNAL', 'Internal error applying review decision.');
   }
 });

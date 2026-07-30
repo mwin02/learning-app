@@ -15,6 +15,7 @@ import { Difficulty } from '@prisma/client';
 import { withAdminAuth } from '@/lib/api/with-admin-auth';
 import { buildTrack, TrackBuildError } from '@/lib/agents/track/build-track';
 import { createTraceCollector } from '@/lib/agents/agent-trace';
+import { logError } from '@/lib/log';
 
 // buildTrack runs a Pro compose call — needs Node, and headroom over the default.
 export const runtime = 'nodejs';
@@ -70,7 +71,7 @@ export const POST = withAdminAuth(async (req) => {
         const code: ErrorCode = err.message.includes('No Path') ? 'NOT_FOUND' : 'INVALID_STATE';
         return errorResponse(code === 'NOT_FOUND' ? 404 : 409, code, err.message);
       }
-      console.error('[build-track route] build failed', err.cause);
+      logError('build-track.failed', { err: err.cause });
       return errorResponse(500, 'INTERNAL', err.message);
     }
     throw err;

@@ -21,6 +21,7 @@ import { prisma } from '@/lib/db';
 import { authorConceptBank } from '@/lib/agents/content/author-concept-bank';
 import { CONCEPT_BANK_ATTEMPT_COOLDOWN_MS, CONCEPT_BANK_GEN_CONCURRENCY } from '@/lib/config';
 import type { OnTrace } from '@/lib/agents/agent-trace';
+import { logError } from '@/lib/log';
 
 // Audit 3.3: is this bankless concept inside the retry cool-down of a failed/empty
 // generation attempt? Backfill skips it (the concept stays on the operator
@@ -215,7 +216,7 @@ export async function backfillConceptBanks(args: {
         return;
       }
       result.failed++;
-      console.error('[content-backfill-banks] concept generation rejected', {
+      logError('concept-bank.generation-rejected', {
         concept: chunk[j].slug,
         error: s.reason instanceof Error ? s.reason.message : String(s.reason),
       });

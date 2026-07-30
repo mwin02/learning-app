@@ -20,7 +20,7 @@
 import os from 'node:os';
 import { COURSE_WORKER_POLL_MS } from '../src/lib/config';
 import { prisma } from '../src/lib/db';
-import { log } from '../src/lib/log';
+import { log, logError } from '../src/lib/log';
 import { tickOnce, reclaimStaleClaims, processCourseRequest } from '../src/lib/services/course-worker';
 import { claimNextQueued, queueDepth } from '../src/lib/services/course-request';
 import { sweepStuckPrograms } from '../src/lib/services/program';
@@ -101,8 +101,24 @@ async function main() {
   await prisma.$disconnect();
 }
 
+// Free-beta B1: the three ways this process can die. All go through logError so
+// they carry severity + a stack and reach Error Reporting — previously a worker
+// crash left only an unparsed console line, and with `restart: unless-stopped`
+// (compose) or a VM restart policy the loop would silently crash-restart forever
+// with nobody paged. Handlers are terminal on purpose: an unhandled rejection
+// leaves the pipeline's state unknown, so exiting to a clean restart beats
+// continuing on a corrupted claim.
+process.on('unhandledRejection', (err) => {
+  logError('course-worker.unhandled-rejection', { err, workerId });
+  process.exit(1);
+});
+process.on('uncaughtException', (err) => {
+  logError('course-worker.uncaught-exception', { err, workerId });
+  process.exit(1);
+});
+
 main().catch(async (err) => {
-  console.error('[course-worker] fatal', err);
+  logError('course-worker.fatal', { err, workerId });
   await prisma.$disconnect();
   process.exit(1);
 });

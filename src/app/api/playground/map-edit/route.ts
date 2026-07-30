@@ -23,6 +23,7 @@ import {
   frontierGatedSpine,
   type RecomputeResult,
 } from '@/lib/agents/map/recompute-readiness';
+import { logError } from '@/lib/log';
 
 // Prisma + the recompute query need Node, not Edge. No long LLM work here, so the
 // default route timeout is plenty.
@@ -92,7 +93,7 @@ export const POST = withAdminAuth(async (req) => {
     if (isUniqueViolation(err)) {
       return errorResponse(409, 'CONFLICT', 'Edit conflicts with an existing row (duplicate slug or edge).');
     }
-    console.error('[map-edit] failure', { action: input.action, err });
+    logError('map-edit.failed', { action: input.action, err });
     return errorResponse(500, 'INTERNAL', 'Internal error applying map edit.');
   }
 });

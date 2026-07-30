@@ -29,6 +29,7 @@ import { getModel } from '@/lib/ai/models';
 import { safeEmbedResource } from '@/lib/ai/embeddings';
 import { computeTrustScore } from '@/lib/curation/trust-score';
 import type { SearchResult } from '@/lib/agents/tools/search-resources';
+import { logError } from '@/lib/log';
 
 const ONRAMP_MIN_READ = 5;
 const ONRAMP_MAX_READ = 20;
@@ -86,7 +87,7 @@ export async function generateOnRampResource(args: {
       lesson = await authorAndCritique(topic, concept.title, abortSignal);
     } catch (err2) {
       if (abortSignal?.aborted) throw err2;
-      console.error('[onramp-gen] authoring failed after retry; caller will fall back to sourcing', {
+      logError('onramp-gen.authoring-failed-after-retry', {
         topic,
         concept: concept.slug,
         error: err2 instanceof Error ? err2.message : String(err2),
@@ -129,7 +130,7 @@ export async function generateOnRampResource(args: {
     // A concurrent generator may have inserted the same url first; reuse theirs.
     const raced = await prisma.resource.findUnique({ where: { url }, select: RESOURCE_SELECT });
     if (raced) return toSearchResult(raced);
-    console.error('[onramp-gen] persist failed', { topic, concept: concept.slug, error: (err as Error).message });
+    logError('onramp-gen.persist-failed', { topic, concept: concept.slug, err });
     return null;
   }
 

@@ -25,6 +25,7 @@ import { relatedTopics } from '@/types/resource';
 import type { SearchResult } from '@/lib/agents/tools/search-resources';
 import type { AuthoredConcept } from '@/lib/agents/map/cycle';
 import type { OnTrace } from '@/lib/agents/agent-trace';
+import { logError } from '@/lib/log';
 
 // Phase 2g-1 + symmetric short end: order-only, two-sided duration penalty. A resource
 // much LONGER than a single concept warrants is over-broad; one much SHORTER (a ~1-min
@@ -190,7 +191,7 @@ export async function attachCandidates(args: {
       // empty attachment, so this branch should be unreachable — but we never let
       // one concept's rejection fail the whole batch.
       const concept = chunk[j];
-      console.error('[map-attach] concept attachment rejected after retry', {
+      logError('map-attach.rejected-after-retry', {
         concept: concept.slug,
         error: s.reason instanceof Error ? s.reason.message : String(s.reason),
       });
@@ -236,7 +237,7 @@ async function attachOneWithRetry(
     try {
       return await attachOne(topics, concept, injected, onTrace);
     } catch (err2) {
-      console.error('[map-attach] concept attachment failed after retry; treating as spine hole', {
+      logError('map-attach.failed-after-retry', {
         concept: concept.slug,
         error: err2 instanceof Error ? err2.message : String(err2),
       });

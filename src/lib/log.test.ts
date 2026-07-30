@@ -6,6 +6,8 @@ import {
   addUsageToSnapshot,
   currentTraceId,
   recordUsage,
+  serviceContext,
+  takeStack,
   runWithTrace,
   traceUsageSnapshot,
   type UsageSnapshot,
@@ -41,10 +43,19 @@ describe('log helpers', () => {
     expect(lastJsonLine(error).level).toBe('error');
   });
 
-  it('serializes Error fields to { name, message }', () => {
+  it('serializes Error fields to { name, message }, stack moved to `message`', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     logError('failed', { err: new TypeError('boom') });
-    expect(lastJsonLine(spy).err).toEqual({ name: 'TypeError', message: 'boom' });
+    const line = lastJsonLine(spy);
+    expect(line.err).toEqual({ name: 'TypeError', message: 'boom' });
+    expect(line.message).toContain('TypeError: boom');
+  });
+
+  it('keeps the stack inline on a non-error line (nothing lifts it)', () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    log('note', { err: new TypeError('boom') });
+    const err = lastJsonLine(spy).err as Record<string, unknown>;
+    expect(err.stack).toContain('TypeError: boom');
   });
 
   it('omits traceId outside a trace, includes it inside', async () => {
@@ -55,6 +66,116 @@ describe('log helpers', () => {
       log('inside');
     });
     expect(lastJsonLine(spy).traceId).toBe('t-123');
+  });
+});
+
+describe('Cloud Logging / Error Reporting fields (B1)', () => {
+  it('maps level to severity on every line', () => {
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    log('a');
+    logWarn('b');
+    logError('c');
+    expect(lastJsonLine(info).severity).toBe('INFO');
+    expect(lastJsonLine(warn).severity).toBe('WARNING');
+    expect(lastJsonLine(error).severity).toBe('ERROR');
+  });
+
+  it('puts the stack in `message` so Error Reporting groups on the frames', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    logError('remediate.failed', { pathId: 'p1', err: new Error('uncoverable') });
+    const line = lastJsonLine(spy);
+    expect(line.message).toContain('remediate.failed: Error: uncoverable');
+    expect(line.message).toContain('    at ');
+    // Moved, not copied — a stack is the biggest thing in the line and Cloud
+    // Logging bills by volume.
+    expect(line.err).not.toHaveProperty('stack');
+    expect(line.pathId).toBe('p1');
+    // Frames are the grouping key; @type is only for the stack-less case.
+    expect(line).not.toHaveProperty('@type');
+  });
+
+  it('falls back to @type when no field carries a stack', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    logError('probe.failed', { reason: 'timeout' });
+    const line = lastJsonLine(spy);
+    expect(line.message).toBe('probe.failed');
+    expect(line['@type']).toBe(
+      'type.googleapis.com/google.devtools.clouderrorreporting.v1beta1.ReportedErrorEvent',
+    );
+  });
+
+  it('adds the Error Reporting fields only to error lines', () => {
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {});
+    log('worker.tick', { err: new Error('not an error line') });
+    const line = lastJsonLine(info);
+    expect(line).not.toHaveProperty('message');
+    expect(line).not.toHaveProperty('serviceContext');
+  });
+
+  it('keeps the H3 fields intact alongside the new ones', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await runWithTrace('t-b1', async () => {
+      logError('worker.failed', { requestId: 'cr9' });
+    });
+    const line = lastJsonLine(spy);
+    expect(line.level).toBe('error');
+    expect(line.event).toBe('worker.failed');
+    expect(line.traceId).toBe('t-b1');
+    expect(line.requestId).toBe('cr9');
+    expect(typeof line.ts).toBe('string');
+  });
+});
+
+describe('takeStack', () => {
+  it('finds a stack under any field name and removes it from that field', () => {
+    const line = { cause: { name: 'Error', message: 'x', stack: 'Error: x\n    at f' } };
+    expect(takeStack(line)).toContain('at f');
+    expect(line.cause).toEqual({ name: 'Error', message: 'x' });
+  });
+
+  it('accepts a pre-serialized { stack } object (client-reported errors)', () => {
+    expect(takeStack({ report: { stack: 'TypeError: e\n    at f (a.js:1:1)' } })).toContain('at f');
+  });
+
+  it('takes only the first stack, leaving a second error intact', () => {
+    const line = { a: { stack: 'first\n    at f' }, b: { stack: 'second\n    at g' } };
+    expect(takeStack(line)).toContain('first');
+    expect(line.b.stack).toContain('second');
+  });
+
+  it('returns null when nothing carries a usable stack', () => {
+    expect(takeStack({})).toBeNull();
+    expect(takeStack({ a: 1, b: 'two', c: null })).toBeNull();
+    expect(takeStack({ report: { stack: '' } })).toBeNull();
+  });
+});
+
+describe('logError does not mutate the caller\'s objects', () => {
+  it('leaves a caller-owned report object with its stack', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const report = { name: 'ClientError', message: 'boom', stack: 'ClientError: boom\n    at f' };
+    logError('client.unhandled', { report });
+    expect(lastJsonLine(spy).message).toContain('at f');
+    expect(report.stack).toBe('ClientError: boom\n    at f');
+  });
+});
+
+describe('serviceContext', () => {
+  it('prefers Cloud Run K_SERVICE and includes the revision', () => {
+    expect(serviceContext({ K_SERVICE: 'learning-app', K_REVISION: 'learning-app-00007-abc' })).toEqual({
+      service: 'learning-app',
+      version: 'learning-app-00007-abc',
+    });
+  });
+
+  it('falls back to LOG_SERVICE_NAME off Cloud Run, so the worker groups separately', () => {
+    expect(serviceContext({ LOG_SERVICE_NAME: 'course-worker' })).toEqual({ service: 'course-worker' });
+  });
+
+  it('defaults the service name and omits version when neither is set', () => {
+    expect(serviceContext({})).toEqual({ service: 'learning-app' });
   });
 });
 

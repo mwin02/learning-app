@@ -50,6 +50,12 @@ COPY scripts ./scripts
 RUN npx prisma generate
 
 ENV NODE_ENV=production
+# Free-beta B1: Cloud Run injects K_SERVICE for the app service, but the worker
+# runs as a plain container (compose locally, a VM in the D4 end state) and has
+# none. Baked into the image rather than the compose file so every host inherits
+# it — without it the worker's errors group under the app's service in Error
+# Reporting, and "the app is broken" can't be told from "a build failed".
+ENV LOG_SERVICE_NAME=course-worker
 USER node
 
 # `node --import tsx` (loader mode), NOT `npx tsx`: node must be PID 1 so
