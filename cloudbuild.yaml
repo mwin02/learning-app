@@ -1,7 +1,14 @@
 # Cloud Build pipeline for the Next.js app (free-beta Block D3).
 #
-#   gcloud builds submit --project $PROJECT_ID --config cloudbuild.yaml \
-#     --substitutions=_TAG=$(git rev-parse --short HEAD),_SUPABASE_URL=…,_SUPABASE_ANON_KEY=… .
+# Two callers, same file:
+#   - the `deploy-main` trigger, on every push to main (the normal path)
+#   - by hand, for a rebuild off an arbitrary tree:
+#       gcloud builds submit --project $PROJECT_ID --config cloudbuild.yaml \
+#         --substitutions=_TAG=$(git rev-parse --short HEAD),_SUPABASE_URL=…,_SUPABASE_ANON_KEY=… .
+#
+# The trigger passes _TAG=$SHORT_SHA, so every automatically deployed image is
+# tagged with a real commit and rollback targets are always coherent. A manual
+# submit is only as honest as the tree you run it from — see app-deploy.md §3.
 #
 # Builds server-side on amd64 (a plain `docker build` on Apple Silicon produces
 # an arm64 image Cloud Run cannot run), then MIGRATES, then deploys — in that
@@ -49,6 +56,25 @@ substitutions:
   _SUPABASE_ANON_KEY: ''
 
 steps:
+  # 0. Refuse to build without the two NEXT_PUBLIC_* values.
+  #
+  # They have empty defaults so the file documents its own interface, but an
+  # empty anon key does NOT fail the build — `next build` happily inlines "",
+  # and isSupabaseConfigured() then reports false at runtime, which turns auth
+  # OFF for the whole deployment. Silent, and it looks like a Supabase outage.
+  # Cheap to catch here; nearly free to catch anywhere else. This matters most
+  # for TRIGGERED builds, where nobody is watching the substitutions go by.
+  - id: check-substitutions
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        test -n "${_SUPABASE_URL}" || { echo "ABORT: _SUPABASE_URL is empty"; exit 1; }
+        test -n "${_SUPABASE_ANON_KEY}" || { echo "ABORT: _SUPABASE_ANON_KEY is empty"; exit 1; }
+        test -n "${_TAG}" || { echo "ABORT: _TAG is empty"; exit 1; }
+        echo "substitutions present; building ${_SERVICE}:${_TAG} for ${_REGION}"
+
   # 1. The Prisma CLI environment, as a throwaway local image.
   - id: build-migrator
     name: gcr.io/cloud-builders/docker
@@ -116,3 +142,11 @@ availableSecrets:
       env: DIRECT_URL
 
 timeout: 1800s
+
+# Required once a build runs under an explicitly specified service account, which
+# 2nd-gen repository triggers mandate (`--service-account`): Cloud Build then
+# refuses the build unless logging is pinned, because it can no longer fall back
+# to the legacy SA's own logs bucket. Harmless for manual `builds submit` runs,
+# which keep using the default identity.
+options:
+  logging: CLOUD_LOGGING_ONLY

@@ -189,6 +189,151 @@ compile) and **before** the deploy (never serve a revision the schema lags).
 > baffling `P1001: Can't reach database server`. Session mode is a real session
 > over IPv4, which is exactly what migrate needs.
 
+### 3b. Automatic deploys on merge (`deploy-main` trigger)
+
+The normal path is a **Cloud Build trigger on push to `main`**, running the same
+`cloudbuild.yaml`. The manual submit in §3 stays available for rebuilding an
+arbitrary tree (a rollback rebuild, a hotfix off a branch).
+
+Why triggered rather than by hand: Vercel's `buildCommand` already auto-deployed
+**and auto-migrated** on every merge, so this is not new exposure — it is the
+replacement for something that exists. Two side benefits: `$SHORT_SHA` is
+populated for triggered builds, so every deployed image carries a real commit
+tag (hand-tagging is how `5c92bc7-authfix` — a tag matching no commit — got
+deployed during D3); and a triggered build is always a **clean checkout**, which
+is exactly the condition that the `next-env.d.ts` bug failed under.
+
+**Set the trigger up BEFORE decommissioning Vercel (§6), not after.** You want
+it proven while a working deployment still exists. Until §6 runs, expect *two*
+builds per merge — harmless, and well inside Cloud Build's 2,500 free
+build-minutes/month at ~4.5 min per build.
+
+#### The connection is 2nd gen — and 1st gen does not work here
+
+Cloud Build has two GitHub mechanisms. **1st gen** (the "Cloud Build GitHub App"
+console link, `--repo-owner`/`--repo-name`) was tried first and could not be made
+to work in this project: every `triggers create` returned a bare
+`INVALID_ARGUMENT` with no field violations, and 1st-gen links are **invisible to
+`gcloud`** — there is no list command — so a failing trigger create is the only
+probe available. Don't spend time on it; it is also the deprecated path.
+
+**2nd gen** is what is deployed: a named `connection` + `repository` resource
+pair, both inspectable, plus a regional trigger.
+
+```
+connection   github-mwin02   us-west1   (app installation 149984108)
+repository   learning-app -> https://github.com/mwin02/learning-app.git
+trigger      deploy-main     us-west1   push ^main$
+```
+
+#### Step 1 — the P4SA needs to create secrets (one-time)
+
+A 2nd-gen connection stores the GitHub OAuth token in Secret Manager and manages
+its IAM, so Cloud Build's **P4SA** — the Google-managed service agent
+`service-<PROJECT_NUMBER>@gcp-sa-cloudbuild.iam.gserviceaccount.com`, *not* the
+build SA — must be able to create secrets. Without it, `connections create`
+fails with `could not assert Secret Manager permissions`.
+
+Google's documented answer is `roles/secretmanager.admin`, which would also let
+it read `supabase-database-url` and `supabase-session-url`. A custom role avoids
+that:
+
+```bash
+gcloud iam roles create cloudbuildConnectionSecrets --project=$PROJECT_ID \
+  --title="Cloud Build 2nd-gen connection secrets" --stage=GA \
+  --permissions=secretmanager.secrets.create,secretmanager.secrets.get,secretmanager.secrets.setIamPolicy,secretmanager.secrets.getIamPolicy,secretmanager.versions.add
+```
+
+```bash
+gcloud projects add-iam-policy-binding $PROJECT_ID --member serviceAccount:service-74223797331@gcp-sa-cloudbuild.iam.gserviceaccount.com --role projects/$PROJECT_ID/roles/cloudbuildConnectionSecrets --condition=None
+```
+
+It deliberately omits **`versions.access`**: Cloud Build self-grants accessor on
+the secret it creates via `setIamPolicy`, so it can read its own token but not
+any pre-existing secret's value. If a future connection operation fails on a
+missing permission, add that one permission — don't widen to admin.
+
+#### Step 2 — create the connection and authorize it (browser, one-time)
+
+```bash
+gcloud builds connections create github github-mwin02 --region=us-west1 --project=$PROJECT_ID
+```
+
+It creates the connection in `PENDING_USER_OAUTH` and prints a URL. Open it,
+authorize Cloud Build against the account owning the repo, and install the app
+scoped to **only** `learning-app`. (Its "use a robot account" advice is for
+shared setups; a personal account is fine.) Then confirm:
+
+```bash
+gcloud builds connections describe github-mwin02 --region=us-west1 --project=$PROJECT_ID --format='value(installationState.stage)'
+```
+
+`COMPLETE` means done. Register the repository:
+
+```bash
+gcloud builds repositories create learning-app --remote-uri=https://github.com/mwin02/learning-app.git --connection=github-mwin02 --region=us-west1 --project=$PROJECT_ID
+```
+
+#### Step 3 — create the trigger
+
+```bash
+set -a && . ./.env.local && set +a && gcloud builds triggers create github --name=deploy-main --repository=projects/$PROJECT_ID/locations/us-west1/connections/github-mwin02/repositories/learning-app --region=us-west1 --branch-pattern='^main$' --build-config=cloudbuild.yaml --service-account=projects/$PROJECT_ID/serviceAccounts/74223797331-compute@developer.gserviceaccount.com --substitutions=_TAG='$SHORT_SHA',_SUPABASE_URL="$NEXT_PUBLIC_SUPABASE_URL",_SUPABASE_ANON_KEY="$NEXT_PUBLIC_SUPABASE_ANON_KEY" --ignored-files='docs/**','**/*.md','.claude/**' --project=$PROJECT_ID
+```
+
+Four things that are not optional, each of which cost a failed attempt:
+
+- **`--service-account` is MANDATORY for 2nd-gen triggers.** Omitting it returns
+  the same opaque `INVALID_ARGUMENT` as everything else. This was the actual
+  blocker; the request body was otherwise byte-for-byte correct.
+- **`options.logging: CLOUD_LOGGING_ONLY` in `cloudbuild.yaml`** is the knock-on:
+  a build under an explicitly specified service account can't fall back to the
+  legacy SA's logs bucket, and Cloud Build refuses it unless logging is pinned.
+  A manual `builds submit` will *not* surface this — it uses the default identity.
+- **`--region` must match the connection's region.** `--region=global` is
+  rejected; the connection is regional.
+- **`_TAG='$SHORT_SHA'` single-quoted** so the shell leaves it alone; Cloud Build
+  expands it per build. This is what makes every auto-deployed image carry a real
+  commit tag.
+
+`--ignored-files` skips a build when a commit touches only docs/markdown. The two
+`NEXT_PUBLIC_*` values are read from `.env.local` at creation time and stored on
+the trigger — publishable by design (they ship in the client bundle), but
+deliberately not committed, which is why the trigger is created by command rather
+than checked in. `gcloud builds triggers export`/`import` round-trips it if you'd
+rather version it.
+
+#### Step 4 — verify
+
+The first firing should be a real merge to `main`. To force one otherwise:
+
+```bash
+gcloud builds triggers run deploy-main --branch=main --region=us-west1 --project=$PROJECT_ID
+```
+
+Then confirm the running image is tagged with a real commit:
+
+```bash
+gcloud run services describe learning-app --region us-west1 --project learning-app-prod-mzw --format='value(spec.template.spec.containers[0].image)'
+```
+
+#### Operating it
+
+| Task | Command |
+| --- | --- |
+| Pause auto-deploy | `gcloud builds triggers update github deploy-main --region=us-west1 --project $PROJECT_ID` with `--disabled`, or toggle it in the console |
+| See what it did | `gcloud builds list --region=us-west1 --project $PROJECT_ID --limit 10 --format='table(id,status,substitutions._TAG)'` |
+| Inspect the trigger | `gcloud builds triggers describe deploy-main --region=us-west1 --project $PROJECT_ID` |
+| Change scaling/secrets/probe | edit `cloudbuild.yaml` and merge — the deploy step is declarative |
+
+Note builds are now **regional** (`us-west1`); `gcloud builds list` without
+`--region` won't show them.
+
+**What the trigger does not protect you from.** The startup probe keeps a
+revision that can't reach Postgres from taking traffic, but an app-level bug that
+boots cleanly goes straight to production on merge. Until Block B1 lands the
+severity mapping and Error Reporting alerting, nothing pages you — you find out
+by looking. That is an argument for doing B1 soon, not for deploying by hand.
+
 ## 4. Service account & secrets (as built)
 
 A **separate** SA from `course-worker`, but a **shared** DB secret: two secrets

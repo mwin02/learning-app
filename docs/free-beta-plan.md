@@ -340,6 +340,14 @@ local library is the curated, backfilled, reviewed one).
 >
 > **B1 confirmation:** `jsonPayload` lines arrive in Cloud Logging with `event`
 > and `traceId` but **empty `severity`** — exactly the gap B1 exists to close.
+>
+> **Auto-deploy is wired** (`deploy-main`, a 2nd-gen Cloud Build trigger on push
+> to `main`), replacing what Vercel's `buildCommand` did. 1st-gen GitHub triggers
+> could not be made to work in this project; `--service-account` is mandatory for
+> 2nd-gen triggers and its absence returns an opaque `INVALID_ARGUMENT`, which
+> forces `options.logging: CLOUD_LOGGING_ONLY` in `cloudbuild.yaml`. Builds are
+> now **regional** — `gcloud builds list` without `--region=us-west1` shows
+> nothing. `app-deploy.md` §3b has the whole path.
 
 - Cloud Build → Artifact Registry (reuse the `$REPO` from worker-deploy.md), Cloud Run
   **service** (not worker pool) with Secret Manager-mounted env (Supabase URL + anon/service
