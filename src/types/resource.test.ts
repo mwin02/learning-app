@@ -13,6 +13,8 @@ describe('relatedTopics (directed)', () => {
 
   it('returns just the topic when it declares no outbound edges', () => {
     // Edgeless by design — the four topics T4d measured as delta-0.
+    // `probability-and-statistics` stays here on purpose: `statistics` widens INTO it
+    // (it is the superset shelf), and the reverse would buy nothing.
     for (const t of ['discrete-mathematics', 'linear-algebra', 'probability-and-statistics', 'physics-mechanics']) {
       expect(relatedTopics(t)).toEqual([t]);
     }
@@ -39,6 +41,16 @@ describe('relatedTopics (directed)', () => {
     expect(relatedTopics('javascript')).toEqual(['javascript']);
   });
 
+  it('reaches the superset stats shelf from the curated slug only', () => {
+    // Free-beta C2 prerequisite: T4 split the stats pool and left only `statistics`
+    // curated, so the 205 rows that carry a `probability-and-statistics` membership
+    // and no `statistics` one are reachable through this edge and no other.
+    expect(relatedTopics('statistics')).toEqual(
+      expect.arrayContaining(['statistics', 'probability-and-statistics']),
+    );
+    expect(relatedTopics('probability-and-statistics')).toEqual(['probability-and-statistics']);
+  });
+
   it('declares the reverse explicitly where it is still wanted', () => {
     // python -> python-data-ml came free under the symmetric closure and carries 5 real
     // attachments, so T4d had to declare it rather than inherit it.
@@ -59,7 +71,10 @@ describe('relatedTopics (directed)', () => {
   it('never widens a curated topic into an unknown slug without a deliberate entry', () => {
     // Every widening target must be a curated slug or an agent-minted slug we know
     // about — a typo here silently produces an empty widening rather than an error.
-    const known = new Set<string>([...TOPIC_SLUGS, 'javascript']);
+    // `probability-and-statistics` is agent-minted and deliberately NOT a TOPIC_SLUG:
+    // T4b split the stats pool into sibling shelves and only `statistics` is curated.
+    // Adding it here is the "deliberate entry" this test exists to force.
+    const known = new Set<string>([...TOPIC_SLUGS, 'javascript', 'probability-and-statistics']);
     for (const vs of Object.values(TOPIC_RELATIONS)) {
       for (const t of vs) expect(known).toContain(t);
     }
