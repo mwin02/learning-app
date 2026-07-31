@@ -99,6 +99,19 @@ export const TOPIC_RELATIONS: Record<string, readonly string[]> = {
   // combining-functions) were starved and relaxed to hollow. That is an argument about
   // the rung's counting, not about this edge.
   precalculus: ['calculus'],
+  // The stats pool lives under TWO canonicals and topic-filing T4 deliberately kept
+  // both as sibling shelves rather than merging them (T4b's split; the 31-row
+  // `probability-and-statistics` <-> `statistics` confusion is that split, not
+  // mis-filing). Only `statistics` is a curated TOPIC_SLUG, so only it gets warmed —
+  // and without this edge a warm `statistics` Path sees a little over half its own
+  // subject.
+  // Measured on PRODUCTION 2026-07-31: `statistics` holds 254 memberships,
+  // `probability-and-statistics` 459, and the 254 are a STRICT SUBSET — every
+  // `statistics` member also carries a `probability-and-statistics` membership. So
+  // 205 rows are reachable through this edge and no other.
+  // The reverse is NOT declared: `probability-and-statistics` is not in TOPIC_SLUGS,
+  // has no Path, and (being the superset) would gain nothing it does not already hold.
+  statistics: ['probability-and-statistics'],
   // DSA is taught THROUGH a language, and both curated language topics carry real DSA
   // pools. One-hop only, so this does NOT connect python and javascript to each other.
   // These edges were inert until topic-filing T1.5: `TopicAlias` held the drifted
