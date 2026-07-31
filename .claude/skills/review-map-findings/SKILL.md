@@ -34,7 +34,20 @@ findings across all Paths, then pick one).
   → `200`. A `404` means `DEV_AUTH` is off (the admin route 404s when unauthed) — ask
   the user to start it with `DEV_AUTH=1`. If it `500`s, the running server predates a
   schema/client change — ask the user to restart it.
-- The `.env.local` DB env for the helper script (it connects directly, no server).
+- **Know which DB that server was started against, and say so before deciding anything.**
+  The probe URL is identical whether the server points at local Docker Postgres or at the
+  production library, and the decisions here mutate a **permanent, build-once** Path with no
+  rebuild — so being on the wrong DB is unrecoverable in the direction that matters. The
+  server logs the target on its first DB request as
+  `{"event":"db.client_created","target":"host:port/dbname"}`: `localhost:55432/learning_app`
+  is local and disposable, `…pooler.supabase.com:6543/postgres` is production. Ask the user
+  to read that line off the dev-server terminal, and state the target in your first message.
+  Pointed at the wrong DB the worklist comes back **empty**, not failing. See
+  `docs/operator-tooling.md`.
+- The `.env.local` DB env for the helper script (it connects directly, no server) — and the
+  **same** override if the server is on production, since shell env beats `--env-file`:
+  `DATABASE_URL="$SUPABASE_POOLER_URL" npx tsx --env-file=.env.local …`. A helper run against
+  local while the server edits production is the failure this precondition exists to catch.
 
 ## Finding kinds & decision mapping
 

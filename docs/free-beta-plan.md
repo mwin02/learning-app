@@ -25,7 +25,7 @@ first, <300 LOC per block, one branch per block, verification gate before commit
 | B1 | Observability: GCP-native error reporting | code + ops | D3 (verified on Cloud Run) |
 | C1 | Warm campaign: `reset-maps` + `warm-paths` scripts | code | — |
 | C2 | Warm campaign: rebuild the 12 warm topics + review passes | ops | A*, D4, C1, **topic-filing T4**, **E1** |
-| E1 | Operator tooling: document the local-app/remote-DB pattern | docs | D3 |
+| E1 | Operator tooling: document the local-app/remote-DB pattern | docs + code | D3 |
 | E2 | Operator tooling: real admin auth for the review skills | code | D3, E1 |
 
 Rationale for the order: ratings are platform-independent code and should be live before
@@ -614,7 +614,7 @@ nothing about what beta users will see. D3 didn't break this; it made it visible
    D3's sign-in smoke created one, with the default role. Roles are assigned by hand — "there
    is deliberately no API for it" (`with-admin-auth.ts` header).
 
-### E1 — document the local-app/remote-DB pattern (docs only)
+### E1 — document the local-app/remote-DB pattern (docs + ~15 LOC)
 
 The locked stopgap. Run the app locally (so `NODE_ENV=development` and `DEV_AUTH=1` still
 apply) against the **Supabase pooler**, without touching `.env.local`:
@@ -642,11 +642,26 @@ prerequisite line in each affected skill saying which DB the server was started 
 - Reviews mutate production curation with `DEV_AUTH`-level (i.e. no) authentication. Fine for
   a single operator on a laptop; not fine as a standing arrangement. Hence E2.
 
-**OPEN:** whether to add a guard that makes the target *visible* rather than merely
-documented — e.g. the dev server logging its resolved DB host at boot, or the skills probing
-a `/api/health`-style endpoint that reports which host it is connected to (careful: the D1
-probe is deliberately content-free and must not start leaking the DB host publicly — an
-admin-gated variant, or dev-only, would be the way).
+**RESOLVED (2026-07-31) — the target is logged, not just documented.** Taken the
+server-log option over the health-probe one: it covers all four HTTP skills at once with no
+per-skill wiring, and it leaves D1's deliberately content-free `/api/health` alone. A pure
+`describeDatabaseUrl(raw)` → `host:port/dbname` (`src/lib/db-target.ts`, credentials
+stripped, unit-tested) is now the single formatter for every announcer — the app, the ops
+guard, and, by hand, the two CJS skill helpers — so one recognisable string means the same
+database everywhere. `src/lib/db.ts` emits `log('db.client_created', { target })` where it
+already resolves `DATABASE_URL`.
+
+One correction to the framing above: this is **not** a boot banner. The Prisma singleton is
+built at module eval, which under `next dev` is the first request that touches the DB — so
+the line lands in the dev-server terminal in response to a skill's own precondition probe,
+ahead of any mutation, and is emitted once per process. Verified locally 2026-07-31:
+`{"event":"db.client_created","severity":"INFO","target":"localhost:55432/learning_app"}`.
+
+**Delivered:** `docs/operator-tooling.md` (chosen over an `app-deploy.md` section — that doc
+is about deploying the service, this is about pointing a laptop at production data, and it
+dies at E2); `app-deploy.md` §7 and §8 now link it, replacing §8's "E1 will document it
+properly" placeholder; a target-confirmation precondition in each of the four HTTP skills
+(`review-topic-filing` already had one and was the model copied).
 
 ### E2 — real admin auth for the review skills (~100–150 LOC + ops)
 

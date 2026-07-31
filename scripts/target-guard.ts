@@ -17,6 +17,8 @@
 // the flag you would need — because demanding it there would train everyone to
 // type it reflexively, which is exactly the habit the guard exists to prevent.
 
+import { describeDatabaseUrl } from '@/lib/db-target';
+
 // `[::1]` carries brackets because that is what URL.hostname returns for an IPv6
 // literal — a bare '::1' entry here would never match anything.
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', 'host.docker.internal', 'db']);
@@ -32,7 +34,10 @@ export function resolveTarget(): Target {
     // IPv6 hosts (`[::1]:5432/db` → `[`), which would make the --target-host
     // value the guard demands impossible to type.
     hostname: url.hostname,
-    label: `${url.hostname}:${url.port || '5432'}${url.pathname}`,
+    // Shared formatter so the guard's target string is the same one the app and
+    // the skill helpers print — an operator comparing them should not have to
+    // decide whether two differently-shaped strings mean the same database.
+    label: describeDatabaseUrl(raw),
     isLocal: LOCAL_HOSTS.has(url.hostname),
   };
 }
