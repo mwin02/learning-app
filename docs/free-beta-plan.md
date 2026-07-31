@@ -488,10 +488,12 @@ a cloud worker claim + build it, structured logs visible in Cloud Logging.
 > 2026-07-30; §8 now leads with it. (`gcloud beta` is also needed for the
 > `error-reporting` / `monitoring channels` command groups.)
 >
-> **Remaining, both operator-only:** create the email notification channel and
-> select it in Error Reporting (console-only), then drive
-> `?probe=throw` with an admin session to prove the server half groups and the
-> email delivers.
+> **Ops half completed 2026-07-31.** Channel wired and verified enabled;
+> `?probe=throw` with an admin session grouped as `server.unhandled`
+> (`routeType: "route"`, ten frames in `message`, revision in `serviceContext`).
+> Two drills with different messages produced two distinct groups, confirming the
+> fixed probe message will reuse one group rather than notifying on every run.
+> **Only the worker half is left, and it is blocked on D4.**
 >
 > Also noted: Next 16.2 renamed the boundary's retry prop to `unstable_retry`.
 

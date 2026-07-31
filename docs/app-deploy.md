@@ -606,9 +606,26 @@ same-origin, so an off-site curl gets 403 by design — see below).
 - Endpoint guards on the live service: `403` cross-origin, `413` oversize,
   `405` GET, `204` same-origin.
 
-Still unverified: the **server** half's grouping (`probe=throw` needs an admin
-session) and notification delivery (channel not yet created). Both go through the
-same `logError` path the drill exercised end to end.
+Completed 2026-07-31, after enabling the API and wiring the channel:
+
+- The email notification channel exists and is enabled
+  (`gcloud`-unreachable to configure, but readable via the Monitoring REST API:
+  `GET /v3/projects/$PROJECT/notificationChannels`).
+- Two drills with **different messages produced two different groups**, which is
+  the behaviour the `probe=throw` message relies on: a fixed message keeps
+  reusing one group instead of firing a new-group notification per run.
+- **`?probe=throw` with an admin session grouped as `server.unhandled`** under
+  service `learning-app`, version `learning-app-00008-fv9`. The log line carries
+  `severity: ERROR`, `routeType: "route"` (the route-handler path, which a
+  browser crash can never reach), `serviceContext` with the revision, ten stack
+  frames in `message`, and no `stack` left in `err`.
+
+Note that a route-handler throw carries **no `digest`** — Next attaches digests
+to React render errors, not to route handlers — so that field is absent here and
+present on a Server Component error. Nothing is wrong when it does not appear.
+
+Still unverified in cloud: the **worker** half (`LOG_SERVICE_NAME=course-worker`),
+which is blocked on D4.
 
 ### The client endpoint's abuse surface
 
