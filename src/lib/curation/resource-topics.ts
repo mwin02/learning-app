@@ -216,6 +216,22 @@ export async function applyReclassification(
       contested: primary.contested,
       tx,
     });
+    // rung0-starvation R2: this row's filing just changed, so any per-concept
+    // rejection recorded against it was judged on stale grounds — drop them so the
+    // next rung 0 gives it one more look. Rejection memory has no TTL by design;
+    // invalidation follows the CAUSE, and this seam is where BOTH filing causes
+    // land: T4a's same-topic re-score AND T4b's quorum refile, which is the only
+    // pass that moves a primary and calls straight through here
+    // (scripts/refile-quorum-topics.ts:196). Resource-wide, because a filing change
+    // is a fact about the resource, not about any one concept that judged it.
+    //
+    // ⚠️ If T4b (or any future refile) ever grows its own write path instead of
+    // reusing this one, that path needs this delete too — the rows whose filing
+    // genuinely MOVED are the ones it would be worst to leave wrongly excluded.
+    //
+    // In the same transaction as the re-score: a rolled-back reclassification must
+    // not silently re-open the judge on rows whose filing did not actually move.
+    await tx.conceptCandidateRejection.deleteMany({ where: { resourceId } });
     if (secondaries.length === 0) return;
     // skipDuplicates so a re-run — or a concurrent discovery that filed the same topic —
     // races harmlessly against the unique [resourceId, topic].
