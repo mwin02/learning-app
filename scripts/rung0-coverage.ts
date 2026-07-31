@@ -7,43 +7,39 @@
 // (searchNearbyResources embeds the concept title), so it is safe to re-run and
 // safe to run mid-drain.
 //
-// WHAT IT MEASURES. `sourceForConcept` counts rung-0 (library) hits toward
-// targetCount, so `webShortfall(targetCount, hits) === 0` means the web rungs
-// never run for that concept. This replays rung 0's exact query per spine hole
-// and reports the resulting web budget — a hole with 0 shortfall is permanently
-// unfillable by any current code path.
+// WHAT IT MEASURES. Rung 0 (the library) returns candidates that the judge then
+// filters; `webShortfall(targetCount, survivors) === 0` means the web rungs never
+// run for that concept. This replays rung 0's exact query per spine hole and
+// reports the resulting web budget for the WORST case — every hit surviving the
+// judge — which is what the pre-R1 code assumed unconditionally.
 //
-// TWO THINGS ARE RE-DERIVED RATHER THAN IMPORTED, because the real ones are not
-// reachable from a read-only script. Both are verbatim mirrors; a divergence here
-// would measure a query this codebase never issues:
+// Read the verdict accordingly, before and after rung0-starvation R1:
+//   - pre-R1 the shortfall printed here IS the web budget: hits were counted raw,
+//     so `webShortfall == 0` meant web discovery was permanently unreachable;
+//   - post-R1 it is an UPPER BOUND on suppression — the real budget is derived
+//     from judged survivors (source-concept.ts), and a spine hole necessarily has
+//     no qualifying primary, so its `requirePrimary` floor guarantees ≥ 1 web
+//     look. A row here that the judge rejects no longer suppresses anything.
+// Either way, `rung0Hits` and the per-hit detail measure the same thing: what the
+// library actually offers this concept.
 //
-//   1. `libraryRung` (web-fallback.ts) is module-private. `rung0` below is a copy
-//      of it: same relatedTopics(topic) expansion, same REJUDGE_ROUTE_MAX_DISTANCE,
-//      limit = REMEDIATION_SOURCE_TARGET_COUNT, and the same exclusion of rows
-//      already attached to the demanding concept. `webShortfall` IS imported —
-//      the arithmetic under test must be the real one.
-//   2. `recomputeReadiness` (recompute-readiness.ts) WRITES Path.status, which a
-//      diagnostic must not do. The hole set here comes from the pure
-//      `computeReadiness` over the same spine query that function runs.
+// ONE THING IS RE-DERIVED RATHER THAN IMPORTED, because the real one is not usable
+// from a read-only script: `recomputeReadiness` (recompute-readiness.ts) WRITES
+// Path.status, which a diagnostic must not do. The hole set here comes from the
+// pure `computeReadiness` over the same spine query that function runs.
+//
+// `libraryRungCandidates` and `webShortfall` ARE imported (R1 exported the former;
+// R0 shipped against a verbatim copy because it was module-private) — the query and
+// the arithmetic under test must be the real ones. Rung 0 returns its ranked rows
+// with distances, which is why the per-hit `d=` below is the real search distance
+// and not a re-derivation.
 
 import { ConceptMembership } from '@prisma/client';
 import { prisma } from '../src/lib/db';
-import { searchNearbyResources } from '../src/lib/agents/tools/search-resources';
-import { webShortfall } from '../src/lib/agents/tools/web-fallback';
+import { libraryRungCandidates, webShortfall } from '../src/lib/agents/tools/web-fallback';
 import { computeReadiness } from '../src/lib/agents/map/readiness';
 import { REMEDIATION_SOURCE_TARGET_COUNT, REJUDGE_ROUTE_MAX_DISTANCE } from '../src/lib/config';
 import { relatedTopics } from '../src/types/resource';
-
-// Verbatim mirror of web-fallback.ts's private `libraryRung` — see header note 1.
-async function rung0(topic: string, conceptTitle: string, attachedIds: string[]) {
-  return searchNearbyResources({
-    topics: relatedTopics(topic),
-    query: conceptTitle,
-    maxDistance: REJUDGE_ROUTE_MAX_DISTANCE,
-    limit: REMEDIATION_SOURCE_TARGET_COUNT,
-    excludeIds: attachedIds,
-  });
-}
 
 function membershipLabel(t: { topic: string; relevance: number; origin: string; isPrimary: boolean }): string {
   return `${t.topic}${t.isPrimary ? '*' : ''}(${t.relevance.toFixed(2)},${t.origin})`;
@@ -57,6 +53,7 @@ async function auditPath(topic: string, allConcepts: boolean): Promise<{ examine
       status: true,
       concepts: {
         select: {
+          id: true,
           slug: true,
           title: true,
           membership: true,
@@ -92,7 +89,13 @@ async function auditPath(topic: string, allConcepts: boolean): Promise<{ examine
 
   let saturated = 0;
   for (const c of targets) {
-    const hits = await rung0(topic, c.title, c.resources.map((r) => r.resourceId));
+    // The real rung 0 (exported by R1), distances and all.
+    const hits = await libraryRungCandidates({
+      topic,
+      conceptTitle: c.title,
+      conceptId: c.id,
+      targetCount: REMEDIATION_SOURCE_TARGET_COUNT,
+    });
     const shortfall = webShortfall(REMEDIATION_SOURCE_TARGET_COUNT, hits.length);
     if (shortfall === 0) saturated += 1;
 

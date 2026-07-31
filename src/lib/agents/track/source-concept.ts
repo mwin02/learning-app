@@ -6,10 +6,10 @@
 //     whose resources are too shallow for the learner's target mastery; source
 //     biased toward that level.
 //
-// Both do the same thing: sourceForConcept (web search) → judge the sourced rows →
-// attach the keepers as ConceptResource links, promoting ONLY those we attach from
-// pending_review to active (the locked promote-on-attach policy) → recompute, all
-// in one transaction. Returns how many candidates it attached (0 = nothing new).
+// Both do the same thing: source candidates → judge them → attach the keepers as
+// ConceptResource links, promoting ONLY those we attach from pending_review to
+// active (the locked promote-on-attach policy) → recompute, all in one
+// transaction. Returns how many candidates it attached (0 = nothing new).
 //
 // Re-judge loads the sourced rows DIRECTLY by id, not via searchResources: the
 // ranked search path filters `embedding IS NOT NULL`, and a just-sourced row's
@@ -19,19 +19,36 @@
 // Library re-judge Block 2: the judge → attach tail is factored out as
 // judgeAndAttachCandidates so callers holding EXISTING candidate ids (the
 // decompose-time hook, rung-0 library candidates) run the identical pipeline
-// without a web-sourcing round. sourceAndAttachConcept = sourceForConcept →
-// on-ramp backstop → judgeAndAttachCandidates(insertedIds).
+// without a web-sourcing round.
+//
+// rung0-starvation R1 — the ORDER is the fix. This used to source both rungs and
+// judge the union once, deriving the web budget from rung 0's RAW hit count; a
+// concept with three near-but-wrong library neighbours therefore never reached web
+// discovery, in any pass, ever. Now:
+//   rung 0 candidates → judge/attach → web budget from what SURVIVED → rungs 1-2.
+// Where the library genuinely covers the concept the web half is skipped exactly as
+// before (no new spend); two judge calls happen only where both rungs fire.
 
 import { Difficulty, BankStaleReason } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { recomputeReadiness } from '@/lib/agents/map/recompute-readiness';
 import { judgeCandidates } from '@/lib/agents/map/candidate-judge';
 import { selectAttachable, capCandidates } from '@/lib/agents/map/attach-candidates';
-import { MAP_MAX_CANDIDATES_PER_CONCEPT } from '@/lib/config';
-import { sourceForConcept } from '@/lib/agents/tools/web-fallback';
+import { MAP_MAX_CANDIDATES_PER_CONCEPT, REMEDIATION_SOURCE_TARGET_COUNT } from '@/lib/config';
+import { libraryRungCandidates, sourceFromWeb, webShortfall } from '@/lib/agents/tools/web-fallback';
+import { hasQualifyingPrimary } from '@/lib/agents/map/readiness';
 import { generateOnRampResource } from '@/lib/agents/map/generate-onramp';
 import { markBankStale } from '@/lib/agents/content/mark-bank-stale';
 import type { SearchResult } from '@/lib/agents/tools/search-resources';
+
+export type JudgeAttachResult = {
+  attached: number;
+  // Did the attached set include a `teaches` candidate clearing the primary
+  // coverage floor — i.e. would readiness now consider the concept covered?
+  primaryAttached: boolean;
+};
+
+const NOTHING_ATTACHED: JudgeAttachResult = { attached: 0, primaryAttached: false };
 
 export async function sourceAndAttachConcept(args: {
   pathId: string;
@@ -48,18 +65,33 @@ export async function sourceAndAttachConcept(args: {
   // Budget-fill Block 2: bias discovery toward substantial (~20–90m) resources —
   // set for budget-thin concepts, where more short clips can't fill the tier.
   preferSubstantial?: boolean;
+  // rung0-starvation R1: this concept needs a QUALIFYING PRIMARY, not merely more
+  // candidates — set by every spine-hole caller (remediation, the frontier paths).
+  // Counting attachments alone isn't enough: three rung-0 rows attached as `uses`
+  // close nothing and readiness still calls the concept a hole, so when rung 0
+  // attached no qualifying primary the web budget is floored at 1. Left false by
+  // the thickener, whose concepts already HAVE a primary — forcing a web call on
+  // every thicken pass would be a real cost regression.
+  requirePrimary?: boolean;
   // Audit 2.2: the worker's per-job abort (deadline/shutdown), threaded down into
   // the sourcing ladder's AI/web calls and the judge — remediation's per-hole
   // loop is the single most expensive unthreaded stretch without it.
   abortSignal?: AbortSignal;
 }): Promise<number> {
-  const { pathId, topic, conceptId, slug, title, targetMastery, isOnRamp = false, preferSubstantial = false, abortSignal } = args;
+  const {
+    pathId, topic, conceptId, slug, title, targetMastery,
+    isOnRamp = false, preferSubstantial = false, requirePrimary = false, abortSignal,
+  } = args;
 
-  const sourced = await sourceForConcept({ topic, concept: { slug, title }, conceptId, targetMastery, preferSubstantial, abortSignal });
-  // Rung-0 library hits first (already embedded + semantically ranked), then the
-  // fresh web finds. Disjoint by construction: library ids are existing rows,
-  // insertedIds are rows this run just created.
-  let candidateIds = [...sourced.libraryCandidateIds, ...sourced.insertedIds];
+  // Checked before the library rung: searchNearbyResources pays a Vertex
+  // query-embedding call, and an already-aborted job shouldn't start even that.
+  abortSignal?.throwIfAborted();
+
+  const targetCount = REMEDIATION_SOURCE_TARGET_COUNT;
+  // Rung 0 returns ranked rows; the judge takes ids, so the distances are dropped
+  // here (the coverage diagnostic is what consumes them).
+  const libraryHits = await libraryRungCandidates({ topic, conceptTitle: title, conceptId, targetCount });
+  let candidateIds = libraryHits.map((h) => h.id);
 
   // Phase 2g-4: on-ramp backstop. The cold build (ensure-path-map) normally authors the
   // on-ramp's generated primary; this covers the case where that generation failed and
@@ -71,7 +103,7 @@ export async function sourceAndAttachConcept(args: {
     if (generated) candidateIds = [generated.id, ...candidateIds.filter((id) => id !== generated.id)];
   }
 
-  return judgeAndAttachCandidates({
+  const library = await judgeAndAttachCandidates({
     pathId,
     conceptId,
     slug,
@@ -79,9 +111,63 @@ export async function sourceAndAttachConcept(args: {
     candidateIds,
     targetMastery,
     isOnRamp,
-    reason: 'source-concept',
+    reason: 'source-concept-library',
     abortSignal,
   });
+
+  const webBudget = webBudgetAfterLibrary({
+    targetCount,
+    libraryAttached: library.attached,
+    libraryPrimaryAttached: library.primaryAttached,
+    requirePrimary,
+  });
+  if (webBudget === 0) {
+    console.log('[source-concept] library rung filled the target, skipping web discovery', {
+      pathId,
+      concept: slug,
+      libraryCandidates: candidateIds.length,
+      attached: library.attached,
+      targetCount,
+    });
+    return library.attached;
+  }
+
+  const sourced = await sourceFromWeb({
+    topic,
+    concept: { slug, title },
+    conceptId,
+    targetCount: webBudget,
+    targetMastery,
+    preferSubstantial,
+    abortSignal,
+  });
+  const web = await judgeAndAttachCandidates({
+    pathId,
+    conceptId,
+    slug,
+    title,
+    candidateIds: sourced.insertedIds,
+    targetMastery,
+    isOnRamp,
+    reason: 'source-concept-web',
+    abortSignal,
+  });
+  return library.attached + web.attached;
+}
+
+// rung0-starvation R1: how much the web rungs owe after rung 0 has been judged.
+// Pure, so the policy is unit-testable without a DB or a judge call.
+export function webBudgetAfterLibrary(args: {
+  targetCount: number;
+  libraryAttached: number;
+  libraryPrimaryAttached: boolean;
+  requirePrimary: boolean;
+}): number {
+  const budget = webShortfall(args.targetCount, args.libraryAttached);
+  // A hole caller needs a qualifying primary; attachments that can't be one leave
+  // the concept exactly as unteachable as before, so buy at least one web look.
+  if (args.requirePrimary && !args.libraryPrimaryAttached) return Math.max(1, budget);
+  return budget;
 }
 
 // Library re-judge Block 2: the judge → attach tail as a standalone primitive, so
@@ -92,7 +178,12 @@ export async function sourceAndAttachConcept(args: {
 // Loads candidates DIRECTLY by id (see the embedding-race note above), drops any
 // already attached to this concept (re-judging an attached row would just churn
 // the judge), judges with the concept's regime, and attaches the keepers in one
-// transaction. Returns how many candidates it attached (0 = nothing new).
+// transaction.
+//
+// Returns `attached` (0 = nothing new) plus `primaryAttached` — whether the keepers
+// include a qualifying `teaches` primary. That is `hasQualifyingPrimary`, i.e. the
+// exact predicate computeReadiness uses to decide a hole is closed, so R1's web
+// budget can't be fooled by a pile of `uses` attachments.
 export async function judgeAndAttachCandidates(args: {
   pathId: string;
   conceptId: string;
@@ -109,7 +200,7 @@ export async function judgeAndAttachCandidates(args: {
   // Audit 2.2: forwarded into the judge call; checked before the attach tx so an
   // aborted job stops WRITING (ConceptResource attaches racing a successor build).
   abortSignal?: AbortSignal;
-}): Promise<number> {
+}): Promise<JudgeAttachResult> {
   const { pathId, conceptId, slug, title, candidateIds, targetMastery, isOnRamp = false, reason = 'judge-attach', abortSignal } = args;
 
   // Exclude rows already attached to this concept: they were judged when they
@@ -130,7 +221,7 @@ export async function judgeAndAttachCandidates(args: {
 
   if (rows.length === 0) {
     console.log('[source-concept] no candidates to judge', { pathId, concept: slug, reason });
-    return 0;
+    return NOTHING_ATTACHED;
   }
 
   const judged = await judgeCandidates({ conceptTitle: title, conceptSlug: slug, candidates: rows, isOnRamp, abortSignal });
@@ -140,8 +231,9 @@ export async function judgeAndAttachCandidates(args: {
   const kept = selectAttachable(judged, { isOnRamp });
   if (kept.length === 0) {
     console.log('[source-concept] candidates all judged irrelevant', { pathId, concept: slug, reason, candidates: rows.length });
-    return 0;
+    return NOTHING_ATTACHED;
   }
+  const primaryAttached = hasQualifyingPrimary({ conceptSlug: slug, candidates: kept });
 
   const keptIds = kept.map((k) => k.resourceId);
   abortSignal?.throwIfAborted();
@@ -209,8 +301,10 @@ export async function judgeAndAttachCandidates(args: {
     }
     await recomputeReadiness(pathId, tx);
   });
-  console.log('[source-concept] attached', { pathId, concept: slug, attached: kept.length, reason, targetMastery: targetMastery ?? null });
-  return kept.length;
+  console.log('[source-concept] attached', {
+    pathId, concept: slug, attached: kept.length, primaryAttached, reason, targetMastery: targetMastery ?? null,
+  });
+  return { attached: kept.length, primaryAttached };
 }
 
 // Hydrate candidate rows into the SearchResult shape the judge consumes, loading

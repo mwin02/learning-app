@@ -133,6 +133,9 @@ export async function ensureFrontier(args: {
         conceptId: idBySlug.get(c.slug)!,
         slug: c.slug,
         title: c.title,
+        // R1: these are exactly the concepts with no qualifying primary (the
+        // filter above), so rung 0 must not zero the web budget with `uses` rows.
+        requirePrimary: true,
         abortSignal,
       });
     } catch (err) {

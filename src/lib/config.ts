@@ -97,7 +97,7 @@ export const TRUST_EVICT_MIN_VOTES = 5;
 export const RATING_BURST_PER_HOUR = 100;
 export const RATING_BURST_WINDOW_MS = 60 * 60 * 1000;
 
-// Phase 2.5f: targeted per-concept sourcing (sourceForConcept) budgets — the
+// Phase 2.5f: targeted per-concept sourcing (sourceAndAttachConcept) budgets — the
 // thickener's spine-hole remediation. Deliberately smaller than the topic-level
 // FALLBACK_* above: a single narrow concept has far fewer good resources on the
 // open web, so we ask for a handful of teaches candidates, not a topic's worth.

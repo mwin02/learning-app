@@ -3,9 +3,10 @@
 //
 //   recomputeReadiness → claim job → BOUNDED LOOP over passes:
 //     per current hole: classifyHole
-//       gap        → sourceForConcept (web search) → judge the sourced rows →
-//                    attach the keepers as ConceptResource links, promoting ONLY
-//                    those we attach from pending_review to active → recompute
+//       gap        → sourceAndAttachConcept (library rung, then web) → judge the
+//                    sourced rows → attach the keepers as ConceptResource links,
+//                    promoting ONLY those we attach from pending_review to active
+//                    → recompute
 //       conflation → splitConcept (decompose into finer nodes + re-attach); if the
 //                    author DECLINES (the concept is actually atomic), fall back to
 //                    sourcing it as a gap in the same pass
@@ -181,6 +182,9 @@ async function runRemediation(
           slug: hole.slug,
           title: hole.title,
           isOnRamp: hole.isOnRamp,
+          // R1: this concept IS a spine hole, so rung-0 attachments that aren't a
+          // qualifying primary must not suppress web discovery.
+          requirePrimary: true,
           abortSignal: opts.abortSignal,
         });
         if (attached > 0) progress = true;
