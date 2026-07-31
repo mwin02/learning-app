@@ -312,10 +312,15 @@ against the 768m cap, `OOMKilled=false` throughout.
 because the row reads as a pass sitting next to a failure. The recovered
 `precalculus` request re-ran cleanly (fresh spine authored 12:31:08–12:31:37, so
 nothing survived from the two killed attempts) and then failed with
-`spine holes left uncoverable`: 4 of 22 concepts had no resource against a
-49-resource library. That is a **curation** outcome, and C2's job. What step 4
-tests is that a dead worker's claim is recovered and re-executed to a correct
-terminal state — including correctly recording a failure.
+`spine holes left uncoverable`: **one** of the 13 spine concepts had no candidate
+resource. That is a **curation** outcome, and C2's job. What step 4 tests is that
+a dead worker's claim is recovered and re-executed to a correct terminal state —
+including correctly recording a failure.
+
+When reading a hole count, filter on `membership: spine` — `recomputeReadiness`
+does (`recompute-readiness.ts:41`), and frontier concepts routinely have no
+resource by design. Counting all concepts made this look like four holes and sent
+one investigation down a false trail.
 
 **One benign log line to expect on every boot**, so nobody chases it: the metadata
 script runner emits a 404 for `instance/attributes/created-by`, an attribute only

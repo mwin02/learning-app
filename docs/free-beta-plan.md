@@ -398,15 +398,21 @@ a cloud worker claim + build it, structured logs visible in Cloud Logging.
 > `claimedAt + 45m00s`, re-claimed 1s later by the rebooted worker).
 >
 > **Finding for C2, surfaced by the step-4 build: `precalculus` cannot currently build on
-> production.** A clean cold run authored a 22-concept spine and left **4 concepts with no
-> resource** against a 49-resource library (`function-transformations-and-compositions`,
-> `mathematical-induction`, `complex-numbers-in-polar-form`, `conic-sections`), so the
-> request terminated `failed` with `spine holes left uncoverable`. Remediation escalated
-> only **1** of the 4 and gave up after ~2 minutes, which is worth understanding before C2
-> runs the warm campaign over 12 topics — a topic that escalates rather than sources is
-> exactly what C2's step 4 review passes are meant to catch, but escalating 1 of 4 holes
-> suggests the ladder stopped early rather than exhausted its options. A beta user
-> requesting `precalculus` today gets a failed build.
+> production.** A clean cold run authored 22 concepts (13 spine, 9 frontier) and left
+> **exactly one SPINE concept with no candidate resource** —
+> `function-transformations-and-compositions` — so readiness never reached `spine_ready` and
+> the request terminated `failed` with `spine holes left uncoverable`. Remediation otherwise
+> worked: it relaxed two concepts (`polynomial-functions`, `unit-circle-and-angle-measure`)
+> onto sub-floor primaries, and escalated the one it genuinely could not cover.
+>
+> ⚠️ An earlier draft of this note claimed remediation "escalated only 1 of 4 holes,
+> suggesting the ladder stopped early." **That was wrong** — a measurement error, counting
+> zero-resource concepts across the whole Path when `recomputeReadiness` only considers
+> `membership: spine` (`recompute-readiness.ts:41`). The other three zero-resource concepts
+> are **frontier**, where having no resource is the normal state. There is no evidence the
+> sourcing ladder misbehaves. The real gap is narrow and tractable: one spine concept needs
+> one acceptable resource. Repeat the membership check before reading any future hole count
+> as a bug.
 >
 > **Region: `us-central1`, not `us-west1`** (decided 2026-07-31). `e2-micro` capacity was
 > exhausted in **all three** `us-west1` zones — confirmed `resource_availability`, not quota
