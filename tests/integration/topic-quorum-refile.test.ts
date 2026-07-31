@@ -24,6 +24,7 @@ const FROM = '__verify_t4b_from__';
 const TO = '__verify_t4b_to__';
 
 let resourceId = '';
+let baseline: Awaited<ReturnType<typeof checkMembershipInvariants>>;
 
 async function cleanup() {
   await prisma.resource.deleteMany({ where: { topic: { in: [FROM, TO] } } });
@@ -53,6 +54,11 @@ const record: RefileRecord = {
 describeDb('topic filing T4b — quorum refile DB seams', () => {
   beforeAll(async () => {
     await cleanup();
+    // checkMembershipInvariants is WHOLE-TABLE by design (that scope is the property it
+    // exists to verify), and this is the shared dev DB — sibling tests seed Resource rows
+    // directly, without memberships. So assert these writes add no NEW violation rather
+    // than that the table is globally pristine.
+    baseline = await checkMembershipInvariants();
     const source = await prisma.source.create({
       data: {
         slug: `${FROM}src`,
@@ -137,11 +143,7 @@ describeDb('topic filing T4b — quorum refile DB seams', () => {
     expect(decideRefile({ ...record, id: resourceId, currentTopic: TO }, TO)).toBe('already-filed');
   });
 
-  it('leaves the T1 membership invariants intact', async () => {
-    expect(await checkMembershipInvariants()).toEqual({
-      noMembership: 0,
-      badPrimaryCount: 0,
-      mirrorDrift: 0,
-    });
+  it('adds no new T1 membership-invariant violation', async () => {
+    expect(await checkMembershipInvariants()).toEqual(baseline);
   });
 });
