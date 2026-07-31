@@ -26,7 +26,7 @@ Full roadmap and phase plan: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 | DB + Auth          | Supabase (Postgres + Google OAuth)                                                                                                                        |
 | Payments           | Stripe Checkout, single subscription, price TBD                                                                                                           |
 | Styling            | Tailwind CSS                                                                                                                                              |
-| Hosting            | Vercel now, Cloud Run later                                                                                                                               |
+| Hosting            | **Google Cloud** — app on Cloud Run, worker on a GCE `e2-micro` (free-beta D1–D4). Vercel fully decommissioned 2026-07-31. See AGENTS.md for the topology.  |
 | ORM                | Prisma over Supabase Postgres                                                                                                                             |
 | Resource library   | Postgres `Resource` table (Prisma), agent-extensible                                                                                                      |
 | Source attribution | Postgres `Source` table with hand-set `trustScore`; `Resource.trustScore` inherits from source at create                                                  |

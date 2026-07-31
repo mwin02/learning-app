@@ -4,13 +4,26 @@
 This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
 <!-- END:nextjs-agent-rules -->
 
-# Hosting portability
+# Hosting — where things actually run
 
-We deploy to Vercel now but plan to migrate to Cloud Run after Phase 3 ships (first paying customer). To keep that migration a half-day move rather than a week:
+**Google Cloud is where production runs** (free-beta blocks D1–D4, 2026-07-29 → 07-31). Compute is GCP, data stays Supabase. **Vercel is fully decommissioned as of 2026-07-31** — project deleted, Git integration disconnected, env vars removed, and its URLs taken out of the Supabase Auth allowlist and the Google OAuth client. `vercel.json` is deleted. There is no second deployment target.
 
-- **Avoid Vercel-only features**: edge middleware, Vercel KV / Postgres / Blob, Vercel Cron, the Vercel `next/image` loader. Anything that only exists because Vercel hosts the app is a future migration tax.
-- `next.config.ts` sets `output: 'standalone'` — produces `.next/standalone/` for a trivial Cloud Run Dockerfile. Vercel ignores the flag.
-- If a feature genuinely needs a Vercel-only primitive, raise it in discussion before reaching for it.
+| Component | Where | Deploys how |
+| --- | --- | --- |
+| Next.js app | Cloud Run service `learning-app`, `us-west1`, `min-instances=0` | **automatic** on every merge to `main` (`deploy-main` Cloud Build trigger → `cloudbuild.yaml`) |
+| Course worker | GCE `e2-micro` on Container-Optimized OS, `us-central1-a` | **manual**: build → `add-metadata worker-image=…` → `instances reset` (`worker-deploy.md` §9) |
+| DB + auth | Supabase, `aws-1-us-west-1` | — |
+| Migrations | a step inside `cloudbuild.yaml`, before the deploy | with the app |
+
+Three consequences worth carrying:
+
+- **The worker does not auto-deploy.** A merge that changes worker code changes nothing in production until someone runs `worker-deploy.md` §9. The app and the worker share `src/lib`, so this asymmetry is easy to forget.
+- **`next.config.ts`'s `output: 'standalone'` is now load-bearing**, not a hedge — the `Dockerfile` copies `.next/standalone/`. Removing it breaks the image.
+- **Avoid provider-only primitives** for the same reason as before, now pointed at GCP: prefer things that would survive another move. Raise it in discussion before reaching for one.
+
+The app has **no custom domain yet** (`app-deploy.md` §6 is deferred), so its public origin is the Cloud Run URL `https://learning-app-sau6bxtxta-uw.a.run.app`. That string is hardcoded in one place — the crawler User-Agent in `src/lib/agents/decomposition/doctoc.ts`, which is the contact URL site owners see in their logs — so it must move when the domain lands. Everywhere else derives the origin at runtime (`src/lib/api/public-origin.ts`, `APP_ORIGIN` first).
+
+`@vercel/oidc` in `package-lock.json` is transitive via `ai` → `@ai-sdk/gateway`. Not ours, not removable, not a leftover.
 
 # Migrations: never drop the hand-written indexes Prisma can't model
 
@@ -30,3 +43,39 @@ Some indexes are created in raw SQL inside a migration because Prisma's schema l
 3. Confirm the index is back — e.g. `SELECT indexname FROM pg_indexes WHERE indexname IN ('Resource_embedding_idx', 'RemediationJob_active_per_path');` — before moving on.
 
 Editing the `migration.sql` *before* the first apply avoids steps 2–3 entirely — check the diff the moment it's generated.
+
+# Secrets: never let one transit your shell as a value
+
+Both of this repo's real leaks (2026-07-31, same session) were caused by shell that printed a secret **as a side effect** — not by anyone deliberately echoing one. Neither looked dangerous while being typed:
+
+| What was run | What happened |
+| --- | --- |
+| `echo "set: ${YOUTUBE_API_KEY:+yes}${YOUTUBE_API_KEY:-NO}"` | `${VAR:-default}` expands to **the value** when the variable is set. Intended as a presence check; printed the key. |
+| `export $(grep '^SUPABASE_POOLER_URL=' .env.local \| sed "s/'//g")` then a `tsx` run | Stray quotes survived, Node rejected the URL, and `ERR_INVALID_URL` **echoes its input** — printing the production Postgres password. |
+
+The transferable lesson is the second one: **any command that fails while holding a secret may print it.** You cannot audit for this by reading your own command, because the leak is in the error path you didn't write. So the rule is about where the value lives, not about being careful with `echo`.
+
+**The pattern:**
+
+- **Keep the secret inside one command, read from the file, never re-exported.** This is the form `.env.example` and `docs/operator-tooling.md` already prescribe, and it is leak-resistant because the value never becomes a shell word:
+  ```bash
+  DATABASE_URL="$SUPABASE_POOLER_URL" npx tsx --env-file=.env.local scripts/<x>.ts
+  ```
+  Never `export $(grep …)`, never `VAR=$(grep …)`, never build a URL out of parts in the shell.
+- **Presence checks use `-n`, never expansion.** `[ -n "$VAR" ] && echo set`. Never `${VAR:-…}`, `${VAR:+…$VAR}`, or `echo "$VAR" | cut -c1-4` (a prefix is still key material).
+- **Verify by shape, not content.** Byte count is almost always enough:
+  ```bash
+  gcloud secrets versions access latest --secret=<name> --project <p> | wc -c
+  ```
+- **Pass secrets on stdin, never argv.** `--data-file=-` fed by `pbpaste | tr -d '\n'` or `read -rs`. An argv flag is visible in `ps` and lands in shell history. (`tr -d '\n'` matters: a trailing newline becomes part of the secret and produces a value that looks right everywhere and authenticates nowhere.)
+- **Never `docker exec … env`, `printenv`, or dump a container's environment.**
+- **`set -x` is banned in any script that touches a secret** — including startup scripts, whose output goes to the GCE serial console and is readable by anyone with `compute.instances.getSerialPortOutput`.
+- **Don't paste a secret into a file the agent will later read back**, including scratchpad files. Prefer tmpfs (`/run`) and delete after use, as `deploy/worker-vm-startup.sh` does.
+
+**If one leaks anyway: rotate it. Deleting the conversation, the log, or the terminal scrollback does not unexpose a value** — it only removes one copy of it. Rotation is the only action that restores the property you had before. In this repo that means, per credential:
+
+| Leaked | Rotate |
+| --- | --- |
+| Supabase DB password | Supabase → Settings → Database → reset; then **both** `supabase-database-url` and `supabase-session-url` (same password, different ports/hosts), `.env.local`, redeploy the app service, then restart the worker VM — in that order, or the worker boots onto a dead credential |
+| `YOUTUBE_API_KEY` | new key in the console → `youtube-api-key` secret → `.env.local` → redeploy → delete the old key |
+| Supabase anon key | it is public by design (inlined into the client bundle) — rotating it means a **rebuild**, not a restart (`app-deploy.md` §3) |

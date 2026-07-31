@@ -1,0 +1,57 @@
+# Cloud Build pipeline for the course-worker image (free-beta Block D4).
+#
+#   gcloud builds submit --project $PROJECT_ID --config cloudbuild.worker.yaml \
+#     --substitutions=_TAG=$(git rev-parse --short HEAD) .
+#
+# Separate from cloudbuild.yaml because the two images have nothing in common at
+# build time (no Next build, no NEXT_PUBLIC_* inlining, no migrate step) and
+# because their DEPLOY mechanisms differ: the app's pipeline ends in
+# `gcloud run deploy`, while the worker's host is a GCE VM that pulls on restart.
+#
+# ── There is deliberately no deploy step ─────────────────────────────────────
+# Pushing a worker image does NOT put it in service. The VM runs whatever tag
+# its startup script names, so shipping a worker change is push → restart the VM
+# (worker-deploy.md §9). This is a real operational difference from the app,
+# which auto-deploys on every merge to main via the `deploy-main` trigger: a
+# merge that changes worker code changes NOTHING in production until someone
+# runs this build and restarts the instance. Wiring a trigger to this file would
+# build the image automatically but still not deploy it, which is worse — it
+# would look automated while the running worker silently stayed on the old tag.
+#
+# Built server-side on amd64: a plain `docker build` on Apple Silicon produces an
+# arm64 image, and the e2-micro is x86_64.
+
+substitutions:
+  _REGION: us-west1
+  _REPO: learning-app
+  _IMAGE: course-worker
+  _TAG: latest
+
+steps:
+  - id: check-substitutions
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        test -n "${_TAG}" || { echo "ABORT: _TAG is empty"; exit 1; }
+        echo "building ${_IMAGE}:${_TAG} for ${_REGION}"
+
+  - id: build-worker
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.worker
+      - -t
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${_TAG}
+      - .
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${_TAG}']
+
+timeout: 1800s
+
+options:
+  logging: CLOUD_LOGGING_ONLY
