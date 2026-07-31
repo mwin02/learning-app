@@ -35,7 +35,7 @@ import { splitConcept, type SliceEvidence } from '@/lib/agents/track/split-conce
 import { sourceAndAttachConcept } from '@/lib/agents/track/source-concept';
 import { claimRemediationJob, finishJob } from '@/lib/agents/track/remediation-job';
 import { reviewAndPersistMap } from '@/lib/agents/map/run-map-review';
-import { logError } from '@/lib/log';
+import { logError, logWarn } from '@/lib/log';
 
 export type RemediateResult = {
   // 'busy' when another job holds this Path; 'ready' when there was nothing to
@@ -216,9 +216,19 @@ async function runRemediation(
     await finishJob(claim.job.id, { state, relaxedConceptSlugs: relaxable, escalatedConceptSlugs: uncoverable });
 
     if (uncoverable.length > 0) {
-      // The "page a developer" signal — a structured, greppable record. Real
-      // alerting/email is deferred (Phase 3 for email; paging is infra).
-      logError('remediate.escalation-uncoverable', {
+      // WARNING, not ERROR, and the distinction is load-bearing since free-beta
+      // B1: `logError` is what Cloud Error Reporting ingests and pages on, and an
+      // uncoverable spine hole is a CURATION BACKLOG signal, not a fault. Nothing
+      // is broken — the library simply has no acceptable resource for a concept
+      // yet, which is the normal steady state for a cold topic and exactly what
+      // the C2 warm campaign exists to work through. Leaving it at ERROR means a
+      // page per topic during a 12-topic campaign, and an alert channel that
+      // fires on expected outcomes is one people learn to ignore.
+      //
+      // It stays a structured, greppable record: alert on the RATE of this event
+      // via a log-based metric if it needs a threshold, rather than on each
+      // occurrence.
+      logWarn('remediate.escalation-uncoverable', {
         pathId,
         uncoverable,
         status: final.status,
