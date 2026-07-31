@@ -471,6 +471,30 @@ a cloud worker claim + build it, structured logs visible in Cloud Logging.
 > exercises the route-handler path (`routeType: "route"`), which is the half a
 > browser crash can never reach.
 >
+> **Merged as #289 and verified on Cloud Run** (revision
+> `learning-app-00008-fv9`, 2026-07-30). Measured before the deploy: **zero
+> `severity>=ERROR` log entries in 7 days**. After: a labelled drill produced a
+> correctly-shaped ERROR line (severity, `serviceContext` carrying the revision
+> via `K_REVISION`, stack in `message`, stack removed from the report field, no
+> `@type`) and **grouped in Error Reporting**. The gated probes proved
+> non-enumerable in prod where `devBypass` is false — `?probe=throw` and
+> `?probe=ai` both return the plain liveness body. `app-deploy.md` §8 has the
+> full record.
+>
+> **One prerequisite the plan and the first cut of the runbook both missed:
+> `clouderrorreporting.googleapis.com` was DISABLED** on the project — a day
+> after the app went live. Until it is enabled, ERROR lines reach Cloud Logging
+> but nothing groups and there is no console surface for notifications. Enabled
+> 2026-07-30; §8 now leads with it. (`gcloud beta` is also needed for the
+> `error-reporting` / `monitoring channels` command groups.)
+>
+> **Ops half completed 2026-07-31.** Channel wired and verified enabled;
+> `?probe=throw` with an admin session grouped as `server.unhandled`
+> (`routeType: "route"`, ten frames in `message`, revision in `serviceContext`).
+> Two drills with different messages produced two distinct groups, confirming the
+> fixed probe message will reuse one group rather than notifying on every run.
+> **Only the worker half is left, and it is blocked on D4.**
+>
 > Also noted: Next 16.2 renamed the boundary's retry prop to `unstable_retry`.
 
 ---

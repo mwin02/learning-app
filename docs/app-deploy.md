@@ -520,6 +520,22 @@ The **worker** groups separately, via `LOG_SERVICE_NAME=course-worker` baked int
 has none). Without it "the app is broken" and "a course build failed" land in one
 service.
 
+### Prerequisite: enable the API (one-time)
+
+`clouderrorreporting.googleapis.com` is **not** enabled by default on a project
+— it was still `DISABLED` here on 2026-07-30, after the app had been serving for
+a day. Until it is on, `severity: ERROR` lines land in Cloud Logging correctly
+but nothing groups, and there is no console surface on which to configure
+notifications. Enabling is free and reversible.
+
+```bash
+gcloud services enable clouderrorreporting.googleapis.com
+```
+
+Note also that `gcloud beta` is required for the `error-reporting` and
+`monitoring channels` command groups; without that component installed, those
+reads fail with a component-install prompt rather than an error about the API.
+
 ### Notification channel → email (one-time, console-only)
 
 Error Reporting notifies on a **new** group, or a new event in a group marked
@@ -572,6 +588,44 @@ await fetch('/api/health?probe=throw').then((r) => r.status) // 500 when admin, 
 **Client half:** any real browser crash, or a same-origin POST to
 `/api/client-error` from the deployed app's page context (the endpoint enforces
 same-origin, so an off-site curl gets 403 by design — see below).
+
+### Verified in production (2026-07-30, revision `learning-app-00008-fv9`)
+
+- Auto-deploy on merge worked unattended: all six build steps (including
+  `migrate`) SUCCESS, revision `learning-app-00008-fv9` at 100% traffic.
+- **Before B1: zero `severity>=ERROR` entries in 7 days** — the gap, measured.
+- A labelled client-error drill produced `severity: ERROR`, `serviceContext`
+  `{service: learning-app, version: learning-app-00008-fv9}` (so `K_REVISION`
+  resolves), the stack in `message` with frames, and **no `stack` left in the
+  report field** (it is moved, not copied). No `@type`, correctly, since frames
+  were present.
+- It **grouped in Error Reporting** under service `learning-app`.
+- The gated probes are non-enumerable in production, where `devBypass` is false:
+  `?probe=throw` and `?probe=ai` both return the plain liveness `200` body,
+  byte-identical to no probe at all.
+- Endpoint guards on the live service: `403` cross-origin, `413` oversize,
+  `405` GET, `204` same-origin.
+
+Completed 2026-07-31, after enabling the API and wiring the channel:
+
+- The email notification channel exists and is enabled
+  (`gcloud`-unreachable to configure, but readable via the Monitoring REST API:
+  `GET /v3/projects/$PROJECT/notificationChannels`).
+- Two drills with **different messages produced two different groups**, which is
+  the behaviour the `probe=throw` message relies on: a fixed message keeps
+  reusing one group instead of firing a new-group notification per run.
+- **`?probe=throw` with an admin session grouped as `server.unhandled`** under
+  service `learning-app`, version `learning-app-00008-fv9`. The log line carries
+  `severity: ERROR`, `routeType: "route"` (the route-handler path, which a
+  browser crash can never reach), `serviceContext` with the revision, ten stack
+  frames in `message`, and no `stack` left in `err`.
+
+Note that a route-handler throw carries **no `digest`** — Next attaches digests
+to React render errors, not to route handlers — so that field is absent here and
+present on a Server Component error. Nothing is wrong when it does not appear.
+
+Still unverified in cloud: the **worker** half (`LOG_SERVICE_NAME=course-worker`),
+which is blocked on D4.
 
 ### The client endpoint's abuse surface
 
