@@ -389,6 +389,92 @@ duty (kept for local dev).
 > when queue depth needs >1 instance (that scaling point is also when revenue exists). Verify: enqueue a real course request on the new domain, watch
 a cloud worker claim + build it, structured logs visible in Cloud Logging.
 
+> **LIVE 2026-07-31** — `course-worker` `e2-micro` running in **`us-central1-a`**, draining
+> the production queue. It cleared a real 47-hour-old backlog on first boot
+> (`linear-algebra` 13m41s/22 lessons, `machine-learning` 13m15s/13 lessons), proving the
+> ADC path, the pooler connection, and structured logging in one pass. Verification table
+> in `worker-deploy.md` §11 — **all five steps pass**, including the graceful requeue (claim
+> released in 1s) and the crash path (`course-request.reclaimed-stale` at exactly
+> `claimedAt + 45m00s`, re-claimed 1s later by the rebooted worker).
+>
+> **Finding for C2, surfaced by the step-4 build: `precalculus` cannot currently build on
+> production.** A clean cold run authored 22 concepts (13 spine, 9 frontier) and left
+> **exactly one SPINE concept with no candidate resource** —
+> `function-transformations-and-compositions` — so readiness never reached `spine_ready` and
+> the request terminated `failed` with `spine holes left uncoverable`. Remediation otherwise
+> worked: it relaxed two concepts (`polynomial-functions`, `unit-circle-and-angle-measure`)
+> onto sub-floor primaries, and escalated the one it genuinely could not cover.
+>
+> ⚠️ An earlier draft of this note claimed remediation "escalated only 1 of 4 holes,
+> suggesting the ladder stopped early." **That was wrong** — a measurement error, counting
+> zero-resource concepts across the whole Path when `recomputeReadiness` only considers
+> `membership: spine` (`recompute-readiness.ts:41`). The other three zero-resource concepts
+> are **frontier**, where having no resource is the normal state. There is no evidence the
+> sourcing ladder misbehaves. The real gap is narrow and tractable: one spine concept needs
+> one acceptable resource. Repeat the membership check before reading any future hole count
+> as a bug.
+>
+> **Region: `us-central1`, not `us-west1`** (decided 2026-07-31). `e2-micro` capacity was
+> exhausted in **all three** `us-west1` zones — confirmed `resource_availability`, not quota
+> (E2_CPUS limit 100, usage 0) — across 18 attempts over ~10 minutes. Cost is identical
+> (both are Always Free regions; only a ~$0.01/mo cross-region image pull differs), so the
+> trade is purely the latency of leaving the DB's region. **The latency cost is UNMEASURED**
+> — production builds ran 13-14 minutes, but the local comparison isn't valid (the prod
+> paths weren't warm), so don't cite that as evidence either way. Moving back is cheap
+> because the VM is stateless: recreate in a `us-west1` zone, verify, delete. The only thing
+> that would make it expensive is anything keyed to the worker's egress IP
+> (`104.197.62.19`), e.g. Supabase network restrictions.
+>
+> **Three bugs found by running it, none of which review would have caught:**
+> 1. **COS's root filesystem is read-only**, so `docker login` fails on
+>    `mkdir /root/.docker` and `set -e` kills the script before `docker pull` — while
+>    systemd still reports `status=0/SUCCESS`. Externally it looks like a healthy VM with no
+>    container. Fixed with `DOCKER_CONFIG` on `/var` (plus `--password-stdin`, so the token
+>    is not in argv).
+> 2. **Cloud Audit Logs pollute `resource.type="gce_instance" AND severity>=ERROR`** — every
+>    failed Compute API call lands there. Ten such entries fired the first alert and were
+>    the audit trail of the failed `us-west1` creates. Alerting must scope to
+>    `logName:"logs/cos_containers"`.
+> 3. COS's cloud-init emits an ERROR (`Failed to wait for network`) on every healthy boot —
+>    a second reason not to alert on resource type alone.
+>
+> `docs/worker-deploy.md` is restructured around the VM
+> (Cloud Run worker pool demoted to §13, the scale-up path). New tracked artifacts:
+> `cloudbuild.worker.yaml` and `deploy/worker-vm-startup.sh`. SA `course-worker`
+> created with five roles; image `course-worker:2e3330c` built and pushed.
+> **Blocked on `e2-micro` capacity** — all three `us-west1` zones returned
+> `resource_availability` on create. Decision (2026-07-31): keep retrying `us-west1`
+> rather than take a free-tier zone in `us-central1`/`us-east1`, because the
+> region-tracks-the-database rule is worth more than landing a day earlier, and
+> nothing but C2 waits on D4.
+>
+> **The 1 GB RAM risk was measured, not assumed** (local compose worker, 2026-07-31):
+> idle **229 MiB**; warm build (`calculus`, 0 holes, 444-resource library, 216s)
+> **253 MiB**; cold build (`data-structures-algorithms`, no Path, spine authoring +
+> sourcing ladder + track build, 1346s) **273 MiB**. A full cold build costs 44 MiB
+> over idle, not a multiple — the worker is one sequential pipeline that streams
+> responses and writes rows. `e2-micro` is comfortable; the startup script's 768m
+> container cap is 2.8× observed peak. First measurement attempt (`graph-theory`)
+> was discarded: it escalated in 44s without doing real sourcing.
+>
+> **Three things the plan's cost note did not anticipate:**
+> - **The worker does not auto-deploy.** The app rebuilds and deploys on every merge
+>   to `main`; the VM runs whatever tag its metadata names. Shipping a worker change
+>   is build → `add-metadata` → `reset` (worker-deploy.md §9). A Cloud Build trigger
+>   would build but still not deploy, which is worse — it looks automated.
+> - **`gcloud compute instances reset` is a hard power cycle**, not a graceful
+>   restart: no SIGTERM, so the in-flight claim waits out the 45m stale reclaim.
+> - **Logs are not free here.** Cloud Run forwarded container stdout to Cloud Logging
+>   automatically; a GCE VM needs `google-logging-enabled=true` metadata plus
+>   `roles/logging.logWriter`. Whether COS's fluent-bit parses our JSON lines into
+>   `jsonPayload` with `severity` intact is **undocumented** and is the one real
+>   verification risk — B1's worker error-reporting half depends on it.
+>
+> External IPv4 confirmed **not** free-tier exempt (~$2.92/mo) and unavoidable:
+> Private Google Access would cover Vertex and Artifact Registry, but Supabase is on
+> AWS, so the worker needs real internet egress. Cloud NAT costs an order of
+> magnitude more.
+
 ---
 
 ## Feature B — GCP-native error reporting

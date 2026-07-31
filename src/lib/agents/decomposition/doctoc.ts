@@ -48,8 +48,12 @@ import { deriveChildConcepts } from './concepts';
 import type { ChildInput } from './decompose';
 import { DECOMPOSITION_MAX_AUTO_CHILDREN, DOC_TOC_MAX_HTML_CHARS } from '@/lib/config';
 
+// The contact URL is what a site owner sees in their logs and follows to find out
+// who is crawling them, so it has to resolve. Points at the Cloud Run service
+// since the Vercel host it used to name was decommissioned (2026-07-31); move it
+// to the custom domain when there is one (app-deploy.md §6).
 const FETCH_UA =
-  'Mozilla/5.0 (compatible; LearningPathBot/1.0; +https://learning-app-three-amber.vercel.app)';
+  'Mozilla/5.0 (compatible; LearningPathBot/1.0; +https://learning-app-sau6bxtxta-uw.a.run.app)';
 const MAX_CANDIDATE_LINKS = 300;
 const BODY_SNIPPET_CHARS = 2000;
 
