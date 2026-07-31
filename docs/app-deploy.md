@@ -492,6 +492,11 @@ Sequence matters — Vercel must keep working until the new domain verifies:
 Structured logs (`src/lib/log.ts`) land in Cloud Logging as `jsonPayload`, same
 as the worker; `worker-deploy.md` §10 has the filter patterns.
 
+Curation is **not** operated through this service. The review skills need
+`DEV_AUTH`, which cannot work in a deployed build, so they run against a local
+dev server pointed at the production database —
+[operator-tooling.md](operator-tooling.md) has the pattern and its hazards.
+
 ## 8. Error Reporting & alerting (B1)
 
 `src/lib/log.ts` emits what Cloud Logging and Error Reporting read, so ingestion
@@ -578,8 +583,9 @@ new-group notification each time. Run it after any deploy that touches logging,
 and once against a freshly wired notification channel to prove delivery.
 
 Because it needs an admin session cookie, drive it from the deployed app's own
-page context rather than curl (the same pattern the review skills use; E1 will
-document it properly):
+page context rather than curl (the same pattern the review skills use — for how
+those skills are pointed at production data, see
+[operator-tooling.md](operator-tooling.md)):
 
 ```js
 await fetch('/api/health?probe=throw').then((r) => r.status) // 500 when admin, 200 when not

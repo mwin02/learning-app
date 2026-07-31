@@ -26,6 +26,15 @@ queued rows to pull (default 5 if empty).
   `curl -s -o /dev/null -w "%{http_code}" -X POST localhost:3000/api/playground/decomposition-review -H 'content-type: application/json' -d '{"resourceId":"__probe__","action":"reject"}'`
   → `404` with a JSON `NOT_FOUND` body. A plain `404` page / connection refused means
   the server or `DEV_AUTH` is missing — stop and ask.
+- **Know which DB that server was started against, and say so before deciding anything.**
+  The `curl` above is identical whether the server points at local Docker Postgres or at
+  the production library — the URL cannot tell you which one you are about to edit. The
+  server logs it on its first DB request as
+  `{"event":"db.client_created","target":"host:port/dbname"}`: `localhost:55432/learning_app`
+  is local and disposable, `…pooler.supabase.com:6543/postgres` is production and every
+  write is real. Ask the user to read that line off the dev-server terminal, and state the
+  target in your first message. Pointed at the wrong DB the queue comes back **empty**, not
+  failing — "nothing to decompose" is the symptom. See `docs/operator-tooling.md`.
 - A connected Chrome (Claude-in-Chrome) is needed **only for the browser-spa route
   and for triaging pages `curl` can't render**. Don't demand it up front; if a
   resource turns out to need it and no browser is connected, skip that resource and
