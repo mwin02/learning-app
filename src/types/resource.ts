@@ -93,11 +93,15 @@ export const TOPIC_RELATIONS: Record<string, readonly string[]> = {
   // not help, because its disagreements land as contested secondaries, which T1's
   // retrieval predicate deliberately excludes.
   // Separately: warming `precalculus` cold (2026-07-25) showed the library rung reaching
-  // 76 calculus rows and skipping web discovery entirely — the rung counts raw hits, not
-  // judged-`teaches` survivors (a locked tradeoff, see web-fallback.ts:171-173), so
-  // divergent concepts (conic-sections, systems-of-equations-and-matrices,
-  // combining-functions) were starved and relaxed to hollow. That is an argument about
-  // the rung's counting, not about this edge.
+  // 76 calculus rows and skipping web discovery entirely, starving divergent concepts
+  // (conic-sections, systems-of-equations-and-matrices, combining-functions) into hollow
+  // relaxed primaries. That was read at the time as a locked cost tradeoff. It was not —
+  // it was a defect: the rung counted RAW search hits rather than judged survivors, so
+  // rows the judge threw away suppressed web discovery permanently. Fixed by
+  // rung0-starvation R1/R2 (docs/rung0-starvation-plan.md); the budget now comes from
+  // what attached, and a spine hole is guaranteed at least one web look. Either way it
+  // was never an argument about this edge — the same starvation hit topics with no
+  // relations at all.
   precalculus: ['calculus'],
   // The stats pool lives under TWO canonicals and topic-filing T4 deliberately kept
   // both as sibling shelves rather than merging them (T4b's split; the 31-row

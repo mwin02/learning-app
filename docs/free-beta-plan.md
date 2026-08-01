@@ -24,7 +24,7 @@ first, <300 LOC per block, one branch per block, verification gate before commit
 | D4 | GCP: Cloud Run worker pools live | ops | D2, D3 |
 | B1 | Observability: GCP-native error reporting | code + ops | D3 (verified on Cloud Run) |
 | C1 | Warm campaign: `reset-maps` + `warm-paths` scripts | code | — |
-| C2 | Warm campaign: rebuild the 12 warm topics + review passes | ops | A*, D4, C1, **topic-filing T4**, **E1** |
+| C2 | Warm campaign: rebuild the 12 warm topics + review passes | ops | A*, D4, C1, **topic-filing T4**, **E1**, **rung0-starvation R1–R2** (shipped) |
 | E1 | Operator tooling: document the local-app/remote-DB pattern | docs + code | D3 |
 | E2 | Operator tooling: real admin auth for the review skills | code | D3, E1 |
 
@@ -639,10 +639,20 @@ Runs **after D4** (cloud workers + Supabase library) **and after topic-filing T4
 >
 > A second C1 measurement worth carrying in: warming `precalculus` cold reached 76
 > calculus-filed resources through the new relation edge and **skipped web discovery
-> entirely**, because the library rung counts raw hits rather than judged-`teaches`
-> survivors (locked tradeoff, `web-fallback.ts:171-173`). Three spine concepts relaxed to
-> hollow. Expect the same shape on any warm topic whose shelf is mostly borrowed — step 5
-> below should check for `relaxed`/hollow concepts, not just `spine_ready`.
+> entirely**. Read at the time as the library rung's locked cost tradeoff; it was a
+> **defect** — the rung counted raw search hits instead of judged survivors, so rows the
+> judge threw away suppressed discovery permanently, in every pass and every rerun. Three
+> spine concepts relaxed to hollow. Measured across every Path examined on 2026-07-31,
+> **100% of spine holes were rung-0 saturated** — none had ever reached web discovery, and
+> thin shelves (`physics-mechanics`, a 10-row shelf) were as exposed as borrowed ones.
+>
+> **Fixed by `docs/rung0-starvation-plan.md` R1–R2** (shipped 2026-08-01): the web budget
+> now derives from what actually attached, spine-hole callers are floored at one web look,
+> and judged-and-rejected rows are remembered so they can't re-consume the budget. C2 step
+> 2 (adding sources) is only worth doing on top of this — a wider allowlist feeds rungs
+> 1–2, which used to be unreachable. Step 5 should still check for `relaxed`/hollow
+> concepts, not just `spine_ready`, and `scripts/rung0-coverage.ts` is the per-Path probe
+> for this failure mode.
 
 1. `reset-maps` against Supabase (should be near-empty of maps anyway post-D2).
 2. New topics need sources: check `data/seed-sources.ts` coverage for `sql`,
