@@ -71,4 +71,4 @@ Detailed conventions live in `.claude/rules/` and load automatically when you to
 Two testing facts with blast radius beyond test files:
 
 - `npm test` = unit only, safe with no secrets; `npm run test:int` hits the real dev DB.
-- **Before `npm run test:int`, stop the dockerized workers** (`docker compose --profile workers stop worker`) — they poll the same DB and steal the tests' queue rows. Restart afterwards with `docker compose --profile workers up -d`.
+- **Before `npm run test:int`, stop the dockerized workers** (`docker compose --profile workers stop worker`) — they poll the same DB and steal the tests' queue rows. Restart afterwards with `docker compose --profile workers up -d --build` — without `--build` compose reuses a stale image indefinitely (see `.claude/rules/testing.md`).

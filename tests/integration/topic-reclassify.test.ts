@@ -34,6 +34,7 @@ const basis = (i: number) => Array.from({ length: DIM }, (_, j) => (j === i ? 1 
 // That is deliberate here: it exercises the LEFT JOIN branch, which must return the row
 // with null margins rather than dropping it from the result entirely.
 const ids: Record<string, string> = {};
+let baseline: Awaited<ReturnType<typeof checkMembershipInvariants>>;
 
 async function cleanup() {
   await prisma.resource.deleteMany({ where: { topic: { in: [TOPIC, OTHER] } } });
@@ -52,6 +53,11 @@ async function membershipsOf(resourceId: string) {
 describeDb('topic filing T4a — reclassifier DB seams', () => {
   beforeAll(async () => {
     await cleanup();
+    // checkMembershipInvariants is WHOLE-TABLE by design (that scope is the property it
+    // exists to verify), and this is the shared dev DB — sibling tests seed Resource rows
+    // directly, without memberships. So assert these writes add no NEW violation rather
+    // than that the table is globally pristine.
+    baseline = await checkMembershipInvariants();
     const source = await prisma.source.create({
       data: {
         slug: `${TOPIC}src`,
@@ -175,11 +181,7 @@ describeDb('topic filing T4a — reclassifier DB seams', () => {
     expect(m).toMatchObject({ origin: 'inherited', relevance: 1, isPrimary: true });
   });
 
-  it('leaves the T1 membership invariants intact across every write above', async () => {
-    expect(await checkMembershipInvariants()).toEqual({
-      noMembership: 0,
-      badPrimaryCount: 0,
-      mirrorDrift: 0,
-    });
+  it('adds no new T1 membership-invariant violation across every write above', async () => {
+    expect(await checkMembershipInvariants()).toEqual(baseline);
   });
 });
