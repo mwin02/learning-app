@@ -301,6 +301,8 @@ async function collectSurvivors(args: {
     // in iteration 2+ if Google Search returns them).
     const fresh = discovered.filter((r) => !survivors.has(r.url));
     if (fresh.length === 0) {
+      // scripts/verify-rung0-fix.ts pattern-matches this message + `iteration` field
+      // (its rung tracking, including migration off console.log) — change in lockstep.
       console.log('[web-fallback] iteration produced no fresh URLs', { label, iteration: iterations });
       continue;
     }
@@ -325,6 +327,8 @@ async function collectSurvivors(args: {
       survivors.set(r.url, r);
     }
 
+    // scripts/verify-rung0-fix.ts pattern-matches this message + `rung` field (its
+    // rung tracking, including migration off console.log) — change in lockstep.
     console.log('[web-fallback] iteration', {
       label,
       iteration: iterations,

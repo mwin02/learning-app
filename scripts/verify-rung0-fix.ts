@@ -25,8 +25,12 @@
 // + a second judge for the chosen concept. Self-cleaning — deletes the fixture Path
 // (cascading its Concept, attachments and rejection memory) and every agent-origin row
 // created during the run.
-// ⚠️ Run with the compose workers stopped (`docker compose --profile workers stop worker`):
-// cleanup is a time window, and a live worker's inserts are indistinguishable from ours.
+// ⚠️ Cleanup is a time window, so a live worker's agent-origin inserts are
+// indistinguishable from ours — and would be DELETED. That includes the GCE worker when
+// this is pointed at production, not just the local compose workers (`docker compose
+// --profile workers stop worker`). The script refuses to start while any RemediationJob
+// or CourseRequest is queued/running — the pending work it can see — but a poller itself
+// is invisible from here, so confirm no worker is polling the target DB before running.
 
 import { ConceptMembership } from '@prisma/client';
 import { prisma } from '../src/lib/db';
@@ -43,6 +47,26 @@ function check(name: string, cond: boolean, detail?: unknown) {
   else {
     failures++;
     console.error(`  ✗ ${name}`, detail ?? '');
+  }
+}
+
+// The cleanup sweep makes live agent writes fatal, not just noisy: any worker inserting
+// agent-origin rows inside the run's time window would have them deleted. Pending work is
+// the proxy this script can see (the poller itself is invisible from here), so refuse to
+// start while any exists rather than warn and hope.
+async function assertNoActiveAgentWork() {
+  const [remediation, requests] = await Promise.all([
+    prisma.remediationJob.count({ where: { state: { in: ['queued', 'running'] } } }),
+    prisma.courseRequest.count({ where: { status: { in: ['queued', 'running'] } } }),
+  ]);
+  if (remediation > 0 || requests > 0) {
+    console.error(
+      `\n⚠ refusing to run: ${remediation} remediation job(s) and ${requests} course request(s) are queued/running.\n` +
+        '  A live worker (compose locally, the GCE worker on production) claiming them mid-run would\n' +
+        '  insert agent-origin rows inside the cleanup window, and this script would delete them.\n' +
+        '  Stop the workers and let the queue settle, then re-run.',
+    );
+    process.exit(1);
   }
 }
 
@@ -89,6 +113,7 @@ async function pickSaturatedSubject(topics: string[]): Promise<Subject | null> {
 }
 
 async function main() {
+  await assertNoActiveAgentWork();
   const startedAt = new Date();
   console.log('\n── probing real Paths for a rung-0-saturated spine hole ──────────');
   const subject = await pickSaturatedSubject(process.argv.slice(2).filter((a) => !a.startsWith('--')));
@@ -106,7 +131,8 @@ async function main() {
   // never reaching the labelled one. It still RAN, so it still counts as reached;
   // matching only the labelled line would report a barren rung 1 as "the first rung was
   // open-web" and indict correct code. The barren payload carries no `rung`, so the label
-  // is derived exactly as the source derives it (web-fallback.ts:331).
+  // is derived exactly as collectSurvivors' iteration log derives its `rung` field — both
+  // log sites in web-fallback.ts carry a lockstep note pointing back here.
   const rungs: string[] = [];
   const realLog = console.log;
   const rungLabel = (iteration: number) => (iteration === 1 ? 'allowlisted' : 'open-web');
