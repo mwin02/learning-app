@@ -21,6 +21,7 @@ import { PathStatus, BankStaleReason } from '@prisma/client';
 import type { Prisma, ResourceStatus, DecompositionStatus, DeprecationSeverity } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { recomputeReadiness } from '@/lib/agents/map/recompute-readiness';
+import { DB_WRITE_TX_TIMEOUT_MS } from '@/lib/config';
 import { markBankStale } from '@/lib/agents/content/mark-bank-stale';
 
 // A container whose shape is still unsettled isn't meaningfully approvable —
@@ -234,7 +235,7 @@ export async function applyPendingReview(input: ApplyInput): Promise<ApplyResult
       if (count === 0) return { kind: 'raced' as const };
       const cleanup = await dropCandidateLinks(tx, [root.id]);
       return { kind: 'queued_decompose' as const, resourceId: root.id, ...cleanup };
-    });
+    }, { timeout: DB_WRITE_TX_TIMEOUT_MS });
   }
 
   if (UNRESOLVED.includes(root.decompositionStatus)) {
@@ -267,5 +268,5 @@ export async function applyPendingReview(input: ApplyInput): Promise<ApplyResult
 
     const cleanup = await dropCandidateLinks(tx, ids);
     return { kind: 'rejected' as const, resourceId: root.id, deprecated: count, ...cleanup };
-  });
+  }, { timeout: DB_WRITE_TX_TIMEOUT_MS });
 }

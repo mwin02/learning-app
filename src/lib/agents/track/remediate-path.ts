@@ -28,7 +28,7 @@
 
 import { ConceptResourceRole, PathStatus, RemediationState } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import { MAX_REMEDIATION_PASSES } from '@/lib/config';
+import { DB_WRITE_TX_TIMEOUT_MS, MAX_REMEDIATION_PASSES } from '@/lib/config';
 import { shouldFastFailEscalated } from '@/lib/agents/track/escalation-cooldown';
 import { recomputeReadiness } from '@/lib/agents/map/recompute-readiness';
 import { classifyHole, type HoleCandidate } from '@/lib/agents/track/classify-hole';
@@ -214,7 +214,7 @@ async function runRemediation(
         });
       }
       return recomputeReadiness(pathId, tx);
-    });
+    }, { timeout: DB_WRITE_TX_TIMEOUT_MS });
 
     const state = final.holes.length === 0 ? 'succeeded' : 'escalated';
     await finishJob(claim.job.id, { state, relaxedConceptSlugs: relaxable, escalatedConceptSlugs: uncoverable });

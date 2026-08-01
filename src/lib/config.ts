@@ -488,6 +488,23 @@ export const REMEDIATION_JOB_STALE_MS = 35 * 60 * 1000;
 // is the attempts-regime split (audit 2.5, deferred). Ordering pinned in config.test.ts.
 export const PATH_BUILD_STALE_MS = 35 * 60 * 1000;
 
+// Timeout for the multi-statement write transactions in the map/curation paths.
+// Prisma's default is 5s, and these transactions spend it on ROUND TRIPS, not
+// query work: each statement in an interactive transaction is a separate trip,
+// and the largest of them issue ~9 statements plus BEGIN/COMMIT.
+//
+// From the app and the worker (tens of ms to Supabase) 5s is ample. It is the E1
+// "local app, remote DB" operator pattern that breaks it (docs/operator-tooling.md):
+// on a laptop several hundred ms from the database, ~11 trips is 4–8s and the
+// transaction expires mid-flight. Measured during the C2 warm campaign — a single
+// bare `path.update` took 342–856ms — where it failed `physics-mechanics`
+// remediation twice at 6040ms and 7719ms.
+//
+// Raising the budget is deliberate rather than splitting these transactions: the
+// atomicity is load-bearing (recompute-readiness.ts: the Path.status write must
+// commit with the rows it was computed from).
+export const DB_WRITE_TX_TIMEOUT_MS = 30 * 1000;
+
 // H4 (audit 1.3): overall per-job deadline for one worker pipeline run. The
 // single-concurrency loop AWAITS the pipeline, so one hung upstream call (LLM,
 // fetch) would stall the ENTIRE queue — reclaimStale can requeue the row but
