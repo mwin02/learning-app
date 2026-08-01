@@ -1,18 +1,25 @@
-// Targeted per-concept web sourcing.
+// Targeted per-concept sourcing — the two rungs of the ladder that live here.
 //
-//   sourceForConcept({ topic, concept }) — Phase 2.5f targeted per-concept
-//     sourcing for spine-hole remediation + the in-track thickener: find resources
-//     that TEACH one specific concept. Returns insertedIds so the remediation
-//     re-judge (2.5f-3) can attach them by id without waiting on the post-commit
-//     embed.
+//   libraryRungCandidates({ topic, conceptTitle }) — rung 0: EXISTING library rows
+//     semantically near the concept. No discovery, no validation, no writes.
+//   sourceFromWeb({ topic, concept, targetCount }) — rungs 1-2: allowlisted
+//     fan-out, then open-web relaxation. Returns insertedIds so the caller can
+//     attach them by id without waiting on the post-commit embed.
 //
-// This was once a two-entry-point module — the topic-level scattershot
-// `runWebFallback` (the old generate-path library-floor fallback) shared this same
-// discover → validate → maybe re-discover engine + decompose → canonicalize → file
-// → upsert tail. That entry retired in the Phase 2.5g cutover: under the concept-
-// map/Track architecture, library growth is driven by TARGETED per-concept sourcing,
-// not coarse per-topic dumps. The shared engine (collectSurvivors / persistDiscovered
-// / runDiscovery) stays — sourceForConcept is now its only caller.
+// The two are deliberately SEPARATE entry points (rung0-starvation R1). The caller
+// — source-concept.ts — judges rung 0 first and derives the web budget from what
+// SURVIVED the judge, so a shelf of near-but-wrong neighbours can no longer zero
+// the web budget with raw search hits. The judge can't live here: source-concept.ts
+// imports this module, so calling it from here would cycle.
+//
+// This was once a two-entry-point module in a different sense — the topic-level
+// scattershot `runWebFallback` (the old generate-path library-floor fallback) shared
+// this same discover → validate → maybe re-discover engine + decompose →
+// canonicalize → file → upsert tail. That entry retired in the Phase 2.5g cutover:
+// under the concept-map/Track architecture, library growth is driven by TARGETED
+// per-concept sourcing, not coarse per-topic dumps. The shared engine
+// (collectSurvivors / persistDiscovered / runDiscovery) stays — sourceFromWeb is
+// now its only caller.
 //
 // Locked by ROADMAP: grounded search via Vertex's googleSearch tool, NOT an
 // agent-with-tools loop. The "loop" here is in the application layer
@@ -104,7 +111,7 @@ const CanonicalizedTagsSchema = z.object({
 
 // What the web half of a sourcing run persisted (unchanged semantics — these
 // trace/report fields describe DISCOVERY, not the library rung).
-type PersistResult = {
+export type WebFallbackResult = {
   insertedCount: number;
   skippedCount: number;
   discoveredCount: number;
@@ -115,14 +122,9 @@ type PersistResult = {
   insertedIds: string[];
 };
 
-export type WebFallbackResult = PersistResult & {
-  // Library re-judge Block 4 (rung 0): EXISTING library rows semantically near
-  // the concept — already embedded and validated, so they bypass the
-  // discover/validate loop entirely and merge into the caller's candidate set
-  // alongside insertedIds. They count toward targetCount: web discovery runs
-  // only for the shortfall.
-  libraryCandidateIds: string[];
-};
+// One rung-0 hit: the resource id plus its cosine distance to the concept query.
+// searchNearbyResources always ranks, so the distance is never null here.
+export type LibraryCandidate = { id: string; distance: number };
 
 const VALIDATORS = [livenessValidator, rulesAgentValidator];
 
@@ -133,7 +135,11 @@ const VALIDATORS = [livenessValidator, rulesAgentValidator];
 // before the post-commit embed lands. `targetMastery` (set by the in-track
 // thickener, omitted by mastery-agnostic spine-hole remediation) biases discovery
 // toward that learner level.
-export async function sourceForConcept({
+//
+// `targetCount` is the WEB BUDGET the caller derived from rung 0's judged
+// survivors (webShortfall) — not the concept's total target. This function is
+// only called when that budget is > 0.
+export async function sourceFromWeb({
   topic,
   concept,
   conceptId,
@@ -164,17 +170,17 @@ export async function sourceForConcept({
   abortSignal?: AbortSignal;
 }): Promise<WebFallbackResult> {
   const label = `${topic}::${concept.slug}`;
-  // Checked before the library rung too — searchNearbyResources pays a Vertex
-  // query-embedding call, and an already-aborted job shouldn't start even that.
   abortSignal?.throwIfAborted();
-  // The sourcing LADDER (replaces the old "same vague open-web query, repeated"):
-  //   rung 0 — the EXISTING library: rows semantically near the concept (hard
-  //     pgvector distance ceiling; trust alone can't qualify a row), minus ones
-  //     already attached to the demanding concept. Cheapest — no discovery, no
-  //     validation, no upsert; the judge still gates quality. Hits count toward
-  //     targetCount, so the web rungs run only for the shortfall. Accepted
-  //     tradeoff (locked): a concept whose library candidates are mediocre-but-
-  //     passing sees no fresh web results until they stop passing.
+  // The web half of the sourcing LADDER (replaces the old "same vague open-web
+  // query, repeated"):
+  //   rung 0 — the EXISTING library (libraryRungCandidates, below). Cheapest by
+  //     far: no discovery, no validation, no upsert. The COST POLICY it buys is
+  //     unchanged and still locked — where the library genuinely covers a concept,
+  //     the web rungs are skipped entirely and this function is never called. What
+  //     changed in R1 is the arithmetic behind that skip: the caller judges rung 0
+  //     first and spends the budget on judged SURVIVORS, so raw hits that the judge
+  //     throws away no longer suppress discovery (they used to, permanently — see
+  //     docs/rung0-starvation-plan.md).
   //   rung 1 (iteration 1) — allowlisted fan-out: the YouTube Data API prong +
   //     a grounded prong hard-restricted to the curated source domains. Distinct
   //     queries against high-quality sources, so a concept usually fills here.
@@ -182,28 +188,10 @@ export async function sourceForConcept({
   //     run only when rung 1 came up short (protects coverage on thin/niche concepts).
   // collectSurvivors carries the deny-list across rungs so a rung never re-surfaces
   // what an earlier rung already returned.
-  const libraryCandidateIds = await libraryRung({ topic, conceptTitle: concept.title, conceptId, targetCount });
-  const webTarget = webShortfall(targetCount, libraryCandidateIds.length);
-  if (webTarget === 0) {
-    console.log('[web-fallback] library rung filled the target, skipping discovery', {
-      label,
-      libraryHits: libraryCandidateIds.length,
-      targetCount,
-    });
-    return {
-      insertedCount: 0,
-      skippedCount: 0,
-      discoveredCount: 0,
-      iterations: 0,
-      insertedIds: [],
-      libraryCandidateIds,
-    };
-  }
-
   const allowDomains = await loadAllowlistDomains();
   const { survivors, iterations, totalDiscovered } = await collectSurvivors({
     label,
-    targetCount: webTarget,
+    targetCount,
     oversample: REMEDIATION_DISCOVERY_OVERSAMPLE,
     maxIterations: REMEDIATION_MAX_DISCOVERY_ITERATIONS,
     discover: (oversample, denyList, iteration) =>
@@ -216,45 +204,56 @@ export async function sourceForConcept({
     label,
     iterations,
     totalDiscovered,
-    targetCount: webTarget,
+    targetCount,
     sourcedForConceptId: conceptId ?? null,
     abortSignal,
   });
-  return { ...persisted, libraryCandidateIds };
+  return persisted;
 }
 
-// How many resources web discovery still owes after the library rung: library
-// hits count toward targetCount (the locked rung-0 cost policy), floored at 0
-// so an over-full library rung can't demand negative discovery.
-export function webShortfall(targetCount: number, libraryHits: number): number {
-  return Math.max(0, targetCount - libraryHits);
+// How many resources web discovery still owes after the library rung. `libraryAttached`
+// is the count of rung-0 candidates that SURVIVED the judge and attached — not the raw
+// search hits (R1: raw hits used to be counted here, so three near-but-wrong neighbours
+// zeroed the budget forever). Floored at 0 so an over-full library rung can't demand
+// negative discovery.
+export function webShortfall(targetCount: number, libraryAttached: number): number {
+  return Math.max(0, targetCount - libraryAttached);
 }
 
 // Rung 0: existing library rows near the concept. Scoped like the cold map
 // build's candidate search (topic ∪ related topics, excludeGenerated, the
 // default active+pending_review window via searchNearbyResources), gated by the
 // same distance ceiling the decompose-time hook routes with — a hit must be
-// semantically close, not merely high-trust, because hits SUPPRESS web sourcing
-// via the shortfall arithmetic. Rows already attached to the demanding concept
-// are excluded so they can't re-count toward the target.
-async function libraryRung(args: {
+// semantically close, not merely high-trust. Rows already attached to the
+// demanding concept are excluded: they were judged when they attached, so
+// re-judging them is pure spend.
+//
+// Returns CANDIDATES, not survivors. The caller judges them and only then derives
+// the web budget (source-concept.ts) — this function's output must never be used
+// as a coverage measure on its own.
+//
+// Returns the ranked search rows, not bare ids: rung 0 IS a ranked search, and the
+// distance is the signal the rung-0 coverage diagnostic reports per hit
+// (scripts/rung0-coverage.ts — a hole saturated at d=0.25 by well-filed rows is a
+// different story from one saturated at d=0.45 by relevance-0.00 junk). The
+// sourcing caller discards them (`.map(h => h.id)`); that is its choice to make.
+export async function libraryRungCandidates(args: {
   topic: string;
   conceptTitle: string;
   conceptId?: string;
   targetCount: number;
-}): Promise<string[]> {
+}): Promise<LibraryCandidate[]> {
   const { topic, conceptTitle, conceptId, targetCount } = args;
   const attached = conceptId
     ? await prisma.conceptResource.findMany({ where: { conceptId }, select: { resourceId: true } })
     : [];
-  const hits = await searchNearbyResources({
+  return searchNearbyResources({
     topics: relatedTopics(topic),
     query: conceptTitle,
     maxDistance: REJUDGE_ROUTE_MAX_DISTANCE,
     limit: targetCount,
     excludeIds: attached.map((a) => a.resourceId),
   });
-  return hits.map((h) => h.id);
 }
 
 // ── shared engine ─────────────────────────────────────────────────────────────
@@ -361,7 +360,7 @@ async function persistDiscovered(
     sourcedForConceptId: string | null;
     abortSignal?: AbortSignal;
   },
-): Promise<PersistResult> {
+): Promise<WebFallbackResult> {
   const { label, iterations, totalDiscovered, targetCount, sourcedForConceptId, abortSignal } = meta;
   // Audit 2.2: an aborted job must not start the decompose/canonicalize/upsert
   // tail — that's both LLM spend and zombie WRITES racing a successor build.

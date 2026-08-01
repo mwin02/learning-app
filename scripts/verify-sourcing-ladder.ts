@@ -1,7 +1,7 @@
 // Live verification for Phase 2.5h block 2d (the sourcing ladder).
 //   npx tsx --env-file=.env.local scripts/verify-sourcing-ladder.ts
 //
-// Runs the real sourceForConcept against a concept and asserts the LADDER:
+// Runs the real sourceFromWeb (rungs 1-2) against a concept and asserts the LADDER:
 //   - rung 1 sources from the curated set only (YouTube prong + allowlisted
 //     grounded prong) — so when rung 1 fills the target, NO open-web ('web')
 //     resources are inserted;
@@ -11,7 +11,7 @@
 // Spends real quota (one search.list = 100u) + Vertex calls. Cleans up its inserts.
 
 import { prisma } from '../src/lib/db';
-import { sourceForConcept } from '../src/lib/agents/tools/web-fallback';
+import { sourceFromWeb } from '../src/lib/agents/tools/web-fallback';
 
 const TOPIC = 'python';
 const CONCEPT = { slug: 'list-comprehensions', title: 'list comprehensions' };
@@ -27,7 +27,7 @@ function check(name: string, cond: boolean, detail?: unknown) {
 
 async function main() {
   console.log(`\n── sourcing "${CONCEPT.title}" (${TOPIC}) via the ladder ──────────`);
-  const result = await sourceForConcept({ topic: TOPIC, concept: CONCEPT });
+  const result = await sourceFromWeb({ topic: TOPIC, concept: CONCEPT });
   console.log('\nresult:', {
     inserted: result.insertedCount,
     skipped: result.skippedCount,
@@ -64,7 +64,7 @@ async function main() {
     check('YouTube prong contributed at least one stat-bearing video', yt.length > 0, `(${yt.length})`);
   } finally {
     if (inserted.length > 0) {
-      // sourceForConcept only inserts (pending_review) — not yet attached — so the
+      // sourceFromWeb only inserts (pending_review) — not yet attached — so the
       // ids are safe to remove. Guard with the unattached filter anyway.
       const safe = await prisma.resource.findMany({
         where: { id: { in: inserted }, lessonResources: { none: {} }, conceptResources: { none: {} } },

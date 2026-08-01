@@ -20,7 +20,7 @@ import { prisma } from '../src/lib/db';
 import { classifyDiscoveryTopics } from '../src/lib/agents/tools/classify-topic';
 import { createTopicMinter } from '../src/lib/curation/topic-mint';
 import { listCanonicals } from '../src/lib/agents/topic-registry';
-import { sourceForConcept } from '../src/lib/agents/tools/web-fallback';
+import { sourceFromWeb } from '../src/lib/agents/tools/web-fallback';
 import { checkMembershipInvariants, addCollisionMembership } from '../src/lib/curation/resource-topics';
 import { knnNeighbourTopicsOf, topicPools } from '../src/lib/curation/topic-knn';
 
@@ -103,8 +103,8 @@ async function main() {
     // re-runs D alone.
     console.log(`\n── C. discovery — "${CONCEPT.title}" under ${TOPIC_A} ───────────`);
     const run = process.env.SKIP_DISCOVERY
-      ? { insertedIds: [], insertedCount: 0, skippedCount: 0, libraryCandidateIds: [] }
-      : await sourceForConcept({ topic: TOPIC_A, concept: CONCEPT, targetCount: TARGET_COUNT });
+      ? { insertedIds: [], insertedCount: 0, skippedCount: 0 }
+      : await sourceFromWeb({ topic: TOPIC_A, concept: CONCEPT, targetCount: TARGET_COUNT });
     insertedIds.push(...run.insertedIds);
     // A dedup hit is what reaches the collision path at all. It only becomes a MEMBERSHIP
     // when the filing verdict differs from the existing row's primary AND clears the
@@ -113,7 +113,6 @@ async function main() {
     console.log('   run:', {
       inserted: run.insertedCount,
       dedupHits: run.skippedCount,
-      libraryHits: run.libraryCandidateIds.length,
     });
 
     const collisions = await prisma.resourceTopic.findMany({

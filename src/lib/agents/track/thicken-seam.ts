@@ -99,6 +99,9 @@ export async function thickenSpine(req: ThickenRequest): Promise<ThickenResult> 
       title: c.title,
       targetMastery,
       isOnRamp: c.isOnRamp,
+      // requirePrimary stays false (R1): these concepts already HAVE a qualifying
+      // primary — they're too shallow, not uncovered — so flooring the web budget
+      // at 1 would buy a discovery call on every thicken pass for no coverage gain.
       preferSubstantial: bySlug.get(c.slug)?.preferSubstantial ?? false,
     });
   }

@@ -19,11 +19,11 @@ vi.mock('@/lib/ai/models', () => ({
 import { webShortfall } from './web-fallback';
 
 describe('webShortfall — rung-0 target arithmetic', () => {
-  it('web discovery owes the full target when the library rung finds nothing', () => {
+  it('web discovery owes the full target when the library rung attaches nothing', () => {
     expect(webShortfall(3, 0)).toBe(3);
   });
 
-  it('library hits count toward the target', () => {
+  it('library ATTACHMENTS count toward the target (R1: survivors, not raw hits)', () => {
     expect(webShortfall(3, 1)).toBe(2);
     expect(webShortfall(3, 2)).toBe(1);
   });

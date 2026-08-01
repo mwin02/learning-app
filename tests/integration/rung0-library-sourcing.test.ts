@@ -1,21 +1,30 @@
-// DB integration test for Block 4 rung-0 library-first sourcing: a hole concept
-// whose topic library already holds enough embedded, semantically-near atomic
-// rows gets them judged and attached with ZERO web-discovery iterations — the
-// library rung fills targetCount, so the discover/validate ladder never runs.
+// DB integration test for rung-0 library-first sourcing, on the rung0-starvation
+// R1 contract: the web budget is spent on rung-0 candidates that SURVIVED the
+// judge, not on raw search hits.
+//
+//   - library candidates all kept        → target filled → ZERO web discovery
+//   - library candidates all judged away → full web budget (the R1 fix; pre-R1
+//     three raw hits zeroed the budget forever)
+//   - library candidates kept as `uses`  → numerically full but no qualifying
+//     primary → requirePrimary floors the budget at 1; without it, no web call
+//
+// Every case uses its OWN concept (the rows match every concept — one fixed query
+// vector — but the attached-row exclusion is per concept, so the cases don't leak
+// into each other).
 //
 // LLM leaves are mocked (no tokens, deterministic):
 //   - embedQuery → fixed unit vector, matching the hand-written row embeddings
 //     (distance 0, under the ceiling);
-//   - judgeCandidates keeps everything as `teaches` @ 0.9;
+//   - judgeCandidates is driven by `judgeVerdict`, per test;
 //   - the YouTube prong is a spy returning [] — zero calls proves discovery was
-//     skipped, calls prove the ladder ran (the shortfall re-run case);
+//     skipped, calls prove the ladder ran;
 //   - the ai SDK's generateText/generateObject return empty (the grounded
-//     prongs discover nothing on the shortfall run).
+//     prongs discover nothing when the ladder does run).
 // searchNearbyResources (pgvector SQL), the attach transaction,
 // promote-on-attach, and recomputeReadiness run for real against the dev DB.
 //
 // Self-cleaning: rows use a __verify_rung0__ marker. Skips without DATABASE_URL.
-import { beforeAll, afterAll, it, expect, vi } from 'vitest';
+import { beforeAll, beforeEach, afterAll, it, expect, vi } from 'vitest';
 
 vi.mock('@/lib/ai/embeddings', () => ({
   buildEmbeddingText: (r: { title: string }) => r.title,
@@ -27,12 +36,15 @@ vi.mock('@/lib/ai/embeddings', () => ({
   safeEmbedResource: async () => {},
 }));
 
+// Per-test judge verdict. `teaches` @ 0.9 attaches as a qualifying primary; `uses`
+// @ 0.9 attaches but closes no hole; 0.1 is under MAP_ATTACH_MIN_COVERAGE, so
+// nothing attaches at all.
+let judgeVerdict: { role: 'teaches' | 'uses'; coverageScore: number } = { role: 'teaches', coverageScore: 0.9 };
 vi.mock('@/lib/agents/map/candidate-judge', () => ({
   judgeCandidates: async ({ candidates }: { candidates: { id: string; trustScore: number; durationMin: number }[] }) =>
     candidates.map((c) => ({
       resourceId: c.id,
-      role: 'teaches',
-      coverageScore: 0.9,
+      ...judgeVerdict,
       trustScore: c.trustScore,
       durationMin: c.durationMin,
     })),
@@ -67,9 +79,11 @@ function unitVec(i: number): number[] {
   return v;
 }
 
+const CONCEPTS = ['rung0-alpha', 'rung0-beta', 'rung0-gamma', 'rung0-delta'] as const;
+
 let pathId: string;
-let conceptId: string;
-let libraryIds: string[] = [];
+const conceptIds = new Map<string, string>();
+const libraryIds: string[] = [];
 
 async function cleanup() {
   // Path first: cascades concepts → their ConceptResource links, which
@@ -87,11 +101,14 @@ describeDb('rung 0 — library-first sourcing', () => {
       select: { id: true },
     });
     const path = await prisma.path.create({
-      data: { topic: TOPIC, concepts: { create: [{ slug: 'rung0-alpha', title: 'Alpha subject' }] } },
-      select: { id: true, concepts: { select: { id: true } } },
+      data: {
+        topic: TOPIC,
+        concepts: { create: CONCEPTS.map((slug) => ({ slug, title: `${slug} subject` })) },
+      },
+      select: { id: true, concepts: { select: { id: true, slug: true } } },
     });
     pathId = path.id;
-    conceptId = path.concepts[0].id;
+    for (const c of path.concepts) conceptIds.set(c.slug, c.id);
 
     // Three embedded, semantically-matching atomic library rows — exactly the
     // default REMEDIATION_SOURCE_TARGET_COUNT, so rung 0 fills the target.
@@ -125,18 +142,29 @@ describeDb('rung 0 — library-first sourcing', () => {
   });
   afterAll(cleanup);
 
-  it('fills the hole from the library with zero discovery iterations', async () => {
-    const attached = await sourceAndAttachConcept({
+  beforeEach(() => {
+    judgeVerdict = { role: 'teaches', coverageScore: 0.9 };
+    youtubeProng.mockClear();
+  });
+
+  // The concept under test in each case; `title` drives the (mocked) query embed.
+  function sourceFor(slug: string, requirePrimary: boolean) {
+    return sourceAndAttachConcept({
       pathId,
       topic: TOPIC,
-      conceptId,
-      slug: 'rung0-alpha',
-      title: 'Alpha subject',
+      conceptId: conceptIds.get(slug)!,
+      slug,
+      title: `${slug} subject`,
+      requirePrimary,
     });
+  }
+
+  it('fills the hole from the library with zero discovery iterations', async () => {
+    const attached = await sourceFor('rung0-alpha', true);
     expect(attached).toBe(3);
 
     const links = await prisma.conceptResource.findMany({
-      where: { conceptId },
+      where: { conceptId: conceptIds.get('rung0-alpha') },
       select: { resourceId: true, role: true },
     });
     expect(links.map((l) => l.resourceId).sort()).toEqual([...libraryIds].sort());
@@ -158,15 +186,39 @@ describeDb('rung 0 — library-first sourcing', () => {
   it('a re-run excludes the attached rows and owes the web the full shortfall (no double-count)', async () => {
     // All 3 matches are now attached → rung 0 excludes them → shortfall 3 → the
     // ladder DOES run this time (prongs mocked to empty), attaching nothing.
-    const attached = await sourceAndAttachConcept({
-      pathId,
-      topic: TOPIC,
-      conceptId,
-      slug: 'rung0-alpha',
-      title: 'Alpha subject',
-    });
+    const attached = await sourceFor('rung0-alpha', true);
     expect(attached).toBe(0);
     expect(youtubeProng).toHaveBeenCalled();
-    expect(await prisma.conceptResource.count({ where: { conceptId } })).toBe(3);
+    expect(await prisma.conceptResource.count({ where: { conceptId: conceptIds.get('rung0-alpha') } })).toBe(3);
+  });
+
+  it('R1: rung-0 hits the judge throws away do NOT suppress web discovery', async () => {
+    // The starvation case. Three near-but-wrong library rows are returned by rung 0
+    // and rejected by the judge; pre-R1 their RAW count zeroed the web budget and
+    // the concept was unfillable forever.
+    judgeVerdict = { role: 'teaches', coverageScore: 0.1 };
+    const attached = await sourceFor('rung0-beta', true);
+
+    expect(attached).toBe(0);
+    expect(youtubeProng).toHaveBeenCalled();
+    expect(await prisma.conceptResource.count({ where: { conceptId: conceptIds.get('rung0-beta') } })).toBe(0);
+  });
+
+  it('R1: a full target of `uses` attachments still buys a web look when a primary is required', async () => {
+    judgeVerdict = { role: 'uses', coverageScore: 0.9 };
+    const attached = await sourceFor('rung0-gamma', true);
+
+    // Numerically the target is full — but nothing here can be a Lesson primary,
+    // so readiness still calls the concept a hole and the budget floors at 1.
+    expect(attached).toBe(3);
+    expect(youtubeProng).toHaveBeenCalled();
+  });
+
+  it('requirePrimary: false (the thickener) leaves the cost policy exactly as it was', async () => {
+    judgeVerdict = { role: 'uses', coverageScore: 0.9 };
+    const attached = await sourceFor('rung0-delta', false);
+
+    expect(attached).toBe(3);
+    expect(youtubeProng).not.toHaveBeenCalled();
   });
 });

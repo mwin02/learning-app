@@ -90,7 +90,7 @@ export async function rejudgeForDemandingPaths(resourceId: string): Promise<Reju
   for (const concept of concepts) {
     const routed = await routeCandidates(concept.title, candidateIds);
     if (routed.length === 0) continue;
-    const attached = await judgeAndAttachCandidates({
+    const { attached } = await judgeAndAttachCandidates({
       pathId: concept.pathId,
       conceptId: concept.id,
       slug: concept.slug,

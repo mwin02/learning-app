@@ -133,7 +133,9 @@ export async function addFrontierConcept(args: {
     });
   }
   if (!attachment || !hasQualifyingPrimary(attachment)) {
-    await sourceAndAttachConcept({ pathId, topic: path.topic, conceptId, slug, title });
+    // R1 requirePrimary: we only get here with no qualifying primary, so the web
+    // rungs must stay reachable even if rung 0 attaches non-primary candidates.
+    await sourceAndAttachConcept({ pathId, topic: path.topic, conceptId, slug, title, requirePrimary: true });
   }
 
   // Report the true end state: does the node have a qualifying `teaches` primary?
