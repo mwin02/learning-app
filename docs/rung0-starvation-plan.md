@@ -1,6 +1,8 @@
 # Rung-0 starvation — plan
 
-**Status:** proposed 2026-07-31, blocking free-beta **C2** (`docs/free-beta-plan.md` § C2).
+**Status:** **implemented 2026-08-01** (R0–R3). Proposed 2026-07-31; unblocks free-beta
+**C2** (`docs/free-beta-plan.md` § C2). The defect below is described in the past tense
+from here on — it is what the code did before R1.
 **Scope:** one retrieval defect in the sourcing ladder. Deliberately narrow — this is
 *not* `docs/library-quality-plan.md`, and neither plan fixes the other's problem.
 
@@ -59,6 +61,29 @@ ever reached web discovery.
 | statistics | local dev | 1 | 1 |
 | precalculus | local dev | 3 | 3 |
 
+**Re-measured at the R0 gate (2026-07-31/08-01).** Hole counts are a moving snapshot and
+three of them had moved by the time R0 shipped; the original numbers above are left as the
+measurement that justified the plan, and this is the correction:
+
+| Path | DB | plan says | actually measured at the gate |
+| --- | --- | --- | --- |
+| statistics | local dev | 1 hole | **0 holes** — commit 7eab38a widened it into the `probability-and-statistics` shelf |
+| physics-mechanics | local dev | 10 holes | **6 holes** |
+| precalculus | production | 3 holes | **1 hole** |
+
+**The saturation rate held everywhere: 100% of holes examined were rung-0 saturated**
+(local `machine-learning` 2/2, local `physics-mechanics` 6/6, production `precalculus`
+1/1). Only the counts moved — the finding did not.
+
+The one surviving production `precalculus` hole is the sharpest single data point in this
+plan: `function-transformations-and-compositions` is saturated by rows at **d=0.251–0.300**
+filed at relevance **0.80/0.90 by the classifier** — "Functions", "Evaluating functions",
+"Worked example: evaluating expressions with function notation". Well-filed, well-embedded,
+semantically close, and none of them teach transformations or compositions. That is a
+different population from the junk samples below (d≈0.4+, relevance 0.00), and it is why no
+ingestion-side fix reaches this defect: `library-quality-plan.md` P3/B3 would move neither
+those rows nor those distances.
+
 Content samples — none of these teach the concept they were retrieved for:
 
 ```
@@ -79,9 +104,12 @@ Three facts worth carrying:
    slots on one resource. That is `library-quality-plan.md` B5's dedupe item with a
    measurable retrieval cost — but deduping does not fix this defect, it only widens the
    junk pool slightly.
-3. **Filing quality is not the lever.** Every saturating row is `origin: inherited` or a
-   `relevance: 0.00` classifier filing, so `library-quality-plan.md` P3/B3 would change
-   *which* junk rung 0 returns. It would still return 3 rows and still zero the web budget.
+3. **Filing quality is not the lever.** Most saturating rows here are `origin: inherited`
+   or `relevance: 0.00` classifier filings, so `library-quality-plan.md` P3/B3 would
+   change *which* junk rung 0 returns. It would still return 3 rows and still zero the web
+   budget. The gate re-measure strengthened this: production `precalculus`'s surviving hole
+   saturates on rows the classifier filed at **0.80/0.90** at d=0.251–0.300 — perfect
+   filing, still the wrong material.
 
 ## Why this blocks C2
 
@@ -104,12 +132,12 @@ gradually, after the beta) stands.
 Four blocks, `R0` mergeable alone, `R1` the actual fix, `R2` the durability follow-on,
 `R3` the close-out. One migration, in R2.
 
-| block | scope | migration | LOC (est.) |
-| --- | --- | --- | --- |
-| R0 | read-only rung-0 coverage diagnostic | no | ~120 |
-| R1 | count judged survivors, not raw hits | no | ~220 |
-| R2 | per-concept rejection memory | **yes** | ~150 |
-| R3 | live verifier + doc reconciliation | no | ~120 |
+| block | scope | migration | LOC (est.) | status |
+| --- | --- | --- | --- | --- |
+| R0 | read-only rung-0 coverage diagnostic | no | ~120 | shipped |
+| R1 | count judged survivors, not raw hits | no | ~220 | shipped |
+| R2 | per-concept rejection memory | **yes** | ~150 | shipped |
+| R3 | live verifier + doc reconciliation | no | ~120 | shipped |
 
 ## R0 — `scripts/rung0-coverage.ts` (diagnostic, read-only)
 
@@ -218,18 +246,32 @@ Decide when R2 is picked up, not now.
 
 ## R3 — live verifier + doc reconciliation
 
-**`scripts/verify-rung0-fix.ts`:** drive a real concept with a saturating shelf through
-`sourceAndAttachConcept` and assert web discovery actually ran (rung labels in the
-`[web-fallback] iteration` lines) and that a qualifying primary attached. Spends real
-quota; cleans up its inserts, like `verify-sourcing-ladder.ts`.
+**`scripts/verify-rung0-fix.ts`** (shipped): drives a rung-0-saturated concept through
+`sourceAndAttachConcept` and asserts web discovery actually ran (rung labels captured from
+the `[web-fallback] iteration` lines), that a qualifying primary attached, and that R2
+recorded the rejected rung-0 rows. Spends real quota; self-cleaning.
 
-**Docs to reconcile — each currently states the raw-hit behaviour as settled:**
+Its fixture is a **throwaway Path/Concept container around a real saturating shelf**. The
+subject is auto-selected: it scans real Paths' spine holes, replays `libraryRungCandidates`
+(without a `conceptId`, so neither exclusion applies) and takes the first hole whose rung 0
+saturates — then runs that topic/slug/title under a fixture Path (`__verify_rung0__`),
+never the real one. Inventing a shelf would only prove the judge rejects invented rows; the
+defect lives in how genuinely-filed, semantically-close rows meet the real judge. The
+fixture container buys the rest: no mutation of a servable Path (`recomputeReadiness`
+writes `Path.status`), and a fresh `conceptId` so R2's rejection memory on the *real*
+concept can't hide the saturating rows and turn the run green for the wrong reason.
 
-- `src/types/resource.ts:95-100` (the `precalculus` note in `TOPIC_RELATIONS`) — the
-  starvation it describes is this bug, not an argument about the edge.
-- `docs/free-beta-plan.md` § C2, the C1 measurement block at :640-645.
-- `docs/library-quality-plan.md` — a pointer noting this defect is retrieval-side and out
-  of that plan's scope.
+**Docs reconciled** — each had stated the raw-hit behaviour as settled:
+
+- `src/types/resource.ts` (the `precalculus` note in `TOPIC_RELATIONS`) — the starvation it
+  describes is reframed as this bug, now fixed; the note's actual argument (keep the edge)
+  is untouched.
+- `docs/free-beta-plan.md` § C2 — the C1 measurement block, plus a dependency on R1–R2 in
+  the block table.
+- `docs/library-quality-plan.md` — a "not in this plan" section: this defect is
+  retrieval-side, and the production `precalculus` d=0.25/relevance-0.90 case is the
+  evidence P3/B3 cannot reach it.
+- this file — status, and the gate re-measure of the evidence table.
 
 ## Explicitly out of scope
 
