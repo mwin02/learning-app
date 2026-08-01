@@ -58,6 +58,13 @@ export const seedSources: SourceSeedInput[] = [
     kind: 'official_docs',
     trustScore: 0.85,
   },
+  {
+    slug: 'postgresql-docs',
+    name: 'PostgreSQL Documentation',
+    url: 'https://www.postgresql.org',
+    kind: 'official_docs',
+    trustScore: 0.95,
+  },
 
   // ── educator ─────────────────────────────────────────────────────────────
   {
@@ -119,6 +126,52 @@ export const seedSources: SourceSeedInput[] = [
     kind: 'educator',
     trustScore: 0.7,
     youtubeChannelId: 'UCoHhuummRZaIVX7bD4t2czg',
+  },
+  // ── free-beta C2 step 2: cover the thin warm shelves (sql, DSA, physics) ──
+  {
+    slug: 'abdul-bari',
+    name: 'Abdul Bari',
+    url: 'https://www.youtube.com/@abdul_bari',
+    kind: 'educator',
+    trustScore: 0.85,
+    youtubeChannelId: 'UCZCFT11CWBi3MHNlGf019nw',
+  },
+  {
+    slug: 'walter-lewin',
+    name: 'Lectures by Walter Lewin (MIT 8.01/8.02/8.03)',
+    url: 'https://www.youtube.com/@lecturesbywalterlewin.they9259',
+    kind: 'educator',
+    trustScore: 0.85,
+    youtubeChannelId: 'UCiEHVhv0SBMpP75JbzJShqw',
+  },
+  {
+    slug: 'hyperphysics',
+    name: 'HyperPhysics (Rod Nave, Georgia State University)',
+    url: 'https://hyperphysics.phy-astr.gsu.edu',
+    kind: 'educator',
+    trustScore: 0.85,
+  },
+  {
+    slug: 'organic-chemistry-tutor',
+    name: 'The Organic Chemistry Tutor (Julio Gonzales)',
+    url: 'https://www.youtube.com/@theorganicchemistrytutor',
+    kind: 'educator',
+    trustScore: 0.7,
+    youtubeChannelId: 'UCEWpbFLzoYGPfuWUMFPSaoA',
+  },
+  {
+    slug: 'sqlbolt',
+    name: 'SQLBolt',
+    url: 'https://sqlbolt.com',
+    kind: 'educator',
+    trustScore: 0.7,
+  },
+  {
+    slug: 'visualgo',
+    name: 'VisuAlgo (Steven Halim, NUS)',
+    url: 'https://visualgo.net',
+    kind: 'educator',
+    trustScore: 0.7,
   },
 
   // ── course_platform ──────────────────────────────────────────────────────
