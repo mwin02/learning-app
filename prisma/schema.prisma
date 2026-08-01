@@ -85,6 +85,7 @@ model Resource {
   lessonResources      LessonResource[]
   conceptResources     ConceptResource[]
   sourcedFor           ResourceSourcedFor[]
+  candidateRejections  ConceptCandidateRejection[]
   ratings              ResourceRating[]
   topics               ResourceTopic[]
   createdAt            DateTime       @default(now())
@@ -651,6 +652,7 @@ model Concept {
   resources  ConceptResource[]
   questions  ConceptQuestion[]
   sourcedResources ResourceSourcedFor[]
+  candidateRejections ConceptCandidateRejection[]
   createdAt  DateTime          @default(now())
   updatedAt  DateTime          @updatedAt
 
@@ -746,6 +748,48 @@ model ResourceSourcedFor {
 
   @@unique([resourceId, conceptId])
   @@index([conceptId])
+}
+
+// rung0-starvation R2 — per-concept rejection memory. One row per library
+// candidate the judge scored and `selectAttachable` DROPPED for this concept.
+// Distinct from ResourceSourcedFor, which means "sourced for this concept but
+// parked un-attached" (a demand record consumed by the decompose-time hook);
+// this is a verdict record: "judged for this concept, and it does not serve it".
+//
+// Written by judgeAndAttachCandidates (source-concept.ts) on every judged-and-
+// dropped candidate, including the case where NOTHING was kept — that is the
+// starvation case and the one most worth remembering. Read by
+// libraryRungCandidates (web-fallback.ts), which adds these resource ids to the
+// rung-0 `excludeIds` alongside the already-attached rows: without it every later
+// remediation re-pays a judge call on the same useless neighbours before it can
+// earn a web budget.
+//
+// NO TTL by design. A rejection is a fact about a (concept, resource) pair, and
+// nothing about the passage of time makes it false; what makes it stale is the
+// resource's own metadata being repaired. Invalidation therefore follows the
+// CAUSE, not the clock. Both filing causes clear a row's rejections through the
+// one seam they share, applyReclassification (resource-topics.ts):
+//   - T4a reclassification (scripts/reclassify-topics.ts) — a same-topic re-score;
+//   - T4b quorum refile (scripts/refile-quorum-topics.ts) — the only pass that
+//     MOVES a primary, and the stronger signal of the two.
+// ⚠️ A future B1 `conceptsTaught` repair driver MUST do the same — a row whose
+// tags were fixed deserves a fresh judge, and nothing else will ever give it one.
+//
+// Cascades with both parents, like ResourceSourcedFor: a deleted Concept or
+// Resource leaves no dangling verdict.
+model ConceptCandidateRejection {
+  id            String   @id @default(cuid())
+  conceptId     String
+  concept       Concept  @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  resourceId    String
+  resource      Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  // The judge's verdict at rejection time — diagnostics only (a shelf rejected at
+  // 0.28 is a different story from one rejected at 0.0). Never gates the exclusion.
+  coverageScore Float
+  judgedAt      DateTime @default(now())
+
+  @@unique([conceptId, resourceId])
+  @@index([resourceId])
 }
 
 // Phase 2.5h — a question in a Concept's reusable question bank. Generated ONCE

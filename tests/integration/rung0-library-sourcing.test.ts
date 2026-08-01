@@ -8,6 +8,13 @@
 //   - library candidates kept as `uses`  → numerically full but no qualifying
 //     primary → requirePrimary floors the budget at 1; without it, no web call
 //
+// …and the R2 rejection memory layered on top of the judged-away case: the drops
+// are recorded per concept, a later run excludes them from rung 0 entirely (so a
+// verdict that WOULD keep them never gets the chance), and either filing-repair
+// cause — a T4a re-score or a T4b quorum refile — clears the touched row's
+// rejections while its siblings stay remembered. Both causes commit through the one
+// `applyReclassification` seam, so the two cases differ only in the decision fed to it.
+//
 // Every case uses its OWN concept (the rows match every concept — one fixed query
 // vector — but the attached-row exclusion is per concept, so the cases don't leak
 // into each other).
@@ -69,9 +76,14 @@ vi.mock('ai', async (importOriginal) => ({
 
 import { prisma } from '@/lib/db';
 import { sourceAndAttachConcept } from '@/lib/agents/track/source-concept';
+import { applyReclassification } from '@/lib/curation/resource-topics';
+import { decideRefile } from '@/lib/curation/quorum-refile';
 import { describeDb } from './db';
 
 const TOPIC = '__verify_rung0__';
+// Where the T4b refile case moves its row. Shares TOPIC's prefix so cleanup still
+// reaches it — the fixture rows no longer all live under one topic.
+const MOVED_TOPIC = `${TOPIC}moved`;
 
 function unitVec(i: number): number[] {
   const v = new Array(768).fill(0);
@@ -89,7 +101,9 @@ async function cleanup() {
   // Path first: cascades concepts → their ConceptResource links, which
   // otherwise block the resource deletes.
   await prisma.path.deleteMany({ where: { topic: TOPIC } });
-  await prisma.resource.deleteMany({ where: { topic: TOPIC } });
+  // startsWith, not equals: the T4b refile case moves a fixture row to MOVED_TOPIC,
+  // and an exact match would leak it (and its memberships) into the dev DB.
+  await prisma.resource.deleteMany({ where: { topic: { startsWith: TOPIC } } });
   await prisma.source.deleteMany({ where: { slug: { startsWith: TOPIC } } });
 }
 
@@ -204,6 +218,43 @@ describeDb('rung 0 — library-first sourcing', () => {
     expect(await prisma.conceptResource.count({ where: { conceptId: conceptIds.get('rung0-beta') } })).toBe(0);
   });
 
+  it('R2: the rejected rows are remembered against the concept, with their scores', async () => {
+    const rows = await prisma.conceptCandidateRejection.findMany({
+      where: { conceptId: conceptIds.get('rung0-beta') },
+      select: { resourceId: true, coverageScore: true },
+    });
+    expect(rows.map((r) => r.resourceId).sort()).toEqual([...libraryIds].sort());
+    expect(rows.map((r) => r.coverageScore)).toEqual([0.1, 0.1, 0.1]);
+  });
+
+  it('R2: a later run never re-judges the remembered rows — even if the judge would now keep them', async () => {
+    // Same concept, same three library rows, but a verdict that WOULD attach all
+    // three. Rung 0 excludes them on the rejection memory alone, so the judge is
+    // never offered them and nothing attaches. Pre-R2 this pass re-bought the same
+    // verdict on the same rows, on every remediation, forever.
+    judgeVerdict = { role: 'teaches', coverageScore: 0.9 };
+    const attached = await sourceFor('rung0-beta', true);
+
+    expect(attached).toBe(0);
+    expect(await prisma.conceptResource.count({ where: { conceptId: conceptIds.get('rung0-beta') } })).toBe(0);
+    // The exclusion is per CONCEPT: beta's memory must not starve another concept.
+    expect(await prisma.conceptCandidateRejection.count({ where: { conceptId: conceptIds.get('rung0-alpha') } })).toBe(0);
+  });
+
+  it('R2: reclassifying a resource clears its rejections, buying it one more look', async () => {
+    const before = await prisma.conceptCandidateRejection.count({ where: { resourceId: libraryIds[0] } });
+    expect(before).toBe(1);
+
+    await applyReclassification(libraryIds[0], {
+      primary: { topic: TOPIC, relevance: 0.7, origin: 'classifier', contested: false },
+      secondaries: [],
+    });
+
+    expect(await prisma.conceptCandidateRejection.count({ where: { resourceId: libraryIds[0] } })).toBe(0);
+    // Scoped to the repaired row — the other two stay remembered.
+    expect(await prisma.conceptCandidateRejection.count({ where: { conceptId: conceptIds.get('rung0-beta') } })).toBe(2);
+  });
+
   it('R1: a full target of `uses` attachments still buys a web look when a primary is required', async () => {
     judgeVerdict = { role: 'uses', coverageScore: 0.9 };
     const attached = await sourceFor('rung0-gamma', true);
@@ -220,5 +271,31 @@ describeDb('rung 0 — library-first sourcing', () => {
 
     expect(attached).toBe(3);
     expect(youtubeProng).not.toHaveBeenCalled();
+  });
+
+  // LAST on purpose: this one MOVES a row off the topic's shelf, so any earlier
+  // case that expects rung 0 to return three rows would start failing behind it.
+  it('R2: a T4b quorum refile clears the rejections of the row it moved, not its siblings', async () => {
+    // The T4b driver's two lines (refile-quorum-topics.ts:191-196) — the pure
+    // decision, then the shared write seam. Driven through `decideRefile` rather
+    // than a hand-built decision so a future change to what a refile writes has to
+    // come past this test.
+    const decision = decideRefile(
+      { id: libraryIds[1], title: 'Alpha lesson 1', currentTopic: TOPIC, relevance: 0.4, unvouchable: MOVED_TOPIC, newTopic: null },
+      MOVED_TOPIC,
+    );
+    expect(typeof decision).not.toBe('string');
+    if (typeof decision === 'string') return;
+
+    expect(await prisma.conceptCandidateRejection.count({ where: { resourceId: libraryIds[1] } })).toBe(1);
+    await applyReclassification(libraryIds[1], decision);
+
+    // The refile really committed (not a no-op that would make the clear vacuous).
+    const moved = await prisma.resource.findUnique({ where: { id: libraryIds[1] }, select: { topic: true } });
+    expect(moved?.topic).toBe(MOVED_TOPIC);
+
+    expect(await prisma.conceptCandidateRejection.count({ where: { resourceId: libraryIds[1] } })).toBe(0);
+    // Scoped to the moved row: libraryIds[2] never moved, so beta still remembers it.
+    expect(await prisma.conceptCandidateRejection.count({ where: { resourceId: libraryIds[2] } })).toBe(1);
   });
 });

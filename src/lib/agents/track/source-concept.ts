@@ -28,6 +28,11 @@
 //   rung 0 candidates → judge/attach → web budget from what SURVIVED → rungs 1-2.
 // Where the library genuinely covers the concept the web half is skipped exactly as
 // before (no new spend); two judge calls happen only where both rungs fire.
+//
+// rung0-starvation R2 makes that durable. Every judged-and-dropped candidate is
+// written to ConceptCandidateRejection, which rung 0 excludes on the next run — so
+// a shelf of near-but-wrong neighbours costs ONE judge call ever, not one per
+// remediation pass forever.
 
 import { Difficulty, BankStaleReason } from '@prisma/client';
 import { prisma } from '@/lib/db';
@@ -229,8 +234,27 @@ export async function judgeAndAttachCandidates(args: {
   // Phase 2g-1: pass the concept's regime so re-sourced candidates get the same scope-
   // aware duration penalty as the cold-build path (strict for the on-ramp).
   const kept = selectAttachable(judged, { isOnRamp });
+  const rejections = rejectedCandidates(judged, kept);
   if (kept.length === 0) {
-    console.log('[source-concept] candidates all judged irrelevant', { pathId, concept: slug, reason, candidates: rows.length });
+    // The starvation case, and the one rejection memory exists for — a shelf of
+    // near-but-wrong neighbours that survives every future rung 0 unless it is
+    // written down HERE, before the early return. Best-effort: the memory is a
+    // side channel, and a concept deleted mid-run (FK violation) must not turn
+    // "nothing attached" into a failed remediation.
+    try {
+      await prisma.conceptCandidateRejection.createMany({
+        data: rejections.map((r) => ({ conceptId, ...r })),
+        skipDuplicates: true,
+      });
+    } catch (err) {
+      console.warn('[source-concept] rejection memory write failed', {
+        pathId, concept: slug, rejections: rejections.length,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    console.log('[source-concept] candidates all judged irrelevant', {
+      pathId, concept: slug, reason, candidates: rows.length, remembered: rejections.length,
+    });
     return NOTHING_ATTACHED;
   }
   const primaryAttached = hasQualifyingPrimary({ conceptSlug: slug, candidates: kept });
@@ -246,6 +270,20 @@ export async function judgeAndAttachCandidates(args: {
       data: kept.map((k) => ({ conceptId, resourceId: k.resourceId, role: k.role, coverageScore: k.coverageScore })),
       skipDuplicates: true,
     });
+    // rung0-starvation R2: remember this pass's verdicts, in the SAME transaction
+    // as the attach — a rolled-back attach must not leave behind a memory that
+    // hides rows from a run which never happened. The delete is the mirror image:
+    // a row we are attaching is by definition no longer rejected (reachable once
+    // an invalidation hook cleared an older rejection and the re-judge kept it).
+    // skipDuplicates on the insert keeps the FIRST verdict's score — the exclusion
+    // is what matters, not which of two rejections recorded it.
+    await tx.conceptCandidateRejection.deleteMany({ where: { conceptId, resourceId: { in: keptIds } } });
+    if (rejections.length > 0) {
+      await tx.conceptCandidateRejection.createMany({
+        data: rejections.map((r) => ({ conceptId, ...r })),
+        skipDuplicates: true,
+      });
+    }
     // Phase 2.5i: if re-sourcing attached a new `teaches` candidate, the concept's
     // primary material moved — flag a reviewed bank stale (no-op while building, since
     // markBankStale only flags reviewed concepts; this fires when a live Path regressed
@@ -302,9 +340,28 @@ export async function judgeAndAttachCandidates(args: {
     await recomputeReadiness(pathId, tx);
   });
   console.log('[source-concept] attached', {
-    pathId, concept: slug, attached: kept.length, primaryAttached, reason, targetMastery: targetMastery ?? null,
+    pathId, concept: slug, attached: kept.length, primaryAttached, reason,
+    remembered: rejections.length, targetMastery: targetMastery ?? null,
   });
   return { attached: kept.length, primaryAttached };
+}
+
+// rung0-starvation R2: what this judge pass decided NOT to attach — the rows that
+// go into the concept's rejection memory. Pure, so the memory's contents are
+// testable without a judge call or a DB.
+//
+// Cap-dropped rows are deliberately NOT here: `kept` is selectAttachable's output,
+// so this set is exactly the coverage-floor/duration failures. A row the per-concept
+// CAP later evicts (further down the attach tx) was judged usable and may legitimately
+// be re-attached on a future pass, so remembering it as rejected would be a lie.
+export function rejectedCandidates(
+  judged: { resourceId: string; coverageScore: number }[],
+  kept: { resourceId: string }[],
+): { resourceId: string; coverageScore: number }[] {
+  const keptIds = new Set(kept.map((k) => k.resourceId));
+  return judged
+    .filter((j) => !keptIds.has(j.resourceId))
+    .map((j) => ({ resourceId: j.resourceId, coverageScore: j.coverageScore }));
 }
 
 // Hydrate candidate rows into the SearchResult shape the judge consumes, loading

@@ -224,9 +224,12 @@ export function webShortfall(targetCount: number, libraryAttached: number): numb
 // build's candidate search (topic ∪ related topics, excludeGenerated, the
 // default active+pending_review window via searchNearbyResources), gated by the
 // same distance ceiling the decompose-time hook routes with — a hit must be
-// semantically close, not merely high-trust. Rows already attached to the
-// demanding concept are excluded: they were judged when they attached, so
-// re-judging them is pure spend.
+// semantically close, not merely high-trust. Two classes of row are excluded,
+// both because re-judging them is pure spend: those already ATTACHED to the
+// demanding concept (judged when they attached), and — rung0-starvation R2 —
+// those already JUDGED AND REJECTED for it. The second is what makes the R1 fix
+// durable: without it every later remediation re-buys the same verdict on the
+// same near-but-wrong neighbours before it can earn a web budget.
 //
 // Returns CANDIDATES, not survivors. The caller judges them and only then derives
 // the web budget (source-concept.ts) — this function's output must never be used
@@ -244,15 +247,20 @@ export async function libraryRungCandidates(args: {
   targetCount: number;
 }): Promise<LibraryCandidate[]> {
   const { topic, conceptTitle, conceptId, targetCount } = args;
-  const attached = conceptId
-    ? await prisma.conceptResource.findMany({ where: { conceptId }, select: { resourceId: true } })
-    : [];
+  // Both exclusions are keyed by concept, so a caller without a Concept row
+  // (there is no id to look either up by) simply gets the unfiltered rung.
+  const [attached, rejected] = conceptId
+    ? await Promise.all([
+        prisma.conceptResource.findMany({ where: { conceptId }, select: { resourceId: true } }),
+        prisma.conceptCandidateRejection.findMany({ where: { conceptId }, select: { resourceId: true } }),
+      ])
+    : [[], []];
   return searchNearbyResources({
     topics: relatedTopics(topic),
     query: conceptTitle,
     maxDistance: REJUDGE_ROUTE_MAX_DISTANCE,
     limit: targetCount,
-    excludeIds: attached.map((a) => a.resourceId),
+    excludeIds: [...attached, ...rejected].map((r) => r.resourceId),
   });
 }
 

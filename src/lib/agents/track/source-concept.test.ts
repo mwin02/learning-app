@@ -17,7 +17,7 @@ vi.mock('@/lib/ai/models', () => ({
   getModel: () => ({ model: {}, temperature: 0, maxOutputTokens: 0 }),
 }));
 
-import { webBudgetAfterLibrary } from './source-concept';
+import { webBudgetAfterLibrary, rejectedCandidates } from './source-concept';
 
 const TARGET = 3;
 
@@ -89,5 +89,32 @@ describe('webBudgetAfterLibrary — the R1 budget derivation', () => {
         requirePrimary: true,
       }),
     ).toBe(0);
+  });
+});
+
+describe('rejectedCandidates — what R2 writes to the rejection memory', () => {
+  const judged = [
+    { resourceId: 'a', coverageScore: 0.9 },
+    { resourceId: 'b', coverageScore: 0.1 },
+    { resourceId: 'c', coverageScore: 0.0 },
+  ];
+
+  it('remembers every judged candidate the attach filter dropped, with its score', () => {
+    expect(rejectedCandidates(judged, [{ resourceId: 'a' }])).toEqual([
+      { resourceId: 'b', coverageScore: 0.1 },
+      { resourceId: 'c', coverageScore: 0.0 },
+    ]);
+  });
+
+  it('remembers the WHOLE set when nothing was kept — the starvation case', () => {
+    expect(rejectedCandidates(judged, []).map((r) => r.resourceId)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('remembers nothing when every candidate attached', () => {
+    expect(rejectedCandidates(judged, judged)).toEqual([]);
+  });
+
+  it('is empty for an empty judge pass', () => {
+    expect(rejectedCandidates([], [])).toEqual([]);
   });
 });
