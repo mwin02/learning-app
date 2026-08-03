@@ -35,9 +35,14 @@ program+progress layer. Library preserved exactly: **2,012 Resources, 33 Sources
 `precalculus` needed nothing — Khan Academy, Paul's Online Math Notes, Professor
 Leonard and OpenStax already cover it; its C1 weakness was filing + rung-0
 starvation, both since fixed. The other three new topics were genuinely thin.
-Seven rows added to `data/seed-sources.ts` (33 sources total). These also widen
-the **web-discovery allowlist** (`loadAllowlistDomains` reads seeded Source URLs),
-which is the half that matters now that rungs 1–2 are reachable post-R1.
+Seven rows added to `data/seed-sources.ts` (33 sources total). Every row carries a
+trust prior; the **four non-YouTube rows** (`postgresql-docs`, `sqlbolt`,
+`visualgo`, `hyperphysics`) *also* widen the **web-discovery allowlist**
+(`loadAllowlistDomains` reads seeded Source URLs), which is the half that matters
+now that rungs 1–2 are reachable post-R1. The three YouTube rows do **not**:
+`loadAllowlistDomains` explicitly excludes `youtube.com` and its subdomains, so a
+seeded channel contributes a trust prior only (applied to a video via its
+`youtubeChannelId`). This distinction is what the source postmortem below turns on.
 
 | Slug | Name | Kind | Trust | For |
 | --- | --- | --- | --- | --- |
@@ -350,22 +355,32 @@ re-remediation exists for.
 | `walter-lewin` | 0 | 0 |
 | `hyperphysics` | 0 | 0 |
 
-Only 3 of 7 contributed. Two explanations, and they are different:
+Only 3 of 7 contributed. The four that didn't split into **three** cases, because
+the mechanism differs by row type — YouTube rows never touch the allowlist:
 
 - **`postgresql-docs` / `sqlbolt` were never exercised.** `sql` reached
   `spine_ready` from the library alone, so it had no holes, so no web discovery
-  ran for it. These rows are not disproven — they are untested, and they widen
-  the allowlist for future SQL sourcing.
-- **`walter-lewin` / `hyperphysics` were exercised and did not surface.**
-  `physics-mechanics` ran 11 holes through web discovery and pulled 34 rows from
-  unseeded YouTube channels instead. Adding a Source to the allowlist does not
-  make the search prefer it — the allowlist only decides what is *admissible*, and
-  ranking is coverage-then-trust over what the query actually returned. If we want
-  a specific canonical source represented, seeding it is not sufficient.
+  ran for it. These rows are not disproven — they are untested non-YouTube hosts,
+  and they widen the allowlist for future SQL sourcing.
+- **`hyperphysics` was exercised and did not surface.** `physics-mechanics` ran 11
+  holes through web discovery. `hyperphysics` is a non-YouTube host, so it *was* on
+  the allowlist and admissible — and the search pulled 34 rows from unseeded
+  YouTube channels instead. Being on the allowlist does not make the search prefer
+  a Source: the allowlist only decides what is *admissible*, and ranking is
+  coverage-then-trust over what the query actually returned.
+- **`walter-lewin` never had an allowlist to be measured against.** It is a YouTube
+  channel, and `loadAllowlistDomains` excludes `youtube.com`, so its non-appearance
+  is **not** an allowlist signal — it only means physics discovery didn't pull one
+  of its videos. The YouTube trust-prior path itself works: `organic-chemistry-tutor`,
+  also a YouTube channel, surfaced 15 rows and applied its 0.70 prior via
+  `youtubeChannelId`.
 
-That asymmetry is the transferable lesson from step 2, and it argues the C2 step-2
-question ("which channels/sites to add") was somewhat the wrong question: the
-allowlist is a gate, not a preference.
+The transferable lesson from step 2 therefore rests on **`hyperphysics` alone**
+(n=1) and is worth holding as a lead, not a proven law: for a canonical *site*,
+seeding makes it admissible but not preferred — the allowlist is a gate, not a
+preference — so seeding is necessary but not sufficient to get it represented.
+Steering the YouTube prong toward a specific *channel* is a separate lever that
+seeding does not touch.
 
 ## Operational notes
 
