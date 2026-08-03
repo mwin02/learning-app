@@ -21,7 +21,7 @@
 
 import { ConceptMembership, PathStatus } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import { PATH_BUILD_STALE_MS } from '@/lib/config';
+import { DB_WRITE_TX_TIMEOUT_MS, PATH_BUILD_STALE_MS } from '@/lib/config';
 import { buildSpine } from '@/lib/agents/map/build-spine';
 import { normalizeOnRamp } from '@/lib/agents/map/cycle';
 import { attachCandidates } from '@/lib/agents/map/attach-candidates';
@@ -232,7 +232,7 @@ export async function ensurePathMap(args: {
         where: { id: pathId },
         data: { status: ready ? PathStatus.spine_ready : PathStatus.building },
       });
-    });
+    }, { timeout: DB_WRITE_TX_TIMEOUT_MS });
   } catch (err) {
     // Best-effort: flip the claimed Path to `failed` so it's visibly broken
     // rather than a silent empty `building`. Swallow the flip's own error.

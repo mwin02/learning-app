@@ -488,10 +488,14 @@ export const REMEDIATION_JOB_STALE_MS = 35 * 60 * 1000;
 // is the attempts-regime split (audit 2.5, deferred). Ordering pinned in config.test.ts.
 export const PATH_BUILD_STALE_MS = 35 * 60 * 1000;
 
-// Timeout for the multi-statement write transactions in the map/curation paths.
+// Timeout for the multi-statement write transactions in the map/track/curation
+// paths — the spine populate (ensure-path-map), the track freeze (build-track),
+// the per-hole judge/attach and final readiness commit (source-concept,
+// remediate-path), and the review reject/decompose (pending-review).
 // Prisma's default is 5s, and these transactions spend it on ROUND TRIPS, not
 // query work: each statement in an interactive transaction is a separate trip,
-// and the largest of them issue ~9 statements plus BEGIN/COMMIT.
+// and the largest of them issue ~9 statements plus BEGIN/COMMIT (build-track's
+// per-lesson loop scales with lesson count, so it issues more).
 //
 // From the app and the worker (tens of ms to Supabase) 5s is ample. It is the E1
 // "local app, remote DB" operator pattern that breaks it (docs/operator-tooling.md):
