@@ -15,7 +15,7 @@
 
 import { prisma } from '@/lib/db';
 import { log } from '@/lib/log';
-import { safeEmbedResource, storeEmbedding } from '@/lib/ai/embeddings';
+import { safeEmbedBatch, safeEmbedResource, storeEmbedding } from '@/lib/ai/embeddings';
 import { setPrimaryTopic, addCollisionMembership } from '@/lib/curation/resource-topics';
 import { MAX_MEMBERSHIPS, type FilingDecision } from '@/lib/curation/topic-knn';
 import { safeClassifyAndPersist } from '@/lib/curation/embeddability';
@@ -326,37 +326,58 @@ export async function decomposeExisting(
   // makes the review queue self-healing: requeue a mis-titled container and the
   // re-decomposition fixes its title, filing evidence and vector along the way.
   const correctedTitle = crediblePageTitle(decomposition.pageTitle, existing.title, existing.url);
-  const title = correctedTitle ?? existing.title;
+
+  // A corrected title MUST land together with its re-embed: title is a third of the
+  // embedded text (lib/ai/embeddings), so a title write without the matching vector
+  // leaves the row mis-routed in pgvector — and crediblePageTitle will never re-propose
+  // it, because the stored title now matches the page. Recovery would then hang on the
+  // periodic embedMissing() backfill (`embeddedAt < updatedAt`). So embed BEFORE the
+  // transaction (a network call — it must not run inside it) and store the vector IN the
+  // same tx as the title, mirroring the discovery path's enlisted-client write (T2a
+  // above). If the embed can't be produced, DEFER the correction rather than commit a
+  // title that misdescribes the vector — the next re-decomposition re-proposes it.
+  let correctedVec: number[] | null = null;
   if (correctedTitle) {
-    log('upsert-resource.title-corrected', {
-      resourceId,
-      stored: existing.title,
-      page: correctedTitle,
-    });
+    [correctedVec] = await safeEmbedBatch([
+      { title: correctedTitle, summary: existing.summary, conceptsTaught: existing.conceptsTaught },
+    ]);
+    log(
+      correctedVec
+        ? 'upsert-resource.title-corrected'
+        : 'upsert-resource.title-correction-deferred',
+      { resourceId, stored: existing.title, page: correctedTitle },
+    );
   }
+  const appliedTitle = correctedVec ? correctedTitle : null;
+  const title = appliedTitle ?? existing.title;
 
   await prisma.$transaction(async (tx) => {
     await tx.resource.update({
       where: { id: resourceId },
       data: {
         decompositionStatus: decomposition.status,
-        ...(correctedTitle ? { title: correctedTitle } : {}),
+        ...(appliedTitle ? { title: appliedTitle } : {}),
       },
     });
+    // The corrected title's vector commits in the same tx (see above). storeEmbedding
+    // stamps embeddedAt = GREATEST(updatedAt, now()), so the row this update just
+    // touched isn't flagged stale the instant it's written.
+    if (appliedTitle && correctedVec) await storeEmbedding(resourceId, correctedVec, tx);
     // A reroute to 'atomic' (e.g. doc-TOC single_lesson/reference_index) makes
     // the parent itself pickable — embed it, or searchResources under-ranks it.
-    // A 'decomposed' parent stays an unpickable container (children only).
-    // A corrected title also re-embeds a CONTAINER parent, which is otherwise never
-    // queued here: title is a third of the embedded text (lib/ai/embeddings), so a
-    // container left on its old vector stays mis-routed in pgvector even after the
-    // visible title is right.
-    if (decomposition.status === 'atomic' || correctedTitle) {
+    // A 'decomposed' parent stays an unpickable container (children only), but a
+    // corrected title still re-embeds it: that vector is its filing evidence and its
+    // pgvector routing. `embedded` mirrors the discovery path — skip the redundant
+    // post-commit embed (the vector is already written) but still run the
+    // embeddability probe.
+    if (decomposition.status === 'atomic' || appliedTitle) {
       embedTasks.push({
         id: resourceId,
         url: existing.url,
         title,
         summary: existing.summary,
         conceptsTaught: existing.conceptsTaught,
+        embedded: Boolean(appliedTitle),
       });
     }
     for (const child of decomposition.children) {
@@ -387,7 +408,12 @@ export async function decomposeExisting(
   }, { maxWait: 10_000, timeout: 120_000 });
 
   for (const t of embedTasks) {
-    await safeEmbedResource(t.id, { title: t.title, summary: t.summary, conceptsTaught: t.conceptsTaught });
+    // Skip the embed for a task whose vector was already written in the tx (a corrected
+    // parent title, or a pre-embedded child) — same text, same model. Still probe
+    // embeddability, which is a property of the URL, not the embedded text.
+    if (!t.embedded) {
+      await safeEmbedResource(t.id, { title: t.title, summary: t.summary, conceptsTaught: t.conceptsTaught });
+    }
     await safeClassifyAndPersist(t.id, t.url);
   }
 

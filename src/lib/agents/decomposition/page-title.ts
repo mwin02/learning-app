@@ -29,7 +29,11 @@ const INTERSTITIAL = [
   /access denied/i,
   /are you a robot/i,
   /enable javascript/i,
-  /(^|\W)(40[0-9]|50[0-9])(\W|$)/,
+  // HTTP error codes, but ONLY in an error context — leading the title ("404 Not
+  // Found", "500 Internal Server Error") or right after "error"/"http". A bare
+  // `\b40[0-9]\b` also eats course numbers ("18.404 Theory of Computation",
+  // "Math 401"), which are exactly the container titles this correction targets.
+  /(?:^|\berror\b\W*|\bhttp\b\W*)(?:40[0-9]|50[0-9])\b/i,
   /page (not found|missing)/i,
   /not found/i,
   /forbidden/i,

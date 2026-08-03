@@ -95,6 +95,34 @@ describe('crediblePageTitle', () => {
     ).toBeNull();
   });
 
+  it('accepts a title carrying a course number in the 40x/50x range (not an HTTP error)', () => {
+    // The naive `\b40[0-9]\b` interstitial guard rejected these — the exact container
+    // family the correction targets. "18.404" is MIT's Theory of Computation.
+    expect(
+      crediblePageTitle(
+        '18.404 Theory of Computation | MIT OpenCourseWare',
+        'Some Lecture Sub-Unit',
+        'https://ocw.mit.edu/courses/18-404j-theory-of-computation-fall-2020/pages/lecture-notes',
+      ),
+    ).toBe('18.404 Theory of Computation');
+    expect(
+      crediblePageTitle(
+        'Math 401: Introduction to Real Analysis',
+        'Real analysis notes',
+        'https://example.edu/math401/analysis',
+      ),
+    ).toBe('Math 401: Introduction to Real Analysis');
+  });
+
+  it('still rejects an HTTP error code in an error context, even when a word would match', () => {
+    expect(
+      crediblePageTitle('HTTP 500 error on the trees page', 'Binary trees', 'https://example.com/ds/trees'),
+    ).toBeNull();
+    expect(
+      crediblePageTitle('404 Not Found — trees', 'Binary trees', 'https://example.com/ds/trees'),
+    ).toBeNull();
+  });
+
   it('rejects a title sharing no content word with the stored title or the URL path', () => {
     expect(
       crediblePageTitle('Sign in to continue', 'Binary search trees', 'https://example.com/ds/bst'),
