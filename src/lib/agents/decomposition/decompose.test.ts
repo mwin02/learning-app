@@ -95,4 +95,37 @@ describe('decompose — attachable duration gate on atomic outcomes', () => {
     expect(res.status).toBe('human_review');
     expect(res.reason).toBe('fetch failed');
   });
+
+  // The page's own title has to survive every doc-toc outcome, including the ones
+  // that park the row — a mis-titled container is exactly what lands in the queue,
+  // so dropping pageTitle on the parked paths would fix only the rows that decomposed.
+  it('carries the page title through decomposed, atomic-reroute and parked outcomes', async () => {
+    vi.mocked(decomposeDocToc).mockResolvedValueOnce({
+      ok: true,
+      children: [{ url: 'https://ocw.example.edu/course/ch1' }],
+      pageTitle: 'Lecture Notes | Database Systems',
+    } as never);
+    const decomposed = await decompose({ ...base, url: 'https://ocw.example.edu/course', type: 'course' });
+    expect(decomposed.pageTitle).toBe('Lecture Notes | Database Systems');
+
+    vi.mocked(decomposeDocToc).mockResolvedValueOnce({
+      ok: false,
+      outcome: 'human_review',
+      reason: 'no extractable section links',
+      pageTitle: 'Exams | Artificial Intelligence',
+    } as never);
+    const parked = await decompose({ ...base, url: 'https://ocw.example.edu/course', type: 'course' });
+    expect(parked.pageTitle).toBe('Exams | Artificial Intelligence');
+
+    // …including through the container-containment gate, which builds a fresh result.
+    vi.mocked(decomposeDocToc).mockResolvedValueOnce({
+      ok: false,
+      outcome: 'atomic',
+      reason: 'single self-contained lesson',
+      pageTitle: 'Multiple Integrals | Calculus III',
+    } as never);
+    const gated = await decompose({ ...base, url: 'https://example.com/book', type: 'book', durationMin: 60 });
+    expect(gated.status).toBe('human_review');
+    expect(gated.pageTitle).toBe('Multiple Integrals | Calculus III');
+  });
 });

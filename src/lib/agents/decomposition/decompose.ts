@@ -73,6 +73,12 @@ export type DecompositionResult = {
   // a caller — including an autonomous reviewer — decide whether to retry (e.g.
   // with force) rather than guessing from a bare status. Absent on success.
   reason?: string;
+  // The page's own <title>, when a router fetched the page (doc-TOC only). The
+  // discovery model writes `title` from what it went LOOKING for, not from what
+  // it landed on, so this is the only trustworthy statement of what the URL
+  // actually is. Callers pass it through crediblePageTitle before using it —
+  // see page-title.ts for why it is not trusted blindly.
+  pageTitle?: string;
 };
 
 // `force` bypasses the DECOMPOSITION_MAX_AUTO_CHILDREN oversize gate in the
@@ -111,6 +117,7 @@ export async function decompose(
       return {
         status: 'human_review',
         children: [],
+        pageTitle: result.pageTitle,
         reason: isBook
           ? 'book kept whole by doc-TOC — verify it targets a chapter, not an entire work, before accepting'
           : `atomic but ~${input.durationMin}min exceeds the ${MAX_ATTACHABLE_DURATION_MIN}min attachable ceiling — whole-course/book content must be decomposed (or operator-accepted) before it is pickable`,
@@ -167,7 +174,7 @@ async function route(input: DecomposeInput, opts: DecomposeOptions): Promise<Dec
       });
       if (result.ok) {
         console.log('[decompose] doc-toc decomposed', { url: input.url, children: result.children.length });
-        return { status: 'decomposed', children: result.children };
+        return { status: 'decomposed', children: result.children, pageTitle: result.pageTitle };
       }
       // 'atomic' reroute: type=course/interactive was a mislabel — the page is a
       // single self-contained lesson, so persist it as a pickable atomic row.
@@ -176,7 +183,7 @@ async function route(input: DecomposeInput, opts: DecomposeOptions): Promise<Dec
         outcome: result.outcome,
         reason: result.reason,
       });
-      return { status: result.outcome, children: [], reason: result.reason };
+      return { status: result.outcome, children: [], reason: result.reason, pageTitle: result.pageTitle };
     }
 
     // Paywalled platforms are never crawled — park as a container for curation.
