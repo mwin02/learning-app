@@ -1,7 +1,22 @@
 // C2 recon — READ-ONLY snapshot of the production state before the warm campaign.
-//   set -a; . ./.env.local; set +a
-//   DATABASE_URL="$SUPABASE_POOLER_URL" npx tsx scripts/verify/c2-recon.ts
-import { prisma } from '../../src/lib/db';
+//   npx tsx --env-file=.env.local scripts/verify/c2-recon.ts          # local DATABASE_URL
+//   npx tsx --env-file=.env.local scripts/verify/c2-recon.ts --prod   # Supabase pooler
+//
+// --prod reads SUPABASE_POOLER_URL from the process env (loaded by --env-file) and
+// assigns it to DATABASE_URL below, BEFORE @/lib/db is imported. The secret never
+// becomes a shell word — no `set -a; . ./.env.local` (which exports every secret
+// into the interactive shell, the exact setup behind this repo's real leaks; see
+// AGENTS.md "Secrets"). @/lib/db reads DATABASE_URL at module-eval, so its import —
+// and everything that pulls it in transitively — MUST stay dynamic, inside main(),
+// after the override; a static import would bind to localhost before this runs.
+
+export {}; // module scope — the only static imports are dynamic (inside main), see above
+
+if (process.argv.includes('--prod')) {
+  const pooler = process.env.SUPABASE_POOLER_URL;
+  if (!pooler) throw new Error('SUPABASE_POOLER_URL is not set (expected in .env.local)');
+  process.env.DATABASE_URL = pooler;
+}
 
 const WARM = [
   'python', 'python-data-ml', 'javascript', 'javascript-react', 'calculus',
@@ -10,6 +25,7 @@ const WARM = [
 ];
 
 async function main() {
+  const { prisma } = await import('../../src/lib/db');
   const paths = await prisma.path.findMany({ select: { topic: true, status: true, createdAt: true } });
   console.log('--- Paths ---');
   for (const p of paths) console.log(`${p.topic}  ${p.status}  ${p.createdAt.toISOString().slice(0, 10)}`);

@@ -119,8 +119,6 @@ D4 precalculus failure.
 Attachment counts, median trust, and source mix at spine-build time (before
 remediation and before the review passes).
 
-| Topic | Status | Spine | Attached | Median trust | Top sources |
-| --- | --- | --- | --- | --- | --- |
 | Topic | Status after spine build | Spine | Frontier | Attached | Median trust | Top sources |
 | --- | --- | --- | --- | --- | --- | --- |
 | python | spine_ready | 13 | 9 | 87 | 0.69 | youtube 44, python-docs 32, corey-schafer 6 |
@@ -134,7 +132,7 @@ remediation and before the review passes).
 | sql | spine_ready | 12 | 0 | 47 | 0.85 | khan-academy 23, youtube 20, freecodecamp 3 |
 | data-structures-algorithms | building (3 holes) | 14 | 9 | 53 | 0.95 | mit-ocw 33, youtube 5, python-docs 4 |
 | precalculus | building (4 holes) | 14 | 0 | 49 | — | borrowed calculus shelf |
-| physics-mechanics | building | 15 | 8 | 39 | — | thin 9-row shelf |
+| physics-mechanics | building | 16 | 8 | 39 | — | thin 9-row shelf |
 
 **6 of 12 reached `spine_ready` from the library alone**, with **zero
 `primaryRelaxed` concepts anywhere** — no Path is hiding a hollow primary at this
@@ -224,7 +222,7 @@ The timeout for this transaction was 5000 ms, however 6040 ms passed …
 The failing call is `remediate-path.ts:209` — the final status-landing
 `$transaction` (`primaryRelaxed` updateMany + `recomputeReadiness`), which runs
 on Prisma's **default 5s** interactive-transaction timeout. `physics-mechanics`
-has the largest spine in the warm set (15 concepts), and over the remote pooler
+has the largest spine in the warm set (16 concepts), and over the remote pooler
 the recompute exceeded it.
 
 **Nothing was lost** — all the sourcing and judging in that pass had already been
