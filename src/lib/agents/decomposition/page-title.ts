@@ -22,6 +22,14 @@
 
 // Titles served by bot-walls, consent gates and soft-404s. Matched against the
 // whole title, not a prefix — several sites pad them ("Just a moment...").
+//
+// Deliberately loose, and deliberately NOT shared with the liveness validator
+// (validation/validators/liveness.ts keeps its own, much tighter list). The cost
+// asymmetries are opposite: here a false positive only means we keep the title we
+// already had, so over-matching is nearly free; there it deletes a live resource.
+// `/\berror\s*[-–—|]/` is the clearest example — it must fire on "Error - Page
+// Missing", but a liveness check reusing it would kill a real lecture titled
+// "Sampling and Standard Error | MIT OpenCourseWare".
 const INTERSTITIAL = [
   /client challenge/i,
   /just a moment/i,

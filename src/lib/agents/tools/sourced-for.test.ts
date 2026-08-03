@@ -37,6 +37,20 @@ describe('deriveSourcedForPairs', () => {
     ]);
   });
 
+  // A quarantined row IS atomic but was held out of the attach set, so it needs
+  // provenance for the same reason a parked row does: the approve-side hook has to
+  // know which concept to offer it back to. Without this the row would sit in the
+  // review queue and, even once approved, attach to nothing.
+  it('derives a pair for an atomic row held back by quarantine', () => {
+    const quarantined: SourcedForRow = { resourceId: 'r1', decompositionStatus: 'atomic', quarantined: true };
+    expect(deriveSourcedForPairs('c1', [quarantined])).toEqual([{ resourceId: 'r1', conceptId: 'c1' }]);
+  });
+
+  it('still skips an atomic row that was not quarantined', () => {
+    const attached: SourcedForRow = { resourceId: 'r1', decompositionStatus: 'atomic', quarantined: false };
+    expect(deriveSourcedForPairs('c1', [attached])).toEqual([]);
+  });
+
   it('skips rows with no addressable parent (failed transaction)', () => {
     expect(deriveSourcedForPairs('c1', [row(null, null), row(null, 'pending')])).toEqual([]);
   });

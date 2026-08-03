@@ -4,13 +4,21 @@
 // `createMany … skipDuplicates`.
 //
 // A pair records "this concept's demand caused this resource to be sourced but
-// NOT attached in the same run". So a row is eligible only when it parked
-// non-atomic (pending / human_review / unsupported / decomposed container) —
-// atomic rows land in insertedIds and are judged+attached by the caller, no
-// provenance needed. Both freshly-inserted and dedup-hit rows qualify: a
-// rediscovery of an existing parked row is a real second demand signal (and
-// skipDuplicates makes re-demand under the SAME concept a no-op, not an error).
-// The topic-level entry point has no concept and derives nothing.
+// NOT attached in the same run". There are two ways to be unattached:
+//
+//   - the row parked non-atomic (pending / human_review / unsupported /
+//     decomposed container) — its pickable rows appear only after decomposition
+//     review, and rejudge-sourced-for offers them back then;
+//   - the row is atomic but QUARANTINED by validation (a liveness check suspected
+//     a soft-404 but wasn't trusted enough to delete it). It is held out of the
+//     attach set and left in pending_review, so the same hook offers it back if a
+//     reviewer approves it.
+//
+// Everything else atomic lands in insertedIds and is judged+attached by the
+// caller, so it needs no provenance. Both freshly-inserted and dedup-hit rows
+// qualify: a rediscovery of an existing parked row is a real second demand signal
+// (and skipDuplicates makes re-demand under the SAME concept a no-op, not an
+// error). A caller with no concept (no conceptId) derives nothing.
 
 import type { DecompositionStatus } from '@prisma/client';
 
@@ -20,6 +28,9 @@ import type { DecompositionStatus } from '@prisma/client';
 export type SourcedForRow = {
   resourceId: string | null;
   decompositionStatus: DecompositionStatus | null;
+  // Held out of the attach set by a quarantine verdict, so an atomic row still
+  // needs provenance — it is unattached for a different reason than parking.
+  quarantined?: boolean;
 };
 
 export function deriveSourcedForPairs(
@@ -31,7 +42,7 @@ export function deriveSourcedForPairs(
   const pairs: { resourceId: string; conceptId: string }[] = [];
   for (const row of rows) {
     if (!row.resourceId || !row.decompositionStatus) continue;
-    if (row.decompositionStatus === 'atomic') continue;
+    if (row.decompositionStatus === 'atomic' && !row.quarantined) continue;
     if (seen.has(row.resourceId)) continue;
     seen.add(row.resourceId);
     pairs.push({ resourceId: row.resourceId, conceptId });

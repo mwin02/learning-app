@@ -20,7 +20,32 @@ import { ZodError } from 'zod';
 import { withAdminAuth } from '@/lib/api/with-admin-auth';
 import { pendingReviewSchema } from '@/lib/api/pending-review-schema';
 import { listPendingReview, applyPendingReview } from '@/lib/curation/pending-review';
+import { rejudgeForDemandingPaths, type RejudgeResult } from '@/lib/agents/decomposition/rejudge-sourced-for';
 import { logError } from '@/lib/log';
+
+// The approve-side attach hook. A row can be sitting in this queue precisely
+// BECAUSE it was never attached — validation quarantined it as a suspected
+// soft-404 (see validation/index.ts), so it was persisted and queued instead of
+// being deleted on a hunch. Approving it is the human confirmation that the URL
+// resolves, and this offers it back to the concept(s) whose demand sourced it.
+//
+// Safe to call on every approve: rejudgeForDemandingPaths returns `{ pairs: 0 }`
+// after a single indexed ResourceSourcedFor lookup when nothing demanded the row,
+// which is the common case. The presence of provenance IS the gate — no separate
+// "was this quarantined?" flag is needed to decide whether to run.
+//
+// Inline and best-effort, exactly as decomposition-review does it: the approval is
+// already committed, so a hook failure is reported in the response rather than
+// failing (or worse, un-deciding) the review.
+async function attachOnApprove(resourceId: string): Promise<RejudgeResult | { error: string }> {
+  try {
+    return await rejudgeForDemandingPaths(resourceId);
+  } catch (err) {
+    logError('pending-resources.attach-hook-failed', { resourceId, err });
+    // Audit 1.6: never echo the raw exception — the full error is in the log above.
+    return { error: 'attach hook failed' };
+  }
+}
 
 // Prisma needs the Node runtime (not Edge). The recursive-CTE subtree walk and
 // the conditional updates are quick, so the default duration is fine.
@@ -101,7 +126,12 @@ export const POST = withAdminAuth(async (req) => {
           'Resource was decided concurrently (no longer pending); no change applied.',
         );
       case 'approved':
-        return Response.json({ resourceId: result.resourceId, action: 'approve', approved: result.approved });
+        return Response.json({
+          resourceId: result.resourceId,
+          action: 'approve',
+          approved: result.approved,
+          attach: await attachOnApprove(result.resourceId),
+        });
       case 'rejected':
         return Response.json({
           resourceId: result.resourceId,
