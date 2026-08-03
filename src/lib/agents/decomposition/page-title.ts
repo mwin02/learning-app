@@ -96,7 +96,12 @@ function isSiteName(segment: string, tokens: string[]): boolean {
 
 export function cleanPageTitle(raw: string, url?: string): string {
   const normalized = raw.replace(/\s+/g, ' ').trim();
-  const segments = normalized.split(/\s+[|»]\s+/).filter((s) => s.length > 0);
+  // Structural separators: pipe, », and — spaced only — hyphen/en-dash/em-dash, which
+  // MDN and most docs/CMS sites use for "page - section - site" ("Array.prototype.map()
+  // - JavaScript - MDN Web Docs"). Whitespace on BOTH sides is required so a hyphenated
+  // compound ("Client-Server", "state-of-the-art") is never split. Segments rejoin with
+  // " | " — the kept title is normalized, not verbatim.
+  const segments = normalized.split(/\s+[|»–—-]\s+/).filter((s) => s.length > 0);
 
   // Strip trailing site-name segments first, so the segment cap spends its budget on
   // the part that identifies the PAGE. Without this, a two-segment title like
@@ -143,8 +148,12 @@ export function crediblePageTitle(
   if (shared === 0) return null;
 
   // Nothing to do when the fetched title only differs by site furniture we just
-  // trimmed, or by case/spacing — saves a pointless write + re-embed.
-  if (cleaned.toLowerCase() === stored.trim().toLowerCase()) return null;
+  // trimmed, or by case/spacing — saves a pointless write + re-embed. Both sides run
+  // through the same normalizer: `cleaned` is already whitespace-collapsed, so a
+  // one-sided `stored.trim()` would treat a stored title with a double space as a
+  // change and re-embed for nothing.
+  const norm = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
+  if (norm(cleaned) === norm(stored)) return null;
 
   return cleaned;
 }

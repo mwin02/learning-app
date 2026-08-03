@@ -10,8 +10,21 @@ describe('cleanPageTitle', () => {
     expect(cleanPageTitle('  Loops   and\n iteration ')).toBe('Loops and iteration');
   });
 
-  it('keeps a title that is already short enough', () => {
-    expect(cleanPageTitle('Functions - JavaScript | MDN')).toBe('Functions - JavaScript | MDN');
+  it('keeps a title with no separators verbatim', () => {
+    expect(cleanPageTitle('Loops and iteration in Python')).toBe('Loops and iteration in Python');
+  });
+
+  it('splits on a spaced hyphen/en-dash/em-dash, not just the pipe', () => {
+    // MDN-style "page - section - site": the dash is structural, so the trailing site
+    // furniture drops with the segment cap the way pipe-delimited furniture does.
+    expect(
+      cleanPageTitle(
+        'Array.prototype.map() - JavaScript - MDN Web Docs',
+        'https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/map',
+      ),
+    ).toBe('Array.prototype.map() | JavaScript');
+    // A hyphenated compound is NOT a separator (no surrounding spaces), so it survives.
+    expect(cleanPageTitle('Client-Server Architecture')).toBe('Client-Server Architecture');
   });
 
   it('drops trailing site furniture beyond the first two segments', () => {
@@ -144,6 +157,16 @@ describe('crediblePageTitle', () => {
       crediblePageTitle(
         'Conic sections | Precalculus | Math | Khan Academy',
         'Conic sections | Precalculus',
+        'https://www.khanacademy.org/math/precalculus/x9e81a4f98389efdf:conics',
+      ),
+    ).toBeNull();
+  });
+
+  it('treats a stored title differing only by whitespace as a no-op (no needless re-embed)', () => {
+    expect(
+      crediblePageTitle(
+        'Conic sections | Precalculus | Math | Khan Academy',
+        'Conic  sections |  Precalculus',
         'https://www.khanacademy.org/math/precalculus/x9e81a4f98389efdf:conics',
       ),
     ).toBeNull();
