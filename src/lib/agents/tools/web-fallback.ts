@@ -30,7 +30,7 @@ import { z } from 'zod';
 import type { Difficulty } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { getModel } from '@/lib/ai/models';
-import { recordUsage } from '@/lib/log';
+import { log, recordUsage } from '@/lib/log';
 import { vertex } from '@/lib/ai/vertex';
 import {
   REMEDIATION_SOURCE_TARGET_COUNT,
@@ -43,6 +43,7 @@ import { runValidationPipeline } from '@/lib/agents/validation';
 import { livenessValidator } from '@/lib/agents/validation/validators/liveness';
 import { rulesAgentValidator } from '@/lib/agents/validation/validators/rules-agent';
 import { decompose } from '@/lib/agents/decomposition/decompose';
+import { crediblePageTitle } from '@/lib/agents/decomposition/page-title';
 import { upsertResource } from '@/lib/agents/decomposition/upsert-resource';
 import { loadTopicVocab } from '@/lib/agents/decomposition/concepts';
 import { classifyDiscoveryTopics } from '@/lib/agents/tools/classify-topic';
@@ -402,6 +403,30 @@ async function persistDiscovered(
     })),
   );
 
+  // The title each row is actually persisted with. Discovery's `title` is free text
+  // the model wrote about what it went LOOKING for — where a router fetched the page,
+  // the page's own <title> is the only statement of what the URL really is, and a
+  // container titled after the sub-topic that demanded it mis-files, mis-embeds and
+  // mis-routes (see page-title.ts). Resolved HERE, before classification and the
+  // embed below, so the correction reaches the filing evidence and the vector rather
+  // than just the stored string.
+  const titleByUrl = new Map(
+    decomposed.map(({ row, result }) => [
+      row.url,
+      crediblePageTitle(result.pageTitle, row.title, row.url) ?? row.title,
+    ]),
+  );
+  for (const { row } of decomposed) {
+    const corrected = titleByUrl.get(row.url)!;
+    if (corrected !== row.title) {
+      log('web-fallback.title-corrected', {
+        url: row.url,
+        discovered: row.title,
+        page: corrected,
+      });
+    }
+  }
+
   // Canonicalize concepts only for atomic survivors. Container parents are
   // unpickable, so their own concepts don't drive selection or dedup — per
   // decision A, canonicalization for a container's children happens inside the
@@ -427,7 +452,7 @@ async function persistDiscovered(
   const proposalsByUrl = await classifyDiscoveryTopics(
     finalRows.map((r) => ({
       url: r.url,
-      title: r.title,
+      title: titleByUrl.get(r.url) ?? r.title,
       summary: r.summary,
       conceptsTaught: r.rawConceptsTaught,
     })),
@@ -458,7 +483,7 @@ async function persistDiscovered(
   abortSignal?.throwIfAborted();
   const embeddings = await safeEmbedBatch(
     decomposed.map(({ row }) => ({
-      title: row.title,
+      title: titleByUrl.get(row.url)!,
       summary: row.summary,
       conceptsTaught: tagsByUrl.get(row.url)!.conceptsTaught,
     })),
@@ -521,7 +546,7 @@ async function persistDiscovered(
       filedTopic,
       {
         url: row.url,
-        title: row.title,
+        title: titleByUrl.get(row.url)!,
         type: row.type,
         difficulty: row.difficulty,
         durationMin: row.durationMin,

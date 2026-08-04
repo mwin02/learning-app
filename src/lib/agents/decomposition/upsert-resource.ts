@@ -14,6 +14,7 @@
 // here.
 
 import { prisma } from '@/lib/db';
+import { log } from '@/lib/log';
 import { safeEmbedResource, storeEmbedding } from '@/lib/ai/embeddings';
 import { setPrimaryTopic, addCollisionMembership } from '@/lib/curation/resource-topics';
 import { MAX_MEMBERSHIPS, type FilingDecision } from '@/lib/curation/topic-knn';
@@ -21,6 +22,7 @@ import { safeClassifyAndPersist } from '@/lib/curation/embeddability';
 import { computeTrustScore } from '@/lib/curation/trust-score';
 import { youtubeEngagementSignal } from '@/lib/curation/youtube-signal';
 import { normalizeResourceUrl } from './normalize-url';
+import { crediblePageTitle } from './page-title';
 import type { PrismaClient, ResourceType, Difficulty, DecompositionStatus, ResourceStatus } from '@prisma/client';
 import type { DecompositionResult, ChildInput } from './decompose';
 
@@ -319,19 +321,40 @@ export async function decomposeExisting(
   const embedTasks: EmbedTask[] = [];
   let childrenCreated = 0;
 
+  // A router that fetched the page can correct a title discovery invented from the
+  // demanding concept rather than the page (page-title.ts). Doing it here is what
+  // makes the review queue self-healing: requeue a mis-titled container and the
+  // re-decomposition fixes its title, filing evidence and vector along the way.
+  const correctedTitle = crediblePageTitle(decomposition.pageTitle, existing.title, existing.url);
+  const title = correctedTitle ?? existing.title;
+  if (correctedTitle) {
+    log('upsert-resource.title-corrected', {
+      resourceId,
+      stored: existing.title,
+      page: correctedTitle,
+    });
+  }
+
   await prisma.$transaction(async (tx) => {
     await tx.resource.update({
       where: { id: resourceId },
-      data: { decompositionStatus: decomposition.status },
+      data: {
+        decompositionStatus: decomposition.status,
+        ...(correctedTitle ? { title: correctedTitle } : {}),
+      },
     });
     // A reroute to 'atomic' (e.g. doc-TOC single_lesson/reference_index) makes
     // the parent itself pickable — embed it, or searchResources under-ranks it.
     // A 'decomposed' parent stays an unpickable container (children only).
-    if (decomposition.status === 'atomic') {
+    // A corrected title also re-embeds a CONTAINER parent, which is otherwise never
+    // queued here: title is a third of the embedded text (lib/ai/embeddings), so a
+    // container left on its old vector stays mis-routed in pgvector even after the
+    // visible title is right.
+    if (decomposition.status === 'atomic' || correctedTitle) {
       embedTasks.push({
         id: resourceId,
         url: existing.url,
-        title: existing.title,
+        title,
         summary: existing.summary,
         conceptsTaught: existing.conceptsTaught,
       });

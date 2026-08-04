@@ -57,9 +57,14 @@ const FETCH_UA =
 const MAX_CANDIDATE_LINKS = 300;
 const BODY_SNIPPET_CHARS = 2000;
 
+// `pageTitle` is the page's OWN <title>, carried on every outcome reached after
+// the fetch (so a kept-whole or parked container gets it too, not just a
+// decomposed one). It is the raw extraction: the caller decides whether to trust
+// it over the discovery-invented title via crediblePageTitle (page-title.ts).
+// Absent when the fetch itself failed — there was no page to read.
 export type DocTocResult =
-  | { ok: true; children: ChildInput[] }
-  | { ok: false; outcome: 'atomic' | 'pending' | 'human_review'; reason: string };
+  | { ok: true; children: ChildInput[]; pageTitle?: string }
+  | { ok: false; outcome: 'atomic' | 'pending' | 'human_review'; reason: string; pageTitle?: string };
 
 type CandidateLink = { url: string; text: string };
 
@@ -135,20 +140,20 @@ export async function decomposeDocToc(args: {
   if (candidates.length === 0) {
     // No static section links at all — could be a JS-rendered index or a single
     // page. Can't decompose; let a human decide rather than guessing atomic.
-    return { ok: false, outcome: 'human_review', reason: 'no extractable section links' };
+    return { ok: false, outcome: 'human_review', reason: 'no extractable section links', pageTitle: title };
   }
 
   let extraction: z.infer<typeof ExtractionSchema>;
   try {
     extraction = await extractToc(title, bodySnippet, candidates);
   } catch (err) {
-    return { ok: false, outcome: 'pending', reason: `extraction failed: ${(err as Error).message}` };
+    return { ok: false, outcome: 'pending', reason: `extraction failed: ${(err as Error).message}`, pageTitle: title };
   }
 
   // Only an ordered lesson sequence decomposes. A single lesson or a reference
   // index is kept whole as a pickable atomic resource — never fragmented.
   if (extraction.pageKind !== 'lesson_sequence') {
-    return { ok: false, outcome: 'atomic', reason: `pageKind=${extraction.pageKind}` };
+    return { ok: false, outcome: 'atomic', reason: `pageKind=${extraction.pageKind}`, pageTitle: title };
   }
 
   // Guard: keep only sections whose URL was actually one of the links we
@@ -164,7 +169,7 @@ export async function decomposeDocToc(args: {
   if (valid.length < 2) {
     // Classified as a sequence but we couldn't pin ≥2 distinct-URL sections
     // (anchors-only single page, JS-rendered, ambiguous) — needs a human.
-    return { ok: false, outcome: 'human_review', reason: `only ${valid.length} usable section(s)` };
+    return { ok: false, outcome: 'human_review', reason: `only ${valid.length} usable section(s)`, pageTitle: title };
   }
 
   // Oversize gate: too many sections is usually LLM over-selection or a sprawling
@@ -176,6 +181,7 @@ export async function decomposeDocToc(args: {
       ok: false,
       outcome: 'human_review',
       reason: `${valid.length} sections (> ${DECOMPOSITION_MAX_AUTO_CHILDREN} auto-decompose limit) — needs review`,
+      pageTitle: title,
     };
   }
 
@@ -260,7 +266,7 @@ export async function decomposeDocToc(args: {
     };
   });
 
-  return { ok: true, children };
+  return { ok: true, children, pageTitle: title };
 }
 
 // ── LLM selection ────────────────────────────────────────────────────────────
@@ -313,7 +319,10 @@ async function extractToc(
 
 // ── HTML extraction (regex; no parser dependency) ────────────────────────────
 
-function extractTitle(html: string): string {
+// Exported so the one-off title backfill (scripts/backfill-page-titles.ts) reads
+// the page the same way the router does — a backfill that extracted titles
+// differently would write values the router would then "correct" back.
+export function extractTitle(html: string): string {
   const t = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
   if (t) return decodeEntities(stripTags(t[1])).trim();
   const h1 = /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(html);

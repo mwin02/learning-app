@@ -17,6 +17,7 @@
 //   npx tsx --env-file=.env.local scripts/reclassify-topics.ts              # dry run
 //   npx tsx --env-file=.env.local scripts/reclassify-topics.ts --apply
 //   npx tsx --env-file=.env.local scripts/reclassify-topics.ts --topics=sql,python --limit=50
+//   npx tsx --env-file=.env.local scripts/reclassify-topics.ts --ids=abc,def   # targeted re-score
 //   npx tsx --env-file=.env.local scripts/reclassify-topics.ts --all --apply # incl. the ~774
 //
 // ⚠️ Stop the compose workers first (`docker compose --profile workers stop worker`) —
@@ -97,19 +98,27 @@ async function main() {
   const force = process.argv.includes('--force');
   const limit = Number(arg('limit')) || undefined;
   const explicit = arg('topics')?.split(',').map((t) => t.trim()).filter(Boolean);
+  // `--ids=` re-scores a named set of rows and nothing else — the surface for a targeted
+  // re-run after a row's EVIDENCE changed rather than its filing (e.g. a corrected title
+  // re-embedded, which is what decideFiling actually votes on). Naming rows explicitly is
+  // already the operator asserting the selection, so it implies `--force`: the default
+  // `origin = 'inherited'` selector would silently drop a row that was classified once.
+  const ids = arg('ids')?.split(',').map((s) => s.trim()).filter(Boolean);
 
   // An empty list would make `Prisma.join` throw; `--all` and "no backlog left" are both
   // legitimately "no topic filter", handled as undefined.
-  const selected = explicit?.length ? explicit : all ? undefined : await defaultBacklogTopics();
+  const selected = explicit?.length ? explicit : all || ids?.length ? undefined : await defaultBacklogTopics();
   const topics = selected?.length ? selected : undefined;
-  if (!all && !topics) {
+  if (!all && !topics && !ids?.length) {
     console.log('no backlog topics found — nothing to do.\n');
     await assertMembershipInvariants();
     return;
   }
   console.log(`mode: ${apply ? 'APPLY' : 'dry-run'}`);
-  console.log(`topics: ${topics ? topics.join(', ') : 'ALL'}`);
-  console.log(`selector: ${force ? 'every row' : 'rows whose primary is still `inherited`'}\n`);
+  console.log(`topics: ${ids?.length ? `(ids: ${ids.length})` : topics ? topics.join(', ') : 'ALL'}`);
+  console.log(
+    `selector: ${force || ids?.length ? 'every row' : 'rows whose primary is still `inherited`'}\n`,
+  );
 
   // Composed rather than interpolated: an unfiltered run and a `--topics` run are
   // different SQL, and `LIMIT` is optional. `Prisma.empty` keeps the parameterization.
@@ -118,8 +127,9 @@ async function main() {
     FROM "Resource" r
     JOIN "ResourceTopic" rt ON rt."resourceId" = r.id AND rt."isPrimary"
     WHERE r.embedding IS NOT NULL
+      ${ids?.length ? Prisma.sql`AND r.id IN (${Prisma.join(ids)})` : Prisma.empty}
       ${topics ? Prisma.sql`AND r.topic IN (${Prisma.join(topics)})` : Prisma.empty}
-      ${force ? Prisma.empty : Prisma.sql`AND rt.origin::text = 'inherited'`}
+      ${force || ids?.length ? Prisma.empty : Prisma.sql`AND rt.origin::text = 'inherited'`}
     ORDER BY r.topic, r.id
     ${limit ? Prisma.sql`LIMIT ${limit}` : Prisma.empty}
   `);
