@@ -81,8 +81,11 @@ type SourcedResource = DiscoveredResource & {
   // Set by the validation pipeline's quarantine outcome: persist this row and let
   // it reach the review queue, but keep it OUT of the attach set (insertedIds), so
   // a suspected-dead URL is never served to a learner on an unverified hunch.
+  // The REASON is logged where the flag is set and goes no further — it is not
+  // persisted, so the row is indistinguishable from any other `pending_review` row
+  // by the time a human sees it. Acceptable while liveness is the only validator
+  // that quarantines; a second one would make that ambiguity worth a column.
   quarantined?: boolean;
-  quarantineReason?: string;
 };
 
 // Adapt a YouTube-prong row into the common SourcedResource shape (the prong
@@ -332,9 +335,11 @@ async function collectSurvivors(args: {
     }
     // Persisted below but never attached: these reach the review queue instead of
     // being deleted on a heuristic. Collected outside the targetCount accounting.
+    // This log line is the only place the REASON survives — nothing downstream
+    // carries it, so keep it if the loop is ever refactored.
     for (const r of held) {
       console.log('[web-fallback] quarantined', { url: r.row.url, validator: r.validator, reason: r.reason });
-      quarantined.set(r.row.url, { ...r.row, quarantined: true, quarantineReason: r.reason });
+      quarantined.set(r.row.url, { ...r.row, quarantined: true });
     }
 
     // Interleave the prongs rather than taking all YouTube first, so when one prong

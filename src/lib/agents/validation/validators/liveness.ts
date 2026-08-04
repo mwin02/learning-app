@@ -1,7 +1,8 @@
 // Liveness validator. Cheap network check that drops URLs which don't resolve
-// to a live page. Generic HTTP: HEAD with a Range-GET fallback for servers
-// that reject HEAD (some docs hosts return 403/405/501 on HEAD). YouTube:
-// uses the oEmbed endpoint because removed videos still serve a 200 page.
+// to a live page. Generic HTTP: a single bounded GET (the soft-404 check below
+// needs the body on every 2xx, so a HEAD pre-flight would only add a round-trip
+// per host without settling anything). YouTube: uses the oEmbed endpoint because
+// removed videos still serve a 200 page.
 //
 // Soft-404s (2026-08-03): a 2xx is not proof of life. The 45 dead Khan rows found
 // that day all passed this validator, and a same-day probe of the hosts in the
@@ -88,8 +89,10 @@ async function checkLiveness(url: string): Promise<LivenessVerdict> {
 }
 
 // Path segments a host redirects to when it answers 200 for something missing.
-// Matched against the FINAL url's path after redirects — lamar's soft-404 lands
-// on /Errors/PageMissing.aspx?aspxerrorpath=<the url you asked for>.
+// Matched against the final url's PATH + QUERY only, never the whole url — the
+// scheme and host are not evidence about the page. lamar's soft-404 lands on
+// /Errors/PageMissing.aspx?aspxerrorpath=<the url you asked for>, so the query
+// has to stay in scope for that last pattern to fire.
 const ERROR_PATH = [
   /\/errors?\//i,
   /page-?missing/i,
@@ -97,24 +100,72 @@ const ERROR_PATH = [
   /aspxerrorpath=/i,
 ];
 
-// A redirect is only evidence of death when it lands somewhere error-shaped.
-// Plain redirects are normal and common (http→https, trailing slash, locale,
-// a renamed-but-live unit), so they must NOT count on their own.
+// A redirect is only evidence of death when BOTH halves hold: it lands somewhere
+// error-shaped, AND it stops addressing the thing we asked for.
+//
+// The first half alone is not enough, because a page ABOUT an error is an ordinary
+// page — MDN's /Web/HTTP/Status/404 and Next.js's /file-conventions/not-found are
+// real docs that redirect (http→https, locale, a doc reshuffle) like anything else,
+// and the `(404|not-?found)` pattern matches their paths exactly. Quarantining
+// those would be self-inflicted: they are on-topic content for this library.
+//
+// The second half is what separates them from a genuine soft-404. lamar's redirect
+// abandons the lesson — /Classes/CalcI/Gone.aspx → /Errors/PageMissing.aspx, where
+// the thing asked for survives only as a query echo. MDN's redirect still lands on
+// the page called `404`. So: if the final PATH still carries the requested url's
+// last segment, the redirect moved the page, it didn't bury it.
 function redirectedToError(requested: string, final: string): boolean {
   if (!final || final === requested) return false;
-  return ERROR_PATH.some((p) => p.test(final));
+  let path: string;
+  let pathAndQuery: string;
+  try {
+    const u = new URL(final);
+    path = u.pathname;
+    pathAndQuery = `${u.pathname}${u.search}`;
+  } catch {
+    // An unparseable final url is no evidence at all; alive is the safe direction.
+    return false;
+  }
+  if (!ERROR_PATH.some((p) => p.test(pathAndQuery))) return false;
+  return !stillAddresses(requested, path);
+}
+
+// Does `finalPath` still name what `requested` asked for? Compared on the last
+// path segment, lowercased. Segments under 3 chars are ignored — "18" or "a" would
+// collide with an unrelated path by accident, and a false "yes" here suppresses a
+// real detection.
+function stillAddresses(requested: string, finalPath: string): boolean {
+  let segment: string;
+  try {
+    const segments = new URL(requested).pathname.split('/').filter(Boolean);
+    segment = (segments.at(-1) ?? '').toLowerCase();
+  } catch {
+    return false;
+  }
+  return segment.length >= 3 && finalPath.toLowerCase().includes(segment);
 }
 
 // Titles suggesting the page is GONE, on a host that answered 200 anyway. Every
 // match QUARANTINES — it never deletes — which is what lets this list be broad.
 //
-// The first two groups are unambiguous. The third is knowingly over-broad: it
-// matches real content too ("Sampling and Standard Error | MIT OpenCourseWare",
-// "Type I Error", course numbers like "STAT 502"), and under the old destructive
-// contract those false positives were unacceptable — an earlier cut of this
-// validator killed exactly that OCW lecture. Routed to review instead, the trade
-// inverts: catching a genuinely dead page is worth a reviewer glancing at a live
-// one. Keep new patterns in the third group unless they cannot false-positive.
+// The first two groups are unambiguous. The third is knowingly over-broad on the
+// WORD "error": it matches real content ("Sampling and Standard Error | MIT
+// OpenCourseWare", "Type I Error"), and under the old destructive contract that was
+// unacceptable — an earlier cut of this validator killed exactly that OCW lecture.
+// Routed to review instead, the trade inverts: catching a genuinely dead page is
+// worth a reviewer glancing at a live one. Keep new patterns in the third group
+// unless they cannot false-positive.
+//
+// The HTTP-code patterns are the exception, and deliberately are NOT over-broad. A
+// bare `\b40[0-9]\b` anywhere in the title reads a COURSE NUMBER as a status code —
+// "18.404 Theory of Computation", "STAT 502", "Math 401", "EE 501" — and unlike the
+// "error" false positives, those don't scatter: they concentrate on numbered
+// university courses, which is the exact material an OCW-heavy library is built from.
+// So a code only counts in an error CONTEXT: leading the title, following an
+// error/apology word, or parenthesised alone. Measured against both real dead-page
+// titles and real course titles, this keeps every dead shape the loose version caught
+// ("Oops! 404", "Service Unavailable (503)", "Sorry — 410" included) while dropping
+// the course-number collisions.
 //
 // Bot-wall titles ("Client Challenge", "Just a moment") stay OUT entirely, in any
 // group: a wall means we could not see the page, not that it is gone, and Khan
@@ -135,7 +186,9 @@ const DEAD_PAGE_TITLE = [
   // Over-broad on purpose — quarantine-only (see above).
   /^error\b/i,
   /\berror\s*[-–—|]/i,
-  /(^|\W)(40[0-9]|41[0-9]|50[0-9])(\W|$)/,
+  // HTTP codes, error context only (see above) — never a bare number anywhere.
+  /(?:^|\b(?:error|http|oops|sorry|whoops|unavailable|failed)\b\W*)(?:40[0-9]|41[0-9]|50[0-9])\b/i,
+  /\(\s*(?:40[0-9]|41[0-9]|50[0-9])\s*\)/,
 ];
 
 function extractTitle(html: string): string | undefined {
@@ -148,39 +201,59 @@ function extractTitle(html: string): string | undefined {
 // read that the soft-404 check needs.
 const TITLE_SNIFF_BYTES = 65536;
 
+// Read at most `limit` bytes, then hang up. This is the ONLY bound on the body read:
+// `Response.text()` would buffer the whole page (khanacademy.org's shell is ~320KB)
+// before we threw it away, and a `Range` header can't be used to bound it either —
+// see the note at the fetch call for the status corruption that causes. Cancelling
+// the reader closes the connection mid-body, so the cap costs what it says.
+async function readCapped(res: Response, limit: number): Promise<string> {
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let out = '';
+  let read = 0;
+  try {
+    while (read < limit) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      read += value.byteLength;
+      out += decoder.decode(value, { stream: true });
+    }
+    out += decoder.decode();
+  } finally {
+    // The body is deliberately unfinished; cancel releases the connection instead
+    // of leaving it to drain. A cancel on an already-closed stream is not an error
+    // we can act on, so it stays swallowed here rather than masking the read above.
+    await reader.cancel().catch(() => {});
+  }
+  return out;
+}
+
 async function checkHttp(url: string): Promise<LivenessVerdict> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), LIVENESS_TIMEOUT_MS);
   try {
-    // HEAD first — cheap, no body, and it follows redirects, so it already
-    // exposes the lamar-shaped soft-404 without reading anything. But HEAD is
-    // advisory: many servers mishandle it (415, 400, even 500) on URLs that GET
-    // happily, so a non-2xx HEAD is inconclusive and falls through to GET.
-    try {
-      const head = await fetch(url, {
-        method: 'HEAD',
-        redirect: 'follow',
-        signal: ctl.signal,
-        headers: { 'User-Agent': UA, Accept: '*/*' },
-      });
-      if (head.ok && redirectedToError(url, head.url)) {
-        return suspect(`soft 404: redirected to ${head.url}`);
-      }
-      // A 2xx HEAD no longer settles it — the body may still be a 404 page — so
-      // fall through to the GET below rather than returning early.
-    } catch {
-      // HEAD threw (some servers reset the connection on HEAD). Fall through.
-    }
-
+    // One request. There used to be a HEAD pre-flight that short-circuited a live
+    // URL without reading a body, but the soft-404 check needs the body on every
+    // 2xx anyway — so HEAD stopped settling anything and became a second
+    // round-trip against every host we look at. Everything it could observe (the
+    // status, the post-redirect url) is on this response too.
+    // NO `Range` header, deliberately. It looks like the cheap way to bound the read,
+    // but it CORRUPTS THE STATUS on hosts that honour it: react.dev answers a missing
+    // page with 404 to a plain GET and 206 to a ranged one — the CDN serves the
+    // partial body and the error status is gone. A 206 reads as alive, so an
+    // authoritative 404 silently degraded into a heuristic quarantine. The read is
+    // bounded by readCapped() cancelling the stream instead, which costs the same
+    // bytes and keeps the status honest.
     const get = await fetch(url, {
       method: 'GET',
       redirect: 'follow',
       signal: ctl.signal,
-      headers: { 'User-Agent': UA, Accept: '*/*', Range: `bytes=0-${TITLE_SNIFF_BYTES - 1}` },
+      headers: { 'User-Agent': UA, Accept: '*/*' },
     });
     // Authoritative: the server stated the status outright. Nothing for a
     // reviewer to add, so this drops the row rather than queuing it.
-    if (!get.ok && get.status !== 206) return { alive: false, reason: `http ${get.status}` };
+    if (!get.ok) return { alive: false, reason: `http ${get.status}` };
     if (redirectedToError(url, get.url)) {
       return suspect(`soft 404: redirected to ${get.url}`);
     }
@@ -189,7 +262,7 @@ async function checkHttp(url: string): Promise<LivenessVerdict> {
     // bodies are left alone — reading them buys nothing and costs bandwidth.
     if (!(get.headers.get('content-type') ?? '').toLowerCase().includes('text/html')) return ALIVE;
 
-    const title = extractTitle((await get.text()).slice(0, TITLE_SNIFF_BYTES));
+    const title = extractTitle(await readCapped(get, TITLE_SNIFF_BYTES));
     // No title, or a bot-wall/SPA-shell title, is INCONCLUSIVE — treated as alive
     // on purpose. This is the khanacademy.org case and the reason a 200 from an
     // SPA still can't be verified here.

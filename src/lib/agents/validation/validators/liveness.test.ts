@@ -15,26 +15,43 @@ import { livenessValidator } from '@/lib/agents/validation/validators/liveness';
 
 type Reply = { status?: number; url?: string; contentType?: string; body?: string };
 
-// Minimal Response stand-in: the validator reads ok/status/url/headers/text only.
+// Minimal Response stand-in: the validator reads ok/status/url/headers and streams
+// `body`. A real ReadableStream, not a `text()` shim — the validator caps its read
+// by cancelling the reader, so a stub that can't be cancelled wouldn't exercise it.
 function reply({ status = 200, url = '', contentType = 'text/html; charset=utf-8', body = '' }: Reply) {
   return {
     ok: status >= 200 && status < 300,
     status,
     url,
     headers: { get: (h: string) => (h.toLowerCase() === 'content-type' ? contentType : null) },
-    text: async () => body,
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(body));
+        controller.close();
+      },
+    }),
   };
 }
 
-// `replies` is keyed by method so a test can give HEAD and GET different answers.
-function stubFetch(replies: { HEAD?: Reply | 'throw'; GET?: Reply | 'throw' }) {
-  vi.stubGlobal('fetch', async (input: string, init?: { method?: string }) => {
-    const method = init?.method ?? 'GET';
-    const r = replies[method as 'HEAD' | 'GET'];
-    if (r === 'throw') throw new Error('connection reset');
-    if (!r) throw new Error(`no stubbed reply for ${method}`);
-    return reply({ url: input, ...r });
-  });
+type Sent = { method: string; headers: Record<string, string> };
+
+// `replies` is keyed by method. Only GET is ever expected — a HEAD arriving here is
+// a regression (the pre-flight was removed) — and `sent` records what went out, so
+// a test can assert on the request itself and not just the verdict.
+function stubFetch(replies: { HEAD?: Reply | 'throw'; GET?: Reply | 'throw' }): { sent: Sent[] } {
+  const sent: Sent[] = [];
+  vi.stubGlobal(
+    'fetch',
+    async (input: string, init?: { method?: string; headers?: Record<string, string> }) => {
+      const method = init?.method ?? 'GET';
+      sent.push({ method, headers: init?.headers ?? {} });
+      const r = replies[method as 'HEAD' | 'GET'];
+      if (r === 'throw') throw new Error('connection reset');
+      if (!r) throw new Error(`no stubbed reply for ${method}`);
+      return reply({ url: input, ...r });
+    },
+  );
+  return { sent };
 }
 
 async function check(url: string) {
@@ -78,16 +95,31 @@ describe('livenessValidator — heuristic failures quarantine, never reject', ()
     expect(await outcome(URL_)).toBe('quarantine');
   });
 
-  // Deliberate over-match. These are REAL page titles, and the loosened patterns
-  // do fire on them — which is only acceptable because the outcome is a review,
-  // not a deletion. An earlier destructive cut of this validator killed the OCW
-  // lecture below for real, which is why this asymmetry is pinned by a test.
+  // Deliberate over-match on the WORD "error". These are REAL page titles and the
+  // loose pattern does fire on them — acceptable only because the outcome is a
+  // review, not a deletion. An earlier destructive cut of this validator killed the
+  // OCW lecture below for real, which is why this asymmetry is pinned by a test.
   it.each([
     'Lecture 8: Sampling and Standard Error | MIT OpenCourseWare',
     'Type I Error vs Type II Error | Statistics',
-    'STAT 502: Analysis of Variance',
   ])('quarantines rather than rejects the false positive %j', async (title) => {
     stubFetch({ HEAD: {}, GET: { body: page(title) } });
+    expect(await outcome(URL_)).toBe('quarantine');
+  });
+
+  // HTTP codes still count when the title is error-SHAPED, including the forms that
+  // carry no "error"/"http" word at all — those are the shapes a position-anchored
+  // pattern would miss.
+  it.each([
+    '500 Internal Server Error',
+    '503 Service Temporarily Unavailable',
+    'HTTP 502 Bad Gateway',
+    '403 Forbidden',
+    'Oops! 404',
+    'Service Unavailable (503)',
+    'Sorry — 410',
+  ])('quarantines an http-code title %j', async (title) => {
+    stubFetch({ GET: { body: page(title) } });
     expect(await outcome(URL_)).toBe('quarantine');
   });
 
@@ -97,6 +129,27 @@ describe('livenessValidator — heuristic failures quarantine, never reject', ()
     expect(await outcome('https://slow.example.edu/x')).toBe('quarantine');
     const v = await check('https://slow.example.edu/x');
     expect(v.valid === false && v.reason).toBe('url not reachable');
+  });
+});
+
+// The failure mode that made the numeric pattern worth narrowing: a course number
+// is not a status code, and unlike the "error"-word false positives these do not
+// scatter — they land on numbered university courses, which is most of what an
+// OCW-heavy library indexes.
+describe('livenessValidator — a course number is not an http status', () => {
+  it.each([
+    '18.404 Theory of Computation | MIT OpenCourseWare',
+    'STAT 502: Analysis of Variance',
+    'Math 401: Introduction to Real Analysis',
+    'CS 405 — Computer Graphics',
+    'PHYS 401 Quantum Mechanics I',
+    'EE 501 Linear Systems Theory',
+    'Chapter 405: Dynamic Programming',
+    'Statistics 401 (Fall 2005)',
+    'Introduction to Probability (6.041)',
+  ])('keeps %j alive', async (title) => {
+    stubFetch({ GET: { body: page(title) } });
+    expect(await outcome(URL_)).toBe('alive');
   });
 });
 
@@ -157,8 +210,40 @@ describe('livenessValidator — ambiguity means alive', () => {
     expect(await outcome('https://example.edu/notes.pdf')).toBe('alive');
   });
 
-  it('still passes when HEAD throws but GET succeeds', async () => {
-    stubFetch({ HEAD: 'throw', GET: { body: page('Real Lesson') } });
-    expect(await outcome('https://example.com/head-hostile')).toBe('alive');
+  it('keeps a redirect onto a page that is ABOUT an error but still the page asked for', async () => {
+    // The `(404|not-?found)` path pattern matches these exactly, and they are real
+    // docs this library would source. What saves them is that the redirect still
+    // lands on the requested last segment — it moved the page, it didn't bury it.
+    // Titles here are deliberately clean: the title heuristic is a SEPARATE gate,
+    // and MDN's real title would trip it on its own. This pins the redirect check.
+    const mdn = 'https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404';
+    stubFetch({ GET: { url: mdn, body: page('HTTP response status codes | MDN') } });
+    expect(await outcome('http://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404')).toBe('alive');
+
+    const next = 'https://nextjs.org/docs/app/api-reference/file-conventions/not-found';
+    stubFetch({ GET: { url: next, body: page('File conventions: not-found | Next.js') } });
+    expect(await outcome('https://nextjs.org/docs/api-reference/file-conventions/not-found')).toBe('alive');
+  });
+
+  // Guards the removal of the HEAD pre-flight: the soft-404 check needs the body on
+  // every 2xx, so HEAD settled nothing and cost a round-trip against every host.
+  it('issues exactly one request, and never a HEAD', async () => {
+    const { sent } = stubFetch({ GET: { body: page('Real Lesson') } });
+    expect(await outcome('https://example.com/lesson')).toBe('alive');
+    expect(sent.map((s) => s.method)).toEqual(['GET']);
+  });
+
+  // Regression guard, and NOT a style preference. `Range: bytes=0-N` looks like the
+  // obvious way to bound the read, but hosts that honour it answer a missing page
+  // with 206 instead of 404 (react.dev does exactly this behind its CDN) — which
+  // reads as alive here and downgrades an authoritative reject into a quarantine.
+  // The read is bounded by cancelling the stream instead; see liveness.ts.
+  it('sends no Range header, so an authoritative status is never masked by a 206', async () => {
+    const { sent } = stubFetch({ GET: { body: page('Real Lesson') } });
+    await outcome('https://example.com/lesson');
+    const headers = Object.fromEntries(
+      Object.entries(sent[0].headers).map(([k, v]) => [k.toLowerCase(), v]),
+    );
+    expect(headers).not.toHaveProperty('range');
   });
 });

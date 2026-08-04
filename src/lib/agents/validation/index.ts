@@ -22,7 +22,11 @@ export type Rejection<T> = { row: T; validator: string; reason: string };
 export type PipelineResult<T extends ValidatableResource> = {
   valid: T[];
   // Persist-but-don't-attach: failed a heuristic check that isn't trusted enough
-  // to delete on. Carries the validator + reason so review can see why.
+  // to delete on. The validator + reason are for the CALLER — logs and diagnostics
+  // at the end of a sourcing run. They are not persisted: a quarantined row reaches
+  // the review queue as an ordinary `pending_review` row, and the reviewer's
+  // evidence is the URL itself. Worth revisiting if a second validator ever
+  // quarantines, since "why is this here" stops being answerable from context.
   quarantined: Rejection<T>[];
   rejected: Rejection<T>[];
 };
