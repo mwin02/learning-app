@@ -43,6 +43,7 @@ import { thickenSpine } from '@/lib/agents/track/thicken-seam';
 import { sectionTrack } from '@/lib/agents/track/section-track';
 import { exerciseTrack } from '@/lib/agents/content/exercise-track';
 import {
+  DB_WRITE_TX_TIMEOUT_MS,
   TRACK_MAX_THICKEN_ATTEMPTS,
   TRACK_COMPOSER_MODE,
   TRACK_MIN_PRIMARY_DURATION_MIN,
@@ -339,7 +340,7 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
           intent: composition.intent,
         },
       });
-    });
+    }, { timeout: DB_WRITE_TX_TIMEOUT_MS });
 
     // --- best-effort sectioning: group the frozen lessons into chapters --------
     // A separate Flash pass over the just-persisted lessons (section-track.ts).

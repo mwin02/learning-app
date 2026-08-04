@@ -39,7 +39,7 @@ import { prisma } from '@/lib/db';
 import { recomputeReadiness } from '@/lib/agents/map/recompute-readiness';
 import { judgeCandidates } from '@/lib/agents/map/candidate-judge';
 import { selectAttachable, capCandidates } from '@/lib/agents/map/attach-candidates';
-import { MAP_MAX_CANDIDATES_PER_CONCEPT, REMEDIATION_SOURCE_TARGET_COUNT } from '@/lib/config';
+import { DB_WRITE_TX_TIMEOUT_MS, MAP_MAX_CANDIDATES_PER_CONCEPT, REMEDIATION_SOURCE_TARGET_COUNT } from '@/lib/config';
 import { libraryRungCandidates, sourceFromWeb, webShortfall } from '@/lib/agents/tools/web-fallback';
 import { hasQualifyingPrimary } from '@/lib/agents/map/readiness';
 import { generateOnRampResource } from '@/lib/agents/map/generate-onramp';
@@ -338,7 +338,7 @@ export async function judgeAndAttachCandidates(args: {
       }
     }
     await recomputeReadiness(pathId, tx);
-  });
+  }, { timeout: DB_WRITE_TX_TIMEOUT_MS });
   console.log('[source-concept] attached', {
     pathId, concept: slug, attached: kept.length, primaryAttached, reason,
     remembered: rejections.length, targetMastery: targetMastery ?? null,
