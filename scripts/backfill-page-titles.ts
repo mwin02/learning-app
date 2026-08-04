@@ -31,6 +31,11 @@
 // the value present in the shell.
 
 import { readFile } from 'node:fs/promises';
+import { z } from 'zod';
+
+// A { url: title } map, title nullable ("captured, but the page had none"). zod so a
+// malformed --titles file fails loudly at the boundary, not as a downcast surprise later.
+const TitlesFile = z.record(z.string(), z.string().nullable());
 
 // ⚠️ NOTHING from src/ may be imported statically here. Static imports are hoisted
 // above the DATABASE_URL assignment below, and doctoc transitively pulls in
@@ -89,7 +94,7 @@ async function main() {
   let skipped = 0;
 
   const supplied: Record<string, string | null> = titlesFile
-    ? JSON.parse(await readFile(titlesFile, 'utf8'))
+    ? TitlesFile.parse(JSON.parse(await readFile(titlesFile, 'utf8')))
     : {};
   const select = {
     id: true, title: true, url: true, topic: true, summary: true,
@@ -153,4 +158,7 @@ async function main() {
   await prisma.$disconnect();
 }
 
-main();
+main().catch((e) => {
+  console.error(e instanceof Error ? e.message : e);
+  process.exit(1);
+});
