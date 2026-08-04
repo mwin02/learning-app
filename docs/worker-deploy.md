@@ -70,7 +70,11 @@ when queue depth genuinely needs more than one worker.
 ```bash
 export PROJECT_ID=$(grep -oE '^GOOGLE_VERTEX_PROJECT=.*' .env.local | cut -d= -f2)
 export REGION=us-west1
-export ZONE=us-west1-b
+# The VM's zone — NOT the image's region. The instance is in us-central1-a (the
+# capacity workaround in §0) while the Artifact Registry repo stays us-west1, so
+# `gcloud compute` calls take ZONE and `gcloud artifacts` calls take REGION. Change
+# this back to a us-west1 zone if and when the VM is moved per §0.
+export ZONE=us-central1-a
 export VERTEX_LOCATION=us-central1
 export REPO=learning-app
 export IMAGE=$REGION-docker.pkg.dev/$PROJECT_ID/$REPO/course-worker
