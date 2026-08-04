@@ -30,7 +30,7 @@ import { z } from 'zod';
 import type { Difficulty } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { getModel } from '@/lib/ai/models';
-import { recordUsage } from '@/lib/log';
+import { log, recordUsage } from '@/lib/log';
 import { vertex } from '@/lib/ai/vertex';
 import {
   REMEDIATION_SOURCE_TARGET_COUNT,
@@ -419,7 +419,7 @@ async function persistDiscovered(
   for (const { row } of decomposed) {
     const corrected = titleByUrl.get(row.url)!;
     if (corrected !== row.title) {
-      console.log('[web-fallback] title corrected from page', {
+      log('web-fallback.title-corrected', {
         url: row.url,
         discovered: row.title,
         page: corrected,

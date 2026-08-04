@@ -14,6 +14,7 @@
 // here.
 
 import { prisma } from '@/lib/db';
+import { log } from '@/lib/log';
 import { safeEmbedResource, storeEmbedding } from '@/lib/ai/embeddings';
 import { setPrimaryTopic, addCollisionMembership } from '@/lib/curation/resource-topics';
 import { MAX_MEMBERSHIPS, type FilingDecision } from '@/lib/curation/topic-knn';
@@ -327,7 +328,7 @@ export async function decomposeExisting(
   const correctedTitle = crediblePageTitle(decomposition.pageTitle, existing.title, existing.url);
   const title = correctedTitle ?? existing.title;
   if (correctedTitle) {
-    console.log('[upsert-resource] title corrected from page', {
+    log('upsert-resource.title-corrected', {
       resourceId,
       stored: existing.title,
       page: correctedTitle,
