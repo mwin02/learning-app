@@ -78,6 +78,14 @@ type DiscoveredResource = z.infer<typeof DiscoveredResourceSchema>;
 type SourcedResource = DiscoveredResource & {
   youtube?: { channelId: string; viewCount: number; likeCount: number | null };
   preValidated?: boolean;
+  // Set by the validation pipeline's quarantine outcome: persist this row and let
+  // it reach the review queue, but keep it OUT of the attach set (insertedIds), so
+  // a suspected-dead URL is never served to a learner on an unverified hunch.
+  // The REASON is logged where the flag is set and goes no further — it is not
+  // persisted, so the row is indistinguishable from any other `pending_review` row
+  // by the time a human sees it. Acceptable while liveness is the only validator
+  // that quarantines; a second one would make that ambiguity worth a column.
+  quarantined?: boolean;
 };
 
 // Adapt a YouTube-prong row into the common SourcedResource shape (the prong
@@ -190,7 +198,7 @@ export async function sourceFromWeb({
   // collectSurvivors carries the deny-list across rungs so a rung never re-surfaces
   // what an earlier rung already returned.
   const allowDomains = await loadAllowlistDomains();
-  const { survivors, iterations, totalDiscovered } = await collectSurvivors({
+  const { survivors, quarantined, iterations, totalDiscovered } = await collectSurvivors({
     label,
     targetCount,
     oversample: REMEDIATION_DISCOVERY_OVERSAMPLE,
@@ -201,7 +209,10 @@ export async function sourceFromWeb({
         : discoverForConcept(topic, concept.title, oversample, denyList, targetMastery, preferSubstantial, abortSignal),
     abortSignal,
   });
-  const persisted = await persistDiscovered(topic, survivors, {
+  // Quarantined rows are persisted alongside the survivors — same filing, embedding
+  // and dedup — and are separated again inside the tail, which keeps them out of
+  // insertedIds and records provenance so an approve can attach them later.
+  const persisted = await persistDiscovered(topic, [...survivors, ...quarantined], {
     label,
     iterations,
     totalDiscovered,
@@ -279,9 +290,13 @@ async function collectSurvivors(args: {
   // open-web relaxation). The deny-list carries across rungs.
   discover: (oversample: number, denyList: string[], iteration: number) => Promise<SourcedResource[]>;
   abortSignal?: AbortSignal;
-}): Promise<{ survivors: SourcedResource[]; iterations: number; totalDiscovered: number }> {
+}): Promise<{ survivors: SourcedResource[]; quarantined: SourcedResource[]; iterations: number; totalDiscovered: number }> {
   const { label, targetCount, oversample, maxIterations, discover, abortSignal } = args;
   const survivors = new Map<string, SourcedResource>();
+  // Kept OUT of `survivors` on purpose: a quarantined row will not be attached, so
+  // counting it toward targetCount would end the ladder believing the concept was
+  // filled and leave it with nothing — starving the very concept that asked.
+  const quarantined = new Map<string, SourcedResource>();
   const denyList = new Set<string>();
   let iterations = 0;
   let totalDiscovered = 0;
@@ -300,7 +315,7 @@ async function collectSurvivors(args: {
 
     // Skip rows already-known-good in this loop (model could re-surface them
     // in iteration 2+ if Google Search returns them).
-    const fresh = discovered.filter((r) => !survivors.has(r.url));
+    const fresh = discovered.filter((r) => !survivors.has(r.url) && !quarantined.has(r.url));
     if (fresh.length === 0) {
       // scripts/verify-rung0-fix.ts pattern-matches this message + `iteration` field
       // (its rung tracking, including migration off console.log) — change in lockstep.
@@ -313,10 +328,18 @@ async function collectSurvivors(args: {
     // run the pipeline.
     const preValidated = fresh.filter((r) => r.preValidated);
     const needValidation = fresh.filter((r) => !r.preValidated);
-    const { valid, rejected } = await runValidationPipeline<SourcedResource>(needValidation, VALIDATORS);
+    const { valid, quarantined: held, rejected } = await runValidationPipeline<SourcedResource>(needValidation, VALIDATORS);
 
     for (const r of rejected) {
       console.log('[web-fallback] rejected', { url: r.row.url, validator: r.validator, reason: r.reason });
+    }
+    // Persisted below but never attached: these reach the review queue instead of
+    // being deleted on a heuristic. Collected outside the targetCount accounting.
+    // This log line is the only place the REASON survives — nothing downstream
+    // carries it, so keep it if the loop is ever refactored.
+    for (const r of held) {
+      console.log('[web-fallback] quarantined', { url: r.row.url, validator: r.validator, reason: r.reason });
+      quarantined.set(r.row.url, { ...r.row, quarantined: true });
     }
 
     // Interleave the prongs rather than taking all YouTube first, so when one prong
@@ -338,12 +361,18 @@ async function collectSurvivors(args: {
       fresh: fresh.length,
       preValidated: preValidated.length,
       valid: valid.length,
+      quarantined: quarantined.size,
       survivors: survivors.size,
       need,
     });
   }
 
-  return { survivors: [...survivors.values()], iterations, totalDiscovered };
+  return {
+    survivors: [...survivors.values()],
+    quarantined: [...quarantined.values()],
+    iterations,
+    totalDiscovered,
+  };
 }
 
 // Round-robin merge of two prongs' rows, so neither is systematically crowded out
@@ -576,13 +605,18 @@ async function persistDiscovered(
     if (outcome === 'inserted') insertedCount += 1;
     else if (outcome === 'membership_added') membershipAddedCount += 1;
     else skippedCount += 1;
-    insertedIds.push(...atomicIds);
-    upsertedRows.push({ resourceId, decompositionStatus });
+    // The whole point of quarantine: the row is written, filed and embedded like any
+    // other, but withheld from insertedIds — the set the caller judges, attaches and
+    // promotes to active. So it stays pending_review, shows up in the review queue,
+    // and is never placed on a learner's path until a human confirms it resolves.
+    if (!row.quarantined) insertedIds.push(...atomicIds);
+    upsertedRows.push({ resourceId, decompositionStatus, quarantined: row.quarantined });
   }
 
-  // Library re-judge Block 1: record sourcing provenance for rows that parked
-  // non-atomic — this run demanded them but can't attach them, so the
-  // decompose-time hook needs to know which concept asked. Covers both fresh
+  // Library re-judge Block 1: record sourcing provenance for rows this run
+  // demanded but can't attach — parked non-atomic, or held back by quarantine.
+  // Either way the hook (rejudge-sourced-for) needs to know which concept asked,
+  // so it can offer the row back once review resolves it. Covers both fresh
   // inserts and dedup rediscoveries of an existing parked row (a second demand
   // under a new concept is a second pair; same concept is skipDuplicates'd).
   // Best-effort: provenance is a side channel — a write failure (e.g. the
