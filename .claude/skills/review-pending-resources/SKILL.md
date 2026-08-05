@@ -48,6 +48,39 @@ Number of queue **roots** to process this run: **$ARGUMENTS** (default 10 if emp
   **Requeue the root only for missing content, which is a separate defect.** If the landing page advertises chapters/units that have no row at all, `node --env-file=.env.local .claude/skills/decompose/scripts/decomp-db.cjs requeue <rootId>` moves the container back to `human_review` so `/decompose` can add them (new URLs are created normally; existing ones are skipped, so this is safe to run on a partially-built tree). Use the **production** `DATABASE_URL` override — the helper follows `DATABASE_URL`, not `OPERATOR_BASE_URL`. Requeuing sets `blocked: true`, so the root drops out of this queue until the decompose pass is done. Do this *after* rejecting the index rows, not instead of it.
 - Genuinely unsure → **skip** and flag it; do not guess. We accept the residual risk and act on broken resources retroactively from user feedback.
 
+### Approve a container root LAST, and only when its subtree is settled
+
+This queue lists only top-level rows that are themselves `pending_review`
+(`listPendingReview`: `where: { parentResourceId: null, status: 'pending_review' }`),
+and it renders children **only beneath a listed root**. So approving a root does not
+just decide that row — it takes its whole subtree off this surface.
+
+- **Never approve a root without `cascade` while any descendant is still `pending_review`.**
+  Those rows become unreachable here: the queue won't list the now-active root, so it
+  won't render them either. This is the review-side twin of the seed-decomposition
+  stranding that left 1,584 children unreviewable under active containers — see the
+  `childStatus` note in `src/lib/agents/decomposition/upsert-resource.ts`. That bug was
+  fixed at the creation side; this side is still reachable by hand.
+- **Never approve a root you intend to requeue.** New children inherit the parent's
+  status at creation (`childStatus: existing.status`), so re-decomposing under an
+  `active` root yields `active` children that skip review entirely — and an active root
+  would hide them from this queue regardless. Requeue first; approve after the decompose
+  pass returns the row here.
+- **Leaving a container root `pending_review` costs nothing.** `searchResources` filters
+  to `decompositionStatus = 'atomic'` by default, so a `decomposed` container is never
+  retrieved, never attaches, and is never pickable. The only effect is that it stays in
+  the queue — which is where you want it while its subtree is unfinished.
+
+Once the subtree is final and no further decomposition is planned, approve the root with
+`cascade: true`: it touches only `pending_review` rows, so earlier rejects survive and it
+doubles as the sweep for anything approved individually. An `atomic` root has no subtree —
+approve it normally.
+
+**A settled-looking root is not a bug.** A container whose children are all decided still
+needs that one final root approval, and nothing prompts for it, so roots that are actually
+done will sit in the queue looking undecided. Check the root's children before assuming a
+listed root has work left in it.
+
 ## Steps
 
 1. **Pull the batch.** `scripts/operator-curl.sh "/api/playground/pending-resources?limit=$ARGUMENTS" -s`. Each root carries `{ id, title, url, type, decompositionStatus, blocked, children:[…] }`.
@@ -73,6 +106,12 @@ Number of queue **roots** to process this run: **$ARGUMENTS** (default 10 if emp
    # send a misclassified atomic row (really a container) to the decompose queue
    scripts/operator-curl.sh "$B" -s -XPOST -H 'content-type: application/json' -d '{"resourceId":"<id>","action":"decompose"}'
    ```
+   Order matters within a container: **rejects first, then the approvals, then the root
+   last** (see *Approve a container root LAST* above — approving the root early hides
+   everything still undecided beneath it). Rejects and approvals compose safely in that
+   order because approve only touches `pending_review` rows, so a cascade cannot undo a
+   reject you already issued.
+
    Skip blocked/unsure rows — issue no POST. (Optionally `... pending-review-db.cjs state <id>` to confirm a decision landed.)
 
    **Metadata corrections** (rubric #5, or any observed title/summary/difficulty error) go through the resources API *before* the approve/reject POST:
