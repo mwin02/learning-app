@@ -8,7 +8,7 @@
 // know the client's "today") never mismatches — a fixed-height shim holds the
 // layout meanwhile. Colors mix notebook tokens so dark mode resolves for free.
 
-import { useEffect, useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 
 const WEEKS = 26; // full weeks before the current partial column
 const CELL = 18;
@@ -81,15 +81,20 @@ export function buildWeeks(completions: number[]): { weeks: Week[]; total: numbe
 
 type Hover = { left: number; top: number; title: string };
 
+// Mount gate: the server snapshot is false and the client's is true, so the
+// grid is skipped on the server render and computed on the client — buildWeeks
+// reads the viewer's clock and locale, which the server cannot reproduce.
+const subscribeToNothing = () => () => {};
+const useMounted = () => useSyncExternalStore(subscribeToNothing, () => true, () => false);
+
 export function ActivityHeatmap({ completions }: { completions: number[] }) {
-  const [grid, setGrid] = useState<ReturnType<typeof buildWeeks> | null>(null);
+  const mounted = useMounted();
   const [hover, setHover] = useState<Hover | null>(null);
-  useEffect(() => setGrid(buildWeeks(completions)), [completions]);
 
   // Server/pre-mount shim: month row + 7 cell rows + legend row.
-  if (!grid) return <div style={{ height: MONTH_ROW + 7 * ROW + 28 }} aria-hidden />;
+  if (!mounted) return <div style={{ height: MONTH_ROW + 7 * ROW + 28 }} aria-hidden />;
 
-  const { weeks, total, max } = grid;
+  const { weeks, total, max } = buildWeeks(completions);
 
   return (
     <div className="relative" onMouseLeave={() => setHover(null)}>
