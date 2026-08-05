@@ -3,6 +3,7 @@ import { getModel } from '@/lib/ai/models';
 import { prisma } from '@/lib/db';
 import { devBypass, getSessionUserId } from '@/lib/api/with-auth';
 import { isAdmin } from '@/lib/api/with-admin-auth';
+import { operatorPrincipal } from '@/lib/api/operator-token';
 import { log, logError } from '@/lib/log';
 
 export async function GET(request: Request) {
@@ -28,8 +29,13 @@ export async function GET(request: Request) {
   // throw probe deliberately 500s, so both are admin-only. A non-admin asking
   // for either gets the plain liveness body — same shape as no probe at all, so
   // the gated paths aren't enumerable.
+  // Free-beta E2: the operator token is accepted here too, so these probes are
+  // reachable on the deployed service — a session is a browser thing, and both
+  // probes are things you run from a terminal. Same rule as withAdminAuth: the
+  // token names a User row, and that row still has to be an admin.
   const gated = probe === 'ai' || probe === 'throw';
-  if (!gated || !((await isAdmin(await getSessionUserId())) || devBypass())) {
+  const principal = (await getSessionUserId()) ?? operatorPrincipal(request);
+  if (!gated || !((await isAdmin(principal)) || devBypass())) {
     return Response.json({ ok: true, ts: Date.now() });
   }
 

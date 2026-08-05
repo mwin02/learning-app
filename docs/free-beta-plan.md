@@ -706,7 +706,9 @@ nothing about what beta users will see. D3 didn't break this; it made it visible
    Next's standalone server hardcodes `NODE_ENV=production`. Every skill's probe expects
    `DEV_AUTH=1`. Confirmed live against Cloud Run: `/api/playground/concept-banks` returns
    **404** for a signed-in non-admin (non-enumerable by design, per `with-admin-auth.ts`).
-4. **There is no admin on the deployed service.** The Supabase `User` table had 0 rows until
+4. **There is no admin on the deployed service.** *(Superseded — see E2's "Fact 4 is now
+   stale" note: as of 2026-08-04 production's single `User` row IS `role='admin'`.)*
+   The Supabase `User` table had 0 rows until
    D3's sign-in smoke created one, with the default role. Roles are assigned by hand — "there
    is deliberately no API for it" (`with-admin-auth.ts` header).
 
@@ -765,7 +767,7 @@ The durable answer, and the one that lets the skills operate the **deployed** se
 than a laptop pointed at production data.
 
 - Set `role='admin'` on the operator's Supabase `User` row (hand-written SQL — fact 4). Worth
-  doing early regardless: there is currently no admin on production at all.
+  doing early regardless. *(Already done — the one production `User` row is `role='admin'`.)*
 - Give the skills a **configurable base URL** instead of a hardcoded `localhost:3000`, and
   make them authenticate with a real session rather than `DEV_AUTH`. The existing pattern for
   authed live verification is the Chrome page-context `fetch` (it carries the session cookies
@@ -773,17 +775,94 @@ than a laptop pointed at production data.
 - Retire `DEV_AUTH` from the operator path. `.env.example` has always described it as going
   away "once the real flow is trusted end-to-end" — after D3 it is.
 
-**OPEN (settle in E2's discussion):**
-- Where the base URL comes from: an env var, a skill argument, or a probe. It must **fail
-  closed** — a skill that silently falls back to `localhost:3000` when the intended target is
-  production reintroduces E1's invisible-target hazard in a worse form.
-- Whether `review-topic-filing` converges on HTTP like the other four, or stays a direct-DB
-  script (it is script-shaped for good reasons — bulk reclassification — and for it the
-  `DATABASE_URL` override is arguably already the right interface).
-- Whether the mutating playground routes need anything beyond `withAdminAuth` before they are
-  driven against production (audit trail on `origin: 'review'` writes already exists; check
-  whether it records *which* admin).
-- Whether an operator UI is in scope at all, or the skills remain the surface for beta.
+**RESOLVED (2026-08-04) — a bearer token, not a session.** The plan's bullet named the
+Chrome page-context `fetch` as the pattern. Measured against the actual surface it does not
+fit: the operator path is ~20 `curl` calls across **eight** skill files, several inside bash
+loops, and Supabase's SSR session cookies are httpOnly — so "a real session" means rewriting
+every one of them as a browser `fetch`, with the 45s CDP timeout landing squarely on
+`decompose_manual`, which runs for minutes. A token keeps the call sites in the shape the
+skills are written in.
+
+It is not the weaker credential here, because it is not free-floating: `OPERATOR_ADMIN_TOKEN`
+resolves to `OPERATOR_ADMIN_USER_ID`, and `withAdminAuth` then runs **the same
+`role = 'admin'` lookup it runs for a session**. The credential identifies; the database
+authorizes. So revocation is a `UPDATE "User" SET role='user'` with no redeploy — verified
+below — and the token is inert unless both vars are set, with anything under 32 bytes
+rejected so a placeholder or empty secret version fails closed.
+
+Answers to the four open questions:
+
+- **Base URL:** `OPERATOR_BASE_URL`, read from `.env.local` by `scripts/operator-curl.sh`,
+  with **no default at all**. Unset is a hard exit, not a fallback. The script also prints
+  `[operator-curl] <METHOD> <base><path>` (with `⚠ REMOTE` off localhost) on *every* call, so
+  the target is in the transcript rather than in what someone remembers about a dev server —
+  which is E1's invisible-target hazard closed rather than relocated.
+- **`review-topic-filing` stays direct-DB.** It is a bulk reclassification with no admin
+  route behind it; converging it would mean building endpoints with no other consumer. Its
+  interface stays the `DATABASE_URL` override and its gate stays `scripts/target-guard.ts`.
+  Its precondition now says this is deliberate.
+- **The routes need nothing beyond `withAdminAuth`** — but the audit-trail question has a
+  worse answer than the plan assumed: `adminId` was reaching every handler as `null` and **no
+  handler reads it**. `origin: 'review'` records *that* a review happened, never *who*. E2
+  makes `adminId` a real User id and logs `admin.operator_token_auth` per call; persisting it
+  onto the rows is a separate change, noted in `docs/operator-tooling.md`.
+- **No operator UI.** The skills remain the surface for beta.
+
+**Delivered.**
+
+- `src/lib/api/operator-token.ts` (+ 13 unit tests) — `bearerToken` / `tokenMatches`
+  (`timingSafeEqual`, `MIN_TOKEN_BYTES`) / `resolveOperatorPrincipal`, all pure.
+- `with-admin-auth.ts` grows check 2 between session and dev bypass, and now passes handlers
+  a real `adminId` instead of `admin ? userId : null`.
+- `/api/health` gets the same principal, since it gates `probe=ai` / `probe=throw` with a
+  direct `isAdmin` call rather than the wrapper. Both probes were unreachable on the deployed
+  service — `app-deploy.md` §8's open problem, closed as a side effect.
+- `scripts/operator-curl.sh` — the single call path for the four HTTP skills. The token is
+  read from `.env.local` straight into a curl config on a process substitution: never a shell
+  variable, never argv, never exported (AGENTS.md — both real leaks came from a command that
+  printed a secret while *failing*). Only its byte count is ever computed.
+- `.claude/skills/decompose/scripts/operator-post.cjs` — same rules from Node, for the three
+  routes whose payload is built in a scratchpad script that can't use a shell wrapper.
+- Eight skill files re-pointed; `DEV_AUTH` removed from all four preconditions. Each now also
+  states that its **direct-DB helper is a separate target** — E2 creates a second way for the
+  two to disagree (API base vs. `DATABASE_URL`), which E1 did not have.
+- `.env.example`, `cloudbuild.yaml` (two Secret Manager mounts), and a rewritten
+  `docs/operator-tooling.md` — now a setup procedure, not a description of a stopgap.
+
+**Verified 2026-08-04** against a **production build** (`next start`, so `NODE_ENV=production`)
+with `DEV_AUTH=1` deliberately set, proving the bypass is inert where it claims to be:
+
+| Case | Result |
+| --- | --- |
+| no token, `DEV_AUTH=1` | `404` — dev bypass dead in a production build |
+| wrong token | `404` (never 401/403 — routes stay non-enumerable) |
+| correct token | `200`, `admin.operator_token_auth` logged with the real `adminId` |
+| correct token, mutating POST | reaches the handler (`404 NOT_FOUND` JSON, the documented probe) |
+| correct token + forged cross-site `Origin` | `403 BAD_ORIGIN` — CSRF unaffected |
+| `probe=throw`, wrong token / correct token | `200` plain liveness / `500` — gating intact both ways |
+| `role` revoked mid-session, then restored | `404` → `200`, no redeploy |
+
+Plus the fail-closed paths on both callers: missing base URL, non-absolute path, remote base
+with no token, and a sub-32-byte token all exit before any request goes out.
+
+**One operational step remains before the skills can drive production** (credentials, not
+code): create the `operator-admin-token` / `operator-admin-user-id` secrets, grant the
+runtime SA `secretAccessor` on each, and deploy. Step-by-step in `docs/operator-tooling.md`.
+
+**Fact 4 is now stale** — it recorded "there is no admin on the deployed service", true when
+E2 was written. Checked 2026-08-04: production has exactly one `User` row,
+`david.hong199@gmail.com` / `f7cc2f1e-745b-48c7-a8a4-9f56a4e45b21`, and it is **already**
+`role='admin'` (D3's sign-in smoke created it; it was promoted at some point after). So that
+half of E2's ops is done, and `OPERATOR_ADMIN_USER_ID` is that id.
+
+**⚠️ Ordering: the secrets must exist, with IAM bindings, BEFORE this merges.**
+`cloudbuild.yaml`'s `--set-secrets` now names both; a `gcloud run deploy` referencing a
+missing or unreadable secret fails the deploy step, leaving production on the old revision.
+
+**Known nit:** `operator-post.cjs` adds 2 `no-require-imports` lint errors, identical to the
+ones its sibling `decomp-db.cjs` already has (CJS skill helpers sit outside the app's module
+system; `npm run lint` was already non-clean and is not a CI gate). Left consistent with the
+neighbour rather than silenced in one file only.
 
 ## Explicitly deferred (post-beta)
 

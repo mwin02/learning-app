@@ -18,7 +18,7 @@ to the next timestamp (the manual router would otherwise default every child to
 20 min). Get description + total length from the YouTube Data API (the app
 already ships a key as `YOUTUBE_API_KEY` in `.env.local`).
 
-## Runnable template (needs `--env-file=.env.local` for the API key)
+## Runnable template (needs `--env-file=.env.local` for the YouTube API key)
 
 `node --env-file=.env.local decompose-chapters.cjs <resourceId> <videoId>` from
 the repo root. Review the printed chapter list — the regex can catch stray
@@ -26,6 +26,8 @@ timestamps in prose (credits, "at 1:23:45 we…"); if the extraction looks wrong
 fix the filter, don't POST garbage.
 
 ```js
+const { postDecompositionReview } = require(
+  '<repo>/.claude/skills/decompose/scripts/operator-post.cjs'); // ← absolute path to the repo
 const [ID, VID] = process.argv.slice(2);
 if (!ID || !VID) { console.error('usage: node decompose-chapters.cjs <resourceId> <videoId>'); process.exit(1); }
 const KEY = process.env.YOUTUBE_API_KEY?.trim();
@@ -69,12 +71,8 @@ const isoToSec = (iso) => {
   children.forEach((c) => console.error(`  ${c.durationMin}m  ${c.title}`));
   if (children.length < 2) { console.error('fewer than 2 chapters — reject/accept instead'); process.exit(1); }
 
-  const res = await fetch('http://localhost:3000/api/playground/decomposition-review', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ resourceId: ID, action: 'decompose_manual', children }),
-    signal: AbortSignal.timeout(300000),
-  });
-  console.log(res.status, await res.text());
+  const res = await postDecompositionReview({ resourceId: ID, action: 'decompose_manual', children });
+  console.log(res.status, res.body);
 })().catch((e) => { console.error('ERR', e.name, e.message); process.exit(1); });
 ```
 

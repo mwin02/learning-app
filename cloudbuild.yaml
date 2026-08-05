@@ -137,7 +137,10 @@ steps:
       # A booted server that can't reach Postgres must not take traffic.
       - --startup-probe=httpGet.path=/api/health?probe=db,periodSeconds=5,failureThreshold=6
       - --set-env-vars=GOOGLE_VERTEX_PROJECT=${PROJECT_ID},GOOGLE_VERTEX_LOCATION=${_VERTEX_LOCATION}
-      - --set-secrets=DATABASE_URL=supabase-database-url:latest,YOUTUBE_API_KEY=youtube-api-key:latest
+      # OPERATOR_* (free-beta E2): the credential the curation skills authenticate
+      # with. Both must be present or the token path stays inert — so a missing
+      # secret fails closed (skills 404) rather than opening anything.
+      - --set-secrets=DATABASE_URL=supabase-database-url:latest,YOUTUBE_API_KEY=youtube-api-key:latest,OPERATOR_ADMIN_TOKEN=operator-admin-token:latest,OPERATOR_ADMIN_USER_ID=operator-admin-user-id:latest
 
 availableSecrets:
   secretManager:

@@ -3,7 +3,7 @@ name: review-pending-resources
 description: Browser-review resources in the pending_review approval queue against a content-quality rubric, then approve/reject them via the pending-resources API. Takes the number of queue roots to process; samples children for container resources. Returns a decision table.
 argument-hint: [count]
 disable-model-invocation: true
-allowed-tools: Bash(curl *), Bash(node *), mcp__Claude_in_Chrome__list_connected_browsers, mcp__Claude_in_Chrome__select_browser, mcp__Claude_in_Chrome__tabs_context_mcp, mcp__Claude_in_Chrome__navigate, mcp__Claude_in_Chrome__browser_batch, mcp__Claude_in_Chrome__get_page_text, mcp__Claude_in_Chrome__read_page
+allowed-tools: Bash(scripts/operator-curl.sh *), Bash(node *), mcp__Claude_in_Chrome__list_connected_browsers, mcp__Claude_in_Chrome__select_browser, mcp__Claude_in_Chrome__tabs_context_mcp, mcp__Claude_in_Chrome__navigate, mcp__Claude_in_Chrome__browser_batch, mcp__Claude_in_Chrome__get_page_text, mcp__Claude_in_Chrome__read_page
 ---
 
 # Review the pending_review approval queue
@@ -14,8 +14,9 @@ Number of queue **roots** to process this run: **$ARGUMENTS** (default 10 if emp
 
 ## Preconditions (check first, stop if unmet)
 
-- Dev server on `http://localhost:3000` with its env (incl. `DEV_AUTH=1`). Probe: `curl -s -o /dev/null -w "%{http_code}" "localhost:3000/api/playground/pending-resources?limit=1"` → `200`. A `404` means `DEV_AUTH` is off (the route 404s when unauthed); ask the user to start it with `DEV_AUTH=1`.
-- **Know which DB that server was started against, and say so before approving anything.** The probe URL is identical whether the server points at local Docker Postgres or at the production library, so nothing in the command says which library you are about to approve into. The server logs it on its first DB request as `{"event":"db.client_created","target":"host:port/dbname"}` — `localhost:55432/learning_app` is local and disposable, `…pooler.supabase.com:6543/postgres` is production and every approve/reject is real. Ask the user to read that line off the dev-server terminal, and state the target in your first message. Pointed at the wrong DB the queue comes back **empty**, not failing — "nothing pending" is the symptom. Same for the `pending-review-db.cjs` helper, which prints `[db] host:port/dbname` to stderr on every run: check it matches. See `docs/operator-tooling.md`.
+- **The API target, confirmed and stated.** Every admin call goes through `scripts/operator-curl.sh <path> [curl args]`, which supplies the base URL and the admin credential from `.env.local`. It has **no localhost default** and refuses to run unconfigured. Probe: `scripts/operator-curl.sh "/api/playground/pending-resources?limit=1" -s -o /dev/null -w "%{http_code}"` → `200`. A `404` means the operator token is missing/wrong or its `User` row is not `role='admin'` — admin routes 404 rather than 401 by design; stop and see `docs/operator-tooling.md`. If the base URL is a localhost one, the dev server has to be running.
+- **Say which service you are approving into, in your first message.** The script prints `[operator-curl] GET <base><path>` to stderr on every call, with a `⚠ REMOTE` marker off localhost — read it off the probe. Remote means the production library and every approve/reject is real.
+- **The `pending-review-db.cjs` helper is a separate target** — it talks to Postgres directly and follows `DATABASE_URL`, not `OPERATOR_BASE_URL`, so the two can disagree. It prints `[db] host:port/dbname` to stderr on every run; confirm it is the database behind the API base you probed (`…pooler.supabase.com:6543/postgres` is production, `localhost:55432/learning_app` is disposable). Pointed at the wrong one it returns **empty**, not an error — "nothing pending" is the symptom.
 - A Chrome browser connected via the Claude-in-Chrome extension. `list_connected_browsers`; if empty, ask the user to connect it. `select_browser` the device, then `tabs_context_mcp` with `createIfEmpty: true` and use that one tab for everything.
 
 ## Rubric (grade each resource against the actual rendered page)
@@ -39,7 +40,7 @@ Number of queue **roots** to process this run: **$ARGUMENTS** (default 10 if emp
 
 ## Steps
 
-1. **Pull the batch.** `curl -s "localhost:3000/api/playground/pending-resources?limit=$ARGUMENTS"`. Each root carries `{ id, title, url, type, decompositionStatus, blocked, children:[…] }`.
+1. **Pull the batch.** `scripts/operator-curl.sh "/api/playground/pending-resources?limit=$ARGUMENTS" -s`. Each root carries `{ id, title, url, type, decompositionStatus, blocked, children:[…] }`.
 
 2. **Grade each root** against the rubric by opening its page:
    - **Atomic root** (empty `children`) — open the `url`, grade, done.
@@ -51,22 +52,22 @@ Number of queue **roots** to process this run: **$ARGUMENTS** (default 10 if emp
 
 3. **Execute the decision** via the API:
    ```sh
-   B=localhost:3000/api/playground/pending-resources
+   B=/api/playground/pending-resources
    # approve a container subtree
-   curl -s -XPOST "$B" -H 'content-type: application/json' -d '{"resourceId":"<id>","action":"approve","cascade":true}'
+   scripts/operator-curl.sh "$B" -s -XPOST -H 'content-type: application/json' -d '{"resourceId":"<id>","action":"approve","cascade":true}'
    # approve a single atomic resource
-   curl -s -XPOST "$B" -H 'content-type: application/json' -d '{"resourceId":"<id>","action":"approve"}'
+   scripts/operator-curl.sh "$B" -s -XPOST -H 'content-type: application/json' -d '{"resourceId":"<id>","action":"approve"}'
    # reject (severity soft = quality | hard = broken link); add "cascade":true for a whole subtree
-   curl -s -XPOST "$B" -H 'content-type: application/json' -d '{"resourceId":"<id>","action":"reject","severity":"soft"}'
+   scripts/operator-curl.sh "$B" -s -XPOST -H 'content-type: application/json' -d '{"resourceId":"<id>","action":"reject","severity":"soft"}'
    # send a misclassified atomic row (really a container) to the decompose queue
-   curl -s -XPOST "$B" -H 'content-type: application/json' -d '{"resourceId":"<id>","action":"decompose"}'
+   scripts/operator-curl.sh "$B" -s -XPOST -H 'content-type: application/json' -d '{"resourceId":"<id>","action":"decompose"}'
    ```
    Skip blocked/unsure rows — issue no POST. (Optionally `... pending-review-db.cjs state <id>` to confirm a decision landed.)
 
    **Metadata corrections** (rubric #5, or any observed title/summary/difficulty error) go through the resources API *before* the approve/reject POST:
    ```sh
    # correct a bad duration guess (any of durationMin / title / summary / difficulty; whitelist-only)
-   curl -s -XPATCH localhost:3000/api/playground/resources -H 'content-type: application/json' \
+   scripts/operator-curl.sh /api/playground/resources -s -XPATCH -H 'content-type: application/json' \
      -d '{"resourceId":"<id>","fields":{"durationMin":540}}'
    ```
    The response echoes the updated row plus flags: `embeddingStale: true` means a title/summary edit will be re-embedded by the backfill (no action needed); a `warning` means the row now sits over the attachable ceiling — apply the decision-mapping rule above (never approve it).
@@ -74,7 +75,7 @@ Number of queue **roots** to process this run: **$ARGUMENTS** (default 10 if emp
 ## Parallelize where possible
 
 - Browser actions share one tab, so they're inherently sequential — but batch all navigations + extractions for a container's samples into **one `browser_batch`** call (navigate→get_page_text→navigate→get_page_text…) instead of separate round-trips.
-- The batch `curl` and the `pending-review-db.cjs sample` lookups for independent roots have no ordering dependency — fire them together.
+- The batch fetch and the `pending-review-db.cjs sample` lookups for independent roots have no ordering dependency — fire them together.
 - Execute the POST decisions for independent roots together once grading is done.
 
 ## Report
