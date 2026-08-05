@@ -35,10 +35,14 @@ Automated routes still strip fragments; nothing changes outside this route.
 
 ## Runnable template
 
-Save in the scratchpad, run `node <script>.cjs <resourceId>`. Adjust `PAGE` and
+Save in the scratchpad, run `node <script>.cjs <resourceId>` (no `--env-file`
+needed — `operator-post.cjs` reads `.env.local` itself for the API target and
+credential). Adjust `PAGE` and
 the TOC filter per site.
 
 ```js
+const { postDecompositionReview } = require(
+  '<repo>/.claude/skills/decompose/scripts/operator-post.cjs'); // ← absolute path to the repo
 const ID = process.argv[2];
 if (!ID) { console.error('usage: node anchor-toc.cjs <resourceId>'); process.exit(1); }
 const PAGE = 'https://www.freecodecamp.org/news/…'; // ← the one-page book (must equal the resource URL)
@@ -74,12 +78,8 @@ const strip = (s) => decode(s.replace(/<script[\s\S]*?<\/script>/gi, ' ')
     };
   });
   console.error(`extracted ${children.length} chapters`, children.map((c) => `${c.title} (${c.durationMin}m)`));
-  const res = await fetch('http://localhost:3000/api/playground/decomposition-review', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ resourceId: ID, action: 'decompose_manual', children }),
-    signal: AbortSignal.timeout(300000),
-  });
-  console.log(res.status, await res.text());
+  const res = await postDecompositionReview({ resourceId: ID, action: 'decompose_manual', children });
+  console.log(res.status, res.body);
 })().catch((e) => { console.error('ERR', e.name, e.message); process.exit(1); });
 ```
 

@@ -352,6 +352,8 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
 | `supabase-database-url` | Supabase **transaction** pooler, `:6543` | the app's runtime SA — and D4's `course-worker` SA |
 | `supabase-session-url` | Supabase **session** pooler, `:5432` | Cloud Build only, for `migrate deploy` (§3a) |
 | `youtube-api-key` | plain API key | the app's runtime SA |
+| `operator-admin-token` | `openssl rand -base64 32` | the app's runtime SA (free-beta E2) |
+| `operator-admin-user-id` | the admin `User.id` the token authenticates as | the app's runtime SA (free-beta E2) |
 
 Bindings go **on each secret**, never the project:
 
@@ -492,10 +494,13 @@ Sequence matters — Vercel must keep working until the new domain verifies:
 Structured logs (`src/lib/log.ts`) land in Cloud Logging as `jsonPayload`, same
 as the worker; `worker-deploy.md` §10 has the filter patterns.
 
-Curation is **not** operated through this service. The review skills need
-`DEV_AUTH`, which cannot work in a deployed build, so they run against a local
-dev server pointed at the production database —
-[operator-tooling.md](operator-tooling.md) has the pattern and its hazards.
+Curation **is** operated through this service, as of free-beta E2. The four HTTP
+review skills authenticate with an operator bearer token that resolves to a named
+admin `User` row (`OPERATOR_ADMIN_TOKEN` / `OPERATOR_ADMIN_USER_ID`, both Secret
+Manager mounts), and reach it through `scripts/operator-curl.sh`.
+[operator-tooling.md](operator-tooling.md) has the setup and the hazards. This
+replaces the earlier arrangement, in which the skills needed `DEV_AUTH` and so
+ran against a local dev server pointed at the production database.
 
 ## 8. Error Reporting & alerting (B1)
 
@@ -582,14 +587,18 @@ drill, so repeated probes land in ONE Error Reporting group rather than firing a
 new-group notification each time. Run it after any deploy that touches logging,
 and once against a freshly wired notification channel to prove delivery.
 
-Because it needs an admin session cookie, drive it from the deployed app's own
-page context rather than curl (the same pattern the review skills use — for how
-those skills are pointed at production data, see
-[operator-tooling.md](operator-tooling.md)):
+Free-beta E2 made this route accept the operator token as well as a session, so
+it is now a one-liner from a terminal (see
+[operator-tooling.md](operator-tooling.md) for the credential):
 
-```js
-await fetch('/api/health?probe=throw').then((r) => r.status) // 500 when admin, 200 when not
+```bash
+scripts/operator-curl.sh "/api/health?probe=throw" -s -o /dev/null -w "%{http_code}\n"
 ```
+
+`500` means the admin path was reached and the drill fired; `200` is the plain
+liveness body, i.e. the credential did not authenticate as an admin. From a
+signed-in browser tab the equivalent is still
+`await fetch('/api/health?probe=throw').then((r) => r.status)`.
 
 **Client half:** any real browser crash, or a same-origin POST to
 `/api/client-error` from the deployed app's page context (the endpoint enforces

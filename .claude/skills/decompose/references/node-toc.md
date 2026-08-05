@@ -31,12 +31,15 @@ adjacent cell (use it as the child `title`).
 ## Runnable template (validated: javascript.info → 202 children, ~141s)
 
 Save in the scratchpad, run `node <script>.cjs <resourceId>` from anywhere (it
-only fetches the page and POSTs to the local API — no DB, no `--env-file`).
+fetches the page and POSTs to the API — no DB, and no `--env-file`, because
+`operator-post.cjs` reads `.env.local` itself for the target and credential).
 Adjust `PAGE` and the link filter per site; the invariant is always: same-origin
 real-lesson links, document order, dedup, entity-decode, drop
 nav/footer/legal/edit/anchor links.
 
 ```js
+const { postDecompositionReview } = require(
+  '<repo>/.claude/skills/decompose/scripts/operator-post.cjs'); // ← absolute path to the repo
 const ID = process.argv[2];
 if (!ID) { console.error('usage: node decompose-toc.cjs <resourceId>'); process.exit(1); }
 const PAGE = 'https://javascript.info/'; // ← the page holding the lesson list (may be a subpage of the resource URL)
@@ -61,12 +64,8 @@ const decode = (s) => s.replace(/&quot;/g, '"').replace(/&amp;/g, '&')
     if (title) children.push({ url: link, title });
   }
   console.error(`extracted ${children.length} lessons`);
-  const res = await fetch('http://localhost:3000/api/playground/decomposition-review', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ resourceId: ID, action: 'decompose_manual', children }),
-    signal: AbortSignal.timeout(300000),
-  });
-  console.log(res.status, await res.text());
+  const res = await postDecompositionReview({ resourceId: ID, action: 'decompose_manual', children });
+  console.log(res.status, res.body);
 })().catch((e) => { console.error('ERR', e.name, e.message); process.exit(1); });
 ```
 

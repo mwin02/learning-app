@@ -3,7 +3,7 @@ name: decompose
 description: Work the decomposition review queue end-to-end - triage each queued container (accept_atomic / reject / decompose), pick the right decomposition route (force, node-toc, browser-spa, video-chapters), execute it via the decomposition-review API, and verify. Takes resource ids, or a count to pull from the queue. Replaces decompose-large-page and decompose-spa.
 argument-hint: [resourceId ... | count]
 disable-model-invocation: true
-allowed-tools: Bash(node *), Bash(curl *), mcp__Claude_in_Chrome__list_connected_browsers, mcp__Claude_in_Chrome__select_browser, mcp__Claude_in_Chrome__tabs_context_mcp, mcp__Claude_in_Chrome__navigate, mcp__Claude_in_Chrome__browser_batch, mcp__Claude_in_Chrome__get_page_text, mcp__Claude_in_Chrome__read_page, mcp__Claude_in_Chrome__javascript_tool
+allowed-tools: Bash(node *), Bash(scripts/operator-curl.sh *), Bash(curl *), mcp__Claude_in_Chrome__list_connected_browsers, mcp__Claude_in_Chrome__select_browser, mcp__Claude_in_Chrome__tabs_context_mcp, mcp__Claude_in_Chrome__navigate, mcp__Claude_in_Chrome__browser_batch, mcp__Claude_in_Chrome__get_page_text, mcp__Claude_in_Chrome__read_page, mcp__Claude_in_Chrome__javascript_tool
 ---
 
 # Work the decomposition review queue
@@ -21,20 +21,24 @@ queued rows to pull (default 5 if empty).
 
 ## Preconditions
 
-- Dev server on `http://localhost:3000` with its env (incl. `DEV_AUTH=1` and Vertex
-  creds — the API derives child concepts server-side). Probe:
-  `curl -s -o /dev/null -w "%{http_code}" -X POST localhost:3000/api/playground/decomposition-review -H 'content-type: application/json' -d '{"resourceId":"__probe__","action":"reject"}'`
-  → `404` with a JSON `NOT_FOUND` body. A plain `404` page / connection refused means
-  the server or `DEV_AUTH` is missing — stop and ask.
-- **Know which DB that server was started against, and say so before deciding anything.**
-  The `curl` above is identical whether the server points at local Docker Postgres or at
-  the production library — the URL cannot tell you which one you are about to edit. The
-  server logs it on its first DB request as
-  `{"event":"db.client_created","target":"host:port/dbname"}`: `localhost:55432/learning_app`
-  is local and disposable, `…pooler.supabase.com:6543/postgres` is production and every
-  write is real. Ask the user to read that line off the dev-server terminal, and state the
-  target in your first message. Pointed at the wrong DB the queue comes back **empty**, not
-  failing — "nothing to decompose" is the symptom. See `docs/operator-tooling.md`.
+- **The API target, configured and reachable.** Every admin call goes through
+  `scripts/operator-curl.sh <path> [curl args]`, which supplies the base URL and the admin
+  credential from `.env.local`; it has **no localhost default** and refuses to run
+  unconfigured. Probe:
+  `scripts/operator-curl.sh /api/playground/decomposition-review -s -o /dev/null -w "%{http_code}" -XPOST -H 'content-type: application/json' -d '{"resourceId":"__probe__","action":"reject"}'`
+  → `404` with a JSON `NOT_FOUND` body (fetch it without `-o /dev/null` to tell the two
+  404s apart). A **plain-text** `404` means the operator token is missing/wrong or its
+  `User` row is not `role='admin'` — the admin wrapper 404s rather than 401 by design;
+  stop and see `docs/operator-tooling.md`. The service also needs Vertex creds, since the
+  API derives child concepts server-side.
+- **Say which service you are deciding against, in your first message.** The script prints
+  `[operator-curl] POST <base><path>` to stderr on every call, with a `⚠ REMOTE` marker off
+  localhost — read it off the probe. Remote means production and every write is real.
+- **The `decomp-db.cjs` helper is a separate target** — it connects to Postgres directly and
+  follows `DATABASE_URL`, not `OPERATOR_BASE_URL`, so the two can disagree. It prints
+  `[db] host:port/dbname` to stderr on every run; confirm it is the database behind the API
+  base you probed. Pointed at the wrong one the queue comes back **empty**, not failing —
+  "nothing to decompose" is the symptom.
 - A connected Chrome (Claude-in-Chrome) is needed **only for the browser-spa route
   and for triaging pages `curl` can't render**. Don't demand it up front; if a
   resource turns out to need it and no browser is connected, skip that resource and
@@ -70,9 +74,9 @@ browser (`get_page_text`, then `read_page` if empty) before calling it dead.
 Execute accept/reject immediately:
 
 ```sh
-B=localhost:3000/api/playground/decomposition-review
-curl -s -XPOST "$B" -H 'content-type: application/json' -d '{"resourceId":"<id>","action":"accept_atomic"}'
-curl -s -XPOST "$B" -H 'content-type: application/json' -d '{"resourceId":"<id>","action":"reject"}'
+B=/api/playground/decomposition-review
+scripts/operator-curl.sh "$B" -s -XPOST -H 'content-type: application/json' -d '{"resourceId":"<id>","action":"accept_atomic"}'
+scripts/operator-curl.sh "$B" -s -XPOST -H 'content-type: application/json' -d '{"resourceId":"<id>","action":"reject"}'
 ```
 
 (`reject` sets `unsupported` — the row stays as an unpickable record. The API 409s
@@ -84,7 +88,7 @@ Pick the **first** matching route:
 
 | Signal | Route | How |
 |---|---|---|
-| YouTube **playlist** URL (`list=` param) — parked only because it tripped the oversize gate (> 50 auto children) | **force** | `curl -s -XPOST "$B" -H 'content-type: application/json' -d '{"resourceId":"<id>","action":"decompose","force":true}'` — the automatic router knows how; no extraction needed. |
+| YouTube **playlist** URL (`list=` param) — parked only because it tripped the oversize gate (> 50 auto children) | **force** | `scripts/operator-curl.sh "$B" -s -XPOST -H 'content-type: application/json' -d '{"resourceId":"<id>","action":"decompose","force":true}'` — the automatic router knows how; no extraction needed. |
 | Single long YouTube **video** with timestamp chapters in its description | **video-chapters** | Node script via the YouTube Data API; children are `&t=NNNs` URLs with real per-chapter durations. See [references/video-chapters.md](references/video-chapters.md). |
 | A real **multi-chapter work on a single page** whose own TOC is in-page fragment links (`href="#…"`) — the one-page book (typical for `book` rows parked as "book kept whole by doc-TOC") | **anchor-toc** | Node fetch → harvest the TOC anchors → slice text between them for real durations → POST `decompose_manual` with `<page>#<anchor>` children. See [references/anchor-toc.md](references/anchor-toc.md). |
 | Lesson links present in the **static HTML** (verify: `curl -s <url> \| grep` a known lesson href). Includes **hub pages** whose lesson list lives one section deeper — find the subpage (e.g. OCW `pages/lecture-notes/`) and extract from *there*. | **node-toc** | Node fetch + regex → POST `decompose_manual`. See [references/node-toc.md](references/node-toc.md). |

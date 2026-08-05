@@ -8,9 +8,14 @@
 //   1. Real session AND User.role === 'admin' (one indexed PK lookup — admin
 //      routes are low-traffic, so the per-request DB hit is fine and means a
 //      role revocation takes effect immediately, with no stale JWT window).
-//   2. Dev bypass: NODE_ENV=development AND DEV_AUTH=1 (adminId null), so the
+//   2. Free-beta E2: operator bearer token, resolving to a named User id that
+//      goes through the SAME role lookup as (1) — the credential identifies,
+//      the DB authorizes. This is the only path that works against the deployed
+//      service, and it is what the curation skills use (operator-token.ts,
+//      docs/operator-tooling.md).
+//   3. Dev bypass: NODE_ENV=development AND DEV_AUTH=1 (adminId null), so the
 //      local playground works without OAuth setup. Dead in production builds.
-//   3. Otherwise 404 plain text — NOT 401/403: unlike user routes, internal
+//   4. Otherwise 404 plain text — NOT 401/403: unlike user routes, internal
 //      endpoints shouldn't even be enumerable, matching the Phase-2d behavior.
 //
 // Roles are assigned by hand (SQL/Studio: UPDATE "User" SET role='admin' …);
@@ -19,6 +24,8 @@
 import { prisma } from '@/lib/db';
 import { devBypass, getSessionUserId } from '@/lib/api/with-auth';
 import { requireSameOrigin } from '@/lib/api/origin-check';
+import { operatorPrincipal } from '@/lib/api/operator-token';
+import { log } from '@/lib/log';
 
 export type AdminSession = {
   // The operating principal — a human curator or an autonomous review agent.
@@ -36,15 +43,34 @@ export async function isAdmin(userId: string | null): Promise<boolean> {
 
 export function withAdminAuth(handler: AdminHandler): (req: Request) => Promise<Response> {
   return async (req: Request) => {
-    const userId = await getSessionUserId();
-    const admin = await isAdmin(userId);
-    if (!admin && !devBypass()) return new Response('Not Found', { status: 404 });
+    const sessionUserId = await getSessionUserId();
+    let adminId = (await isAdmin(sessionUserId)) ? sessionUserId : null;
+
+    if (!adminId) {
+      const operatorId = operatorPrincipal(req);
+      // The role lookup is deliberately repeated rather than skipped for the
+      // token: a token whose User row has lost `admin` must stop working the
+      // moment the role is revoked, exactly like a session.
+      if (operatorId && (await isAdmin(operatorId))) {
+        adminId = operatorId;
+        // Curation writes are irreversible and this path has no browser behind
+        // it, so its use is worth a line — it is the only record of which
+        // principal drove a review pass.
+        log('admin.operator_token_auth', {
+          adminId,
+          method: req.method,
+          path: new URL(req.url).pathname,
+        });
+      }
+    }
+
+    if (!adminId && !devBypass()) return new Response('Not Found', { status: 404 });
     // H2 (audit 9.7): origin check AFTER the admin check — an unauthenticated
     // scanner probing with a bad Origin still sees the masking 404, not a
     // route-revealing 403. CSRF protection is unaffected: a forged request
     // riding an admin's cookie passes the role check and is rejected here.
     const originError = requireSameOrigin(req);
     if (originError) return originError;
-    return handler(req, { adminId: admin ? userId : null });
+    return handler(req, { adminId });
   };
 }

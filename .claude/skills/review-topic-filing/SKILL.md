@@ -26,7 +26,11 @@ Batch to work this run: **$ARGUMENTS** (a group count, or `--topic <slug>`; defa
 
 ## Preconditions (check first, stop if unmet)
 
-- `.env.local` DB env (the helper connects directly — no dev server, no `DEV_AUTH`).
+- `.env.local` DB env (the helper connects directly — no dev server, no `DEV_AUTH`, and no
+  `OPERATOR_BASE_URL`/`OPERATOR_ADMIN_TOKEN`). This skill is deliberately the one that does
+  **not** go through the admin API: it is a bulk reclassification with no route behind it,
+  so `DATABASE_URL` is its target and `scripts/target-guard.ts` is its gate. Free-beta E2
+  settled that on purpose — see `docs/operator-tooling.md`.
 - **Compose workers stopped** before any `--apply` run: `docker compose --profile workers stop worker`.
   They poll the same DB and can write memberships mid-pass. Restart after:
   `docker compose --profile workers up -d`.

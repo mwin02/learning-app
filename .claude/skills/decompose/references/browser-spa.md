@@ -57,13 +57,28 @@ JSON.stringify((() => {
 })())
 ```
 
-## 2. POST from a localhost tab (the PNA trap)
+## 2. POST from an app-origin tab
 
-A POST to `localhost:3000` from a public-origin tab — even `mode: 'no-cors'` — is
-**blocked by Chrome's Private Network Access before it leaves the browser**: no
-request reaches the server, the dev log stays silent. So bridge the payload across
-a same-tab navigation with `window.name` (survives cross-origin navigation;
-`localStorage` is per-origin and clipboard hangs without user activation):
+This route is the one place the decompose skill does **not** use
+`scripts/operator-curl.sh`: the payload is harvested in the browser, and the POST
+goes out from the same tab. That means it authenticates the way a browser does —
+with the **admin's own session cookies** — so the tab must be signed in as an admin
+on `OPERATOR_BASE_URL` before you fire. The operator token is not involved and is
+not needed here.
+
+Either way the POST has to leave from a tab on the app's own origin, for two
+different reasons depending on the target:
+
+- **Remote base** — `requireSameOrigin` rejects a mutating request carrying a
+  foreign `Origin` header with `403 BAD_ORIGIN`, and the session cookies wouldn't
+  be attached cross-site anyway.
+- **Localhost base** — a POST to `localhost:3000` from a public-origin tab, even
+  `mode: 'no-cors'`, is **blocked by Chrome's Private Network Access before it
+  leaves the browser**: no request reaches the server, the dev log stays silent.
+
+So bridge the payload across a same-tab navigation with `window.name` (survives
+cross-origin navigation; `localStorage` is per-origin and clipboard hangs without
+user activation):
 
 ```js
 // still on the course page:
@@ -72,7 +87,8 @@ window.name = JSON.stringify({ resourceId: '<id>', action: 'decompose_manual',
 localStorage.removeItem('__spa_kids');
 ```
 
-Then `navigate` the same tab to `http://localhost:3000/` and fire there. The
+Then `navigate` the same tab to `OPERATOR_BASE_URL` (the app's root) and fire
+there. The
 request stays open through concept derivation + inserts + embeddings (minutes for
 a large course — longer than the ~45s eval timeout), so **don't `await` it in one
 eval**; stash the outcome on a global and poll it in short separate evals:
@@ -94,6 +110,7 @@ If `window.__r` comes back null (the promise didn't survive a navigation),
 reconstruct the attachments from the DB.
 
 Do **not** re-fire while a request is in flight; poll. Verify from the DB too
-(`decomp-db.cjs verify <id>`). If it stays queued with `childCount: 0` and the dev
-log shows no POST line, the request was PNA-blocked — confirm you fired from the
-**localhost** tab.
+(`decomp-db.cjs verify <id>`). If it stays queued with `childCount: 0` and no POST
+reached the server, you fired from the wrong tab — confirm the tab's origin is
+`OPERATOR_BASE_URL`. A `403 BAD_ORIGIN` in `window.__r` says the same thing; a
+plain-text `404` means the tab is signed in, but not as an admin.

@@ -3,7 +3,7 @@ name: review-map-findings
 description: Work the pre-freeze map-review worklist — list open PathReview findings for a frozen Path, inspect the implicated concepts, and execute merge / dismiss / keep decisions via the map-review API, plus a delete-not-repoint escape hatch for redundant nodes a repoint-merge would cycle. Takes an optional topic or pathId. Returns a decision table.
 argument-hint: [topic|pathId]
 disable-model-invocation: true
-allowed-tools: Bash(curl *), Bash(npx tsx *)
+allowed-tools: Bash(scripts/operator-curl.sh *), Bash(npx tsx *)
 ---
 
 # Work the pre-freeze map-review worklist
@@ -26,32 +26,31 @@ findings across all Paths, then pick one).
 
 ## Preconditions (check first, stop if unmet)
 
-- Dev server on `http://localhost:3000` with `DEV_AUTH=1`. Probe with NO query
-  param (a scope-free GET lists all open findings, so it's `200` for any DB state —
-  unlike `?topic=sql`, which also `404`s when no `sql` Path exists and can't tell
-  "unauthed" from "no such topic"):
-  `curl -s -o /dev/null -w "%{http_code}" "localhost:3000/api/playground/map-review"`
-  → `200`. A `404` means `DEV_AUTH` is off (the admin route 404s when unauthed) — ask
-  the user to start it with `DEV_AUTH=1`. If it `500`s, the running server predates a
-  schema/client change — ask the user to restart it.
-- **Know which DB that server was started against, and say so before deciding anything.**
-  The probe URL is identical whether the server points at local Docker Postgres or at the
-  production library, and the decisions here mutate a **permanent, build-once** Path with no
-  rebuild — so being on the wrong DB is unrecoverable in the direction that matters. The
-  server logs the target on its first DB request as
-  `{"event":"db.client_created","target":"host:port/dbname"}`: `localhost:55432/learning_app`
-  is local and disposable, `…pooler.supabase.com:6543/postgres` is production. Ask the user
-  to read that line off the dev-server terminal, and state the target in your first message.
-  Pointed at the wrong DB the worklist comes back **empty**, not failing. See
-  `docs/operator-tooling.md`.
-- The `.env.local` DB env for the helper script (it connects directly, no server) — and the
-  **same** override if the server is on production, since shell env beats `--env-file`:
-  `DATABASE_URL="$SUPABASE_POOLER_URL" npx tsx --env-file=.env.local …`. A helper run against
-  local while the server edits production is the failure this precondition exists to catch.
+- **The API target, configured and reachable.** Every admin call goes through
+  `scripts/operator-curl.sh <path> [curl args]`, which supplies the base URL and the admin
+  credential from `.env.local`; it has **no localhost default** and refuses to run
+  unconfigured. Probe with NO query param (a scope-free GET lists all open findings, so
+  it's `200` for any DB state — unlike `?topic=sql`, which also `404`s when no `sql` Path
+  exists and can't tell "unauthed" from "no such topic"):
+  `scripts/operator-curl.sh /api/playground/map-review -s -o /dev/null -w "%{http_code}"`
+  → `200`. A `404` means the operator token is missing/wrong or its `User` row is not
+  `role='admin'` (the admin route 404s rather than 401 by design) — stop and see
+  `docs/operator-tooling.md`. If it `500`s, the running service predates a schema/client
+  change — ask the user to redeploy (or restart the dev server, for a localhost base).
+- **Say which service you are deciding against, in your first message.** The script prints
+  `[operator-curl] GET <base><path>` to stderr on every call, with a `⚠ REMOTE` marker off
+  localhost — read it off the probe. These decisions mutate a **permanent, build-once**
+  Path with no rebuild, so the wrong target is unrecoverable in the direction that matters.
+- **The `map-review.ts` helper is a separate target** — it connects to Postgres directly
+  and follows `DATABASE_URL`, not `OPERATOR_BASE_URL`, so the two can disagree. Against a
+  remote API base it needs the matching override, since shell env beats `--env-file`:
+  `DATABASE_URL="$SUPABASE_POOLER_URL" npx tsx --env-file=.env.local …`. A helper run
+  against local while the API edits production is the failure this precondition exists to
+  catch. Pointed at the wrong database the worklist comes back **empty**, not failing.
 
 ## Finding kinds & decision mapping
 
-Let `B=localhost:3000/api/playground/map-review` and
+Let `B=/api/playground/map-review` and
 `H="npx tsx --env-file=.env.local .claude/skills/review-map-findings/scripts/map-review.ts"`.
 
 - **`duplication`** (two concepts cover the same idea) — the only *mergeable* kind.
@@ -82,7 +81,7 @@ Let `B=localhost:3000/api/playground/map-review` and
 ## Steps
 
 1. **List the open worklist.**
-   `curl -s "$B?topic=$ARGUMENTS"` (or `?pathId=…`, or no query for all Paths). Each
+   `scripts/operator-curl.sh "$B?topic=$ARGUMENTS" -s` (or `?pathId=…`, or no query for all Paths). Each
    finding: `{ id, pathId, kind, conceptSlugs, message }`.
 
 2. **Inspect the concepts** a finding names before deciding:
@@ -95,12 +94,12 @@ Let `B=localhost:3000/api/playground/map-review` and
 
 4. **Execute.**
    ```sh
-   B=localhost:3000/api/playground/map-review
+   B=/api/playground/map-review
    # merge a duplication into the named winner (the finding's other concept is the loser)
-   curl -s -XPOST "$B" -H 'content-type: application/json' -d '{"reviewId":"<id>","action":"merge","winnerSlug":"<slug>"}'
+   scripts/operator-curl.sh "$B" -s -XPOST -H 'content-type: application/json' -d '{"reviewId":"<id>","action":"merge","winnerSlug":"<slug>"}'
    # dismiss (not a real problem) / keep (real, handle later) — any kind
-   curl -s -XPOST "$B" -H 'content-type: application/json' -d '{"reviewId":"<id>","action":"dismiss"}'
-   curl -s -XPOST "$B" -H 'content-type: application/json' -d '{"reviewId":"<id>","action":"keep"}'
+   scripts/operator-curl.sh "$B" -s -XPOST -H 'content-type: application/json' -d '{"reviewId":"<id>","action":"dismiss"}'
+   scripts/operator-curl.sh "$B" -s -XPOST -H 'content-type: application/json' -d '{"reviewId":"<id>","action":"keep"}'
    ```
    Response codes: `200` applied; `409` the finding was already resolved / decided
    concurrently; `422` not mergeable (a non-duplication, an unknown `winnerSlug`, a
