@@ -19,7 +19,9 @@ import type { ReportCategory } from '@prisma/client';
 import { NOTE_MAX_CHARS, pendingLabelFor, reportCategoryOptions } from '@/lib/report-view';
 import { submitReport } from './submit-report';
 
-function FlagIcon({ size = 14 }: { size?: number }) {
+// Warning triangle rather than a flag: "flag" reads as bookmark/save in a
+// reading surface sitting next to thumbs, and this control reports a defect.
+function AlertIcon({ size = 14 }: { size?: number }) {
   return (
     <svg
       width={size}
@@ -32,7 +34,9 @@ function FlagIcon({ size = 14 }: { size?: number }) {
       strokeLinejoin="round"
       aria-hidden
     >
-      <path d="M5 21V4m0 0h11.5l-2 4 2 4H5" />
+      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+      <path d="M12 9v4" />
+      <path d="M12 17h.01" />
     </svg>
   );
 }
@@ -118,7 +122,7 @@ export function ReportDialog({
         }}
         className="inline-flex h-7 w-7 flex-none items-center justify-center rounded-full border border-transparent text-script-dim transition-colors hover:border-rule hover:text-crayon-red"
       >
-        <FlagIcon />
+        <AlertIcon />
       </button>
 
       {open &&
