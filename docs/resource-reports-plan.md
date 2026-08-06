@@ -353,6 +353,40 @@ component + `submit-regenerate.ts`.
 Each refusal from R5 gets its own message: already rebuilding, out of rebuilds this month,
 nothing has changed yet.
 
+**Also in R7: tighten R5's staleness proxies.** R5 shipped `assessStaleness` with two proxies
+the plan hadn't pinned — Path readiness → `path.updatedAt > track.createdAt`, and concept set
+→ concepts touched since the build. Measured against real dev data at the R5 gate, **three of
+four live tracks read stale with zero broken resources**:
+
+```
+calculus (cmrdux…)      stale=true   deprecated=0  changed=7  pathChanged=true
+prob-and-stats          stale=true   deprecated=0  changed=1  pathChanged=false
+calculus (cms5x…)       stale=true   deprecated=0  changed=0  pathChanged=true
+linear-algebra          stale=false  ← the only one that refuses
+```
+
+Both terms are far looser than the precondition's intent. `path.updatedAt` bumps on *any*
+Path write — a status flip, a readiness recompute, a remediation pass — and
+`resource.updatedAt` bumps on a re-embed or a `recomputeResourceTrust` triggered by someone
+else's vote. So precondition 4, whose job is to stop "a rebuild off an identical pool [that]
+is a coin flip that costs a real build", is close to a no-op in practice: the spend guard the
+plan asked for isn't guarding.
+
+R7 is the right place to fix it because R7 is where the counts become **visible copy** — a
+dialog saying "3 resources were removed as broken" next to a `stale=true` derived from a
+readiness flip is the bug made legible, and the threshold can be judged against real wording
+instead of guessed at. Deliberately deferred from R5 rather than tuned blind.
+
+Candidate tightenings, to be decided with the UI in front of you:
+
+- Weight the terms instead of OR-ing them: a deprecated resource is a real reason to rebuild;
+  a bumped `updatedAt` on its own probably isn't.
+- Replace the `pathChanged` proxy with something that reflects what a re-compose would
+  actually see — the Path's concept set or readiness *state*, not its row mtime. This likely
+  means recording readiness at build time, which the Track does not do today.
+- Distinguish "the pool changed" from "the pool changed in a way that would change the
+  course", which is the question precondition 4 is actually asking.
+
 **Verify**: manual — the full loop end to end. Report a dead resource in a course → confirm
 auto-deprecation → rebuild the track → confirm the new Track omits it, the slot repointed,
 and progress carried over.

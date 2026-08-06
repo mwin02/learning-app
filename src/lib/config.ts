@@ -649,6 +649,31 @@ export const PROGRAM_BURST_WINDOW_MS = 60 * 60 * 1000;
 // plan is a supported behavior, not a duplicate.
 export const PROGRAM_DEDUP_WINDOW_MS = 10 * 60 * 1000;
 
+// Reports R5: how many Track REBUILDS a (free) user may request per calendar month
+// (UTC). Sits alongside FREE_PROGRAMS_PER_MONTH because it meters the same thing —
+// a rebuild is a full per-topic Track build (spine reuse, but remediation + banks +
+// compose all re-run), so it is the app's second-most-expensive user action and the
+// one a frustrated learner can fire repeatedly. Read through rebuildQuota
+// (services/rebuild-limits.ts) only, so the Stripe phase swaps that function's
+// internals without touching the route. Failed rebuilds don't count — a build that
+// never produced a Track shouldn't burn quota. Same soft-limit race caveat as the
+// program quota (two racing requests can each pass the pre-create check).
+export const FREE_TRACK_REBUILDS_PER_MONTH = 3;
+
+// Reports R5: duplicate-submit dedup window for rebuilds — an age bound on the
+// caller's OWN still-in-flight (queued/running) rebuild of the same slot, which the
+// route hands back as a 202 instead of refusing. Unlike PROGRAM_DEDUP_WINDOW_MS
+// there is no payload fingerprint here, so the in-flight status — NOT the window —
+// is what makes a match a duplicate: a FINISHED rebuild must never dedup, or the
+// learner who reports fresh defects after their last rebuild landed is silently
+// handed the old request and never gets the build they asked for.
+//
+// Tied to COURSE_REQUEST_STALE_MS because that is exactly how long a claimed row can
+// legitimately be in flight before the worker reclaims it: shorter and we'd start
+// refusing (409) a learner their own live rebuild; longer and we'd hand back a row
+// the queue has already given up on. If that threshold moves, this moves with it.
+export const TRACK_REBUILD_DEDUP_WINDOW_MS = COURSE_REQUEST_STALE_MS;
+
 // Decomposer-agent plan (Block 2): hard ceiling on model turns in the decompose
 // agent's tool loop (mirrors TRACK_COMPOSER_MAX_STEPS). One step = one model turn,
 // which may issue several tool calls. The happy path is short — a get_path_map per
