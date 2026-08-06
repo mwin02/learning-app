@@ -64,7 +64,7 @@ function LessonRow({ lesson }: { lesson: TabLesson }) {
   return lesson.href ? (
     <Link
       href={lesson.href}
-      className={`${rowClass} text-white no-underline hover:underline`}
+      className={`${rowClass} text-on-accent no-underline hover:underline`}
       style={{ opacity: current ? 1 : OPACITY[lesson.state] }}
       aria-current={current ? 'page' : undefined}
     >
@@ -93,7 +93,7 @@ function SectionGroup({ section }: { section: TabSection }) {
         type="button"
         onClick={() => setManualOpen(!open)}
         aria-expanded={open}
-        className="flex w-full cursor-pointer items-center gap-1.5 border-0 bg-transparent p-0 text-left font-script text-[12.5px] text-white"
+        className="flex w-full cursor-pointer items-center gap-1.5 border-0 bg-transparent p-0 text-left font-script text-[12.5px] text-on-accent"
       >
         <span className="w-3.5 flex-none text-center text-[10px]">{open ? '▾' : '▸'}</span>
         <span className="flex-1 truncate font-bold uppercase tracking-[0.5px] opacity-85">
@@ -152,7 +152,7 @@ export function BookmarkTab({
     </>
   );
 
-  const className = `relative -mr-4 block w-full rounded-[11px_4px_4px_11px] py-[11px] pl-[15px] pr-[22px] text-left text-white transition-all duration-[130ms] ${
+  const className = `relative -mr-4 block w-full rounded-[11px_4px_4px_11px] py-[11px] pl-[15px] pr-[22px] text-left text-on-accent transition-all duration-[130ms] ${
     active
       ? '-ml-5 translate-x-0 shadow-[-6px_6px_15px_rgba(0,0,0,.28)]'
       : 'translate-x-0 shadow-[-2px_3px_8px_rgba(0,0,0,.14)] hover:-translate-x-2 hover:shadow-[-5px_5px_13px_rgba(0,0,0,.22)] hover:brightness-[1.06]'
@@ -168,7 +168,7 @@ export function BookmarkTab({
           {href ? (
             <Link
               href={href}
-              className="min-w-0 flex-1 text-white no-underline"
+              className="min-w-0 flex-1 text-on-accent no-underline"
               aria-current={active ? 'true' : undefined}
             >
               {headerText}
@@ -177,7 +177,7 @@ export function BookmarkTab({
             <button
               type="button"
               onClick={onClick}
-              className="min-w-0 flex-1 cursor-pointer border-0 bg-transparent p-0 text-left text-white"
+              className="min-w-0 flex-1 cursor-pointer border-0 bg-transparent p-0 text-left text-on-accent"
               aria-pressed={active}
             >
               {headerText}
@@ -191,7 +191,7 @@ export function BookmarkTab({
               onClick={onToggleExpand}
               aria-expanded={isExpanded}
               aria-label={isExpanded ? `Collapse ${label}` : `Expand ${label}`}
-              className="-mr-1.5 flex h-6 w-6 flex-none cursor-pointer items-center justify-center border-0 bg-transparent p-0 text-[11px] text-white opacity-80 hover:opacity-100"
+              className="-mr-1.5 flex h-6 w-6 flex-none cursor-pointer items-center justify-center border-0 bg-transparent p-0 text-[11px] text-on-accent opacity-80 hover:opacity-100"
             >
               {isExpanded ? '▾' : '▸'}
             </button>

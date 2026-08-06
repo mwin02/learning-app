@@ -180,7 +180,7 @@ function FooterNav({
         aria-pressed={done}
         className={`flex items-center gap-2 rounded-button border-[1.5px] px-[15px] py-2.5 text-sm font-medium ${
           done
-            ? 'border-success bg-success text-white'
+            ? 'border-success bg-success text-on-accent'
             : 'border-success text-success hover:bg-success-bg'
         }`}
       >
@@ -190,14 +190,14 @@ function FooterNav({
       {next ? (
         <Link
           href={`${basePath}/${next.id}`}
-          className="flex items-center gap-2 rounded-button bg-brand px-[18px] py-2.5 text-sm font-semibold text-white shadow-[0_1px_2px_rgba(63,106,216,0.3)] hover:bg-brand-dark"
+          className="flex items-center gap-2 rounded-button bg-brand px-[18px] py-2.5 text-sm font-semibold text-on-accent shadow-[0_1px_2px_rgba(63,106,216,0.3)] hover:bg-brand-dark"
         >
           Next lesson <ChevronRightIcon size={15} />
         </Link>
       ) : (
         <Link
           href={basePath}
-          className="flex items-center gap-2 rounded-button bg-brand px-[18px] py-2.5 text-sm font-semibold text-white shadow-[0_1px_2px_rgba(63,106,216,0.3)] hover:bg-brand-dark"
+          className="flex items-center gap-2 rounded-button bg-brand px-[18px] py-2.5 text-sm font-semibold text-on-accent shadow-[0_1px_2px_rgba(63,106,216,0.3)] hover:bg-brand-dark"
         >
           Back to overview <ChevronRightIcon size={15} />
         </Link>

@@ -36,7 +36,7 @@ export default function AppError({
         <button
           type="button"
           onClick={() => unstable_retry()}
-          className="mt-6 rounded-button bg-brand px-4 py-2 text-sm font-medium text-white"
+          className="mt-6 rounded-button bg-brand px-4 py-2 text-sm font-medium text-on-accent"
         >
           Try again
         </button>
