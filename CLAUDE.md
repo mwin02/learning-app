@@ -57,7 +57,7 @@ Full roadmap and phase plan: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 
 ## Feature workflow
 
-Features are planned in a dedicated planning conversation that ends in a plan doc (`docs/<feature>-plan.md`) with per-block briefs (blocks ≤300 LOC), then implemented block-by-block — directly, or via the `/orchestrate-feature` skill, which spawns a `block-implementer` subagent per block. Two rules bind every conversation:
+Features are planned in a dedicated planning conversation that ends in a plan doc (`docs/<feature>-plan.md`) with per-block briefs (blocks ≤300 LOC), then implemented block-by-block — directly, or via the `/orchestrate-feature` skill, which spawns `block-implementer`, `block-verifier`, and `block-reviewer` subagents per block. Every block brief ends with an **Acceptance criteria** section: concrete, checkable assertions written at planning time (they drive the verifier; criteria written after implementation get bent to fit the code). Two rules bind every conversation:
 
 - **Verification gate**: nothing is committed until the user has manually verified the block. Commit/push/PR only after explicit confirmation.
 - **JIT dependencies**: install a library only when the feature that needs it is being built — never up front.
