@@ -47,6 +47,9 @@ export const rebuildStatusSchema = z.object({
   // Someone is already rebuilding this slot — the dialog says so instead of
   // offering a submit that R5 would refuse with `already_rebuilding`.
   rebuilding: z.boolean(),
+  // The requester's completed lessons on this Track: what a carry-over miss would
+  // cost them, and the sole trigger for the confirm step.
+  completedLessons: z.number(),
 });
 
 export type Staleness = z.infer<typeof stalenessSchema>;
@@ -140,8 +143,27 @@ export const NOTHING_CHANGED =
 export const EDIT_HINT =
   'These are what this course was built from. Change at least one — resubmitting the same answers is not a change.';
 
+// R6 carries progress over by concept overlap — a lesson carries when enough of
+// what it teaches was covered by a lesson you finished. That is a heuristic, so
+// the honest sentence is "usually", not "stay". Stated as the ordinary case rather
+// than a warning: a rebuilt course being organised differently is the point of
+// rebuilding, not a failure.
 export const PROGRESS_LINE =
-  'Lessons covering material you’ve already finished stay marked complete.';
+  'Lessons covering material you’ve already finished usually stay marked complete — but a rebuilt course can be organised differently, so some progress may not carry over.';
+
+// The stakes, made concrete, and ONLY when there are stakes: a learner with no
+// completed lessons has nothing to lose, and a confirm they cannot fail teaches
+// them to click through the one that matters.
+export function progressWarning(completedLessons: number): string | null {
+  if (completedLessons <= 0) return null;
+  return `You’ve completed ${plural(completedLessons, 'lesson', 'lessons')} in this course. Most of that normally carries over, but anything the new course organises differently may not.`;
+}
+
+export const CONFIRM_PROMPT = 'Rebuild anyway?';
+
+export function submitLabel(confirming: boolean): string {
+  return confirming ? 'Yes, rebuild' : 'Rebuild';
+}
 
 export function quotaLine(quota: { used: number; limit: number }): string {
   const left = Math.max(0, quota.limit - quota.used);

@@ -309,6 +309,10 @@ export type RebuildStatus =
       staleness: TrackStaleness;
       quota: RebuildQuota;
       rebuilding: boolean;
+      // The REQUESTER's completed lessons on this Track. R6 carries progress over
+      // by concept overlap, which is a heuristic — so this is what the learner is
+      // risking, and R7 asks them to confirm only when it is non-zero.
+      completedLessons: number;
     };
 
 export async function getRebuildStatus(input: {
@@ -327,7 +331,7 @@ export async function getRebuildStatus(input: {
   });
   if (!enrollment) return { ok: false, refusal: 'not_enrolled' };
 
-  const [staleness, quota, inFlight] = await Promise.all([
+  const [staleness, quota, inFlight, completedLessons] = await Promise.all([
     // No overrides yet — the form is unedited when the dialog opens, so this is
     // the staleness a submit-as-is would be judged on.
     readStaleness(trackId, track, false),
@@ -339,6 +343,7 @@ export async function getRebuildStatus(input: {
         status: { in: [CourseRequestStatus.queued, CourseRequestStatus.running] },
       },
     }),
+    prisma.progress.count({ where: { userId, lesson: { trackId } } }),
   ]);
 
   return {
@@ -353,5 +358,6 @@ export async function getRebuildStatus(input: {
     staleness,
     quota,
     rebuilding: inFlight > 0,
+    completedLessons,
   };
 }

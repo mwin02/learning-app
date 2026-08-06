@@ -4,9 +4,12 @@ import { describe, it, expect } from 'vitest';
 import {
   changeSummary,
   masteryOptions,
+  progressWarning,
+  PROGRESS_LINE,
   quotaLine,
   rebuildErrorMessage,
   rebuildStatusSchema,
+  submitLabel,
   type Staleness,
 } from './rebuild-view';
 
@@ -66,6 +69,43 @@ describe('changeSummary', () => {
   });
 });
 
+describe('progressWarning', () => {
+  it('says nothing when there is no progress to lose', () => {
+    expect(progressWarning(0)).toBeNull();
+    // Defensive: a negative count is nonsense, but it must not produce a warning.
+    expect(progressWarning(-1)).toBeNull();
+  });
+
+  it('names the count, singular at one', () => {
+    expect(progressWarning(1)).toContain('completed 1 lesson in this course');
+    expect(progressWarning(1)).not.toContain('1 lessons');
+  });
+
+  it('names the count, plural above one', () => {
+    expect(progressWarning(3)).toContain('completed 3 lessons in this course');
+  });
+
+  it('does not promise the progress survives', () => {
+    expect(progressWarning(3)).toMatch(/may not/);
+  });
+});
+
+describe('PROGRESS_LINE', () => {
+  // R6's carry-over is a concept-overlap heuristic, so the copy must hedge —
+  // this pins the wording against a well-meaning edit back to "stay complete".
+  it('says progress usually carries over, never that it always does', () => {
+    expect(PROGRESS_LINE).toContain('usually');
+    expect(PROGRESS_LINE).toMatch(/may not carry over/);
+  });
+});
+
+describe('submitLabel', () => {
+  it('turns the primary button into its own confirm', () => {
+    expect(submitLabel(false)).toBe('Rebuild');
+    expect(submitLabel(true)).toBe('Yes, rebuild');
+  });
+});
+
 describe('quotaLine', () => {
   it('states the allowance and what is left', () => {
     expect(quotaLine({ used: 1, limit: 3 })).toBe('This uses one of your 3 rebuilds this month — 2 left.');
@@ -99,8 +139,10 @@ describe('rebuildStatusSchema', () => {
       staleness: base,
       quota: { allowed: true, used: 0, limit: 3 },
       rebuilding: false,
+      completedLessons: 3,
     });
     expect(parsed.inputs.targetMastery).toBe('intermediate');
+    expect(parsed.completedLessons).toBe(3);
   });
 
   it('rejects a payload missing a staleness term the copy reads', () => {
@@ -111,6 +153,7 @@ describe('rebuildStatusSchema', () => {
         staleness: partial,
         quota: { allowed: true, used: 0, limit: 3 },
         rebuilding: false,
+        completedLessons: 0,
       }),
     ).toThrow();
   });

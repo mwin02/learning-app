@@ -59,6 +59,7 @@ export const GET = withAuth<Ctx>(async (_req, session, ctx) => {
     staleness: status.staleness,
     quota: status.quota,
     rebuilding: status.rebuilding,
+    completedLessons: status.completedLessons,
   });
 });
 

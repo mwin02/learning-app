@@ -16,14 +16,17 @@ import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import {
   changeSummary,
+  CONFIRM_PROMPT,
   EDIT_HINT,
   formStateFrom,
   masteryOptions,
   NOTHING_CHANGED,
+  progressWarning,
   PROGRESS_LINE,
   quotaLine,
   rebuildEdits,
   rebuildErrorMessage,
+  submitLabel,
   type RebuildFormState,
   type RebuildStatus,
 } from '@/lib/rebuild-view';
@@ -44,6 +47,10 @@ export function RegenerateDialog({ programId, trackId }: { programId: string; tr
   const [phase, setPhase] = useState<Phase>({ kind: 'loading' });
   const [status, setStatus] = useState<RebuildStatus | null>(null);
   const [form, setForm] = useState<RebuildFormState | null>(null);
+  // The destructive-action shape: the primary button becomes its own confirm on
+  // first click. Armed only when there is completed progress to lose, and cleared
+  // by close, by re-opening, and by any edit to the form.
+  const [confirming, setConfirming] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -51,6 +58,7 @@ export function RegenerateDialog({ programId, trackId }: { programId: string; tr
     setOpen(false);
     setStatus(null);
     setForm(null);
+    setConfirming(false);
     setPhase({ kind: 'loading' });
     triggerRef.current?.focus();
   };
@@ -67,6 +75,7 @@ export function RegenerateDialog({ programId, trackId }: { programId: string; tr
       }
       setStatus(result.status);
       setForm(formStateFrom(result.status.inputs));
+      setConfirming(false);
       setPhase({ kind: 'form', error: null });
     });
     const onKey = (e: KeyboardEvent) => {
@@ -86,10 +95,20 @@ export function RegenerateDialog({ programId, trackId }: { programId: string; tr
   const canSubmit =
     !!status && !status.rebuilding && status.quota.allowed && (status.staleness.stale || Object.keys(edits).length > 0);
 
-  const set = (patch: Partial<RebuildFormState>) => setForm((f) => (f ? { ...f, ...patch } : f));
+  const warning = status ? progressWarning(status.completedLessons) : null;
+
+  const set = (patch: Partial<RebuildFormState>) => {
+    setConfirming(false);
+    setForm((f) => (f ? { ...f, ...patch } : f));
+  };
 
   const send = async () => {
     if (!status || !form || phase.kind === 'sending') return;
+    // Second, deliberate action — only where there is progress at stake.
+    if (warning && !confirming) {
+      setConfirming(true);
+      return;
+    }
     setPhase({ kind: 'sending' });
     const result = await submitRegenerate(programId, trackId, rebuildEdits(status.inputs, form));
     if (!result.ok) {
@@ -233,6 +252,17 @@ export function RegenerateDialog({ programId, trackId }: { programId: string; tr
                         {PROGRESS_LINE} {quotaLine(status.quota)}
                       </p>
 
+                      {warning && (
+                        <div className="mt-3 rounded-[8px] border border-crayon-red bg-crayon-red/10 px-3 py-2.5">
+                          <p className="mb-0 font-script text-sm text-script-body">{warning}</p>
+                          {confirming && (
+                            <p className="mb-0 mt-1.5 font-script text-sm font-bold text-crayon-red" role="alert">
+                              {CONFIRM_PROMPT}
+                            </p>
+                          )}
+                        </div>
+                      )}
+
                       {status.rebuilding && (
                         <p className="mb-0 mt-2 font-script text-xs text-crayon-red">
                           {rebuildErrorMessage('ALREADY_REBUILDING')}
@@ -265,7 +295,7 @@ export function RegenerateDialog({ programId, trackId }: { programId: string; tr
                       onClick={send}
                       className="btn-ink px-4 py-1 text-[19px] disabled:opacity-50"
                     >
-                      Rebuild
+                      {submitLabel(confirming)}
                     </button>
                   </div>
                 </>
