@@ -16,7 +16,7 @@
 import { CourseRequestStatus, ResourceStatus, type Difficulty } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { log, logWarn } from '@/lib/log';
-import { findRecentRebuild, rebuildQuota } from '@/lib/services/rebuild-limits';
+import { findRecentRebuild, rebuildQuota, type RebuildQuota } from '@/lib/services/rebuild-limits';
 
 // The learner's edits to the Track's inputs. Any field left undefined is cloned from
 // the Track being replaced; a present field both overrides AND satisfies precondition
@@ -44,13 +44,13 @@ export type StalenessInput = {
   trackCreatedAt: Date;
   // Every Resource reachable from the Track's lessons (LessonResource set).
   resources: { status: ResourceStatus; updatedAt: Date }[];
-  // Proxy for "the Path's readiness changed": a readiness flip writes Path.status,
-  // which bumps @updatedAt. Cheaper and more honest than reconstructing what the
-  // readiness WAS at build time, which we don't record.
+  // Reported, not gating (see assessStaleness): Path row mtime, which bumps on
+  // any write to the Path at all.
   pathUpdatedAt: Date;
-  // Concepts on the Track's Path created or touched since the build — the concept
-  // set moving is exactly what makes a re-compose produce a different course.
-  conceptsChangedSince: number;
+  // Concepts CREATED on the Track's Path since the build. Creation, not mtime:
+  // a new concept is something a re-compose would actually have to seat, while a
+  // touched concept row is usually a status or embedding write.
+  conceptsCreatedSince: number;
   inputsEdited: boolean;
 };
 
@@ -61,10 +61,33 @@ export type TrackStaleness = {
   deprecatedResources: number;
   changedResources: number;
   pathChanged: boolean;
-  conceptsChanged: number;
+  conceptsCreated: number;
   inputsEdited: boolean;
 };
 
+// R7 tightened what GATES a rebuild, after the dialog made the old rule legible:
+// on real data, three of four live tracks read stale with zero broken resources,
+// and the only sentence the UI could honestly write for them was "this subject has
+// been worked on since your course was built" — next to a button that spends a real
+// build. A term that cannot be phrased for a learner should not gate spend, so the
+// two mtime proxies were dropped from the disjunction:
+//
+//   - `pathChanged` — Path row mtime bumps on ANY Path write (a status flip, a
+//     readiness recompute, a remediation pass), none of which means the course
+//     would come out different.
+//   - `changedResources` — Resource mtime bumps on a re-embed or a trust recompute
+//     triggered by someone else's vote.
+//
+// Both are still COMPUTED and reported: `changedResources` carries the dialog's
+// "corrected since" line, and `pathChanged` stays in the logs and the operator view
+// as the diagnostic it always was (its fallback line in changeSummary becomes rare,
+// not dead — it still renders when it is the only thing that moved).
+//
+// What remains gates on things with a learner-legible meaning: an input the learner
+// changed, a resource that is no longer seatable, or a concept that did not exist at
+// build time. The real fix — recording the Path's readiness/concept-set at build time
+// so "would a re-compose differ" is answerable directly — is a schema change and its
+// own block.
 export function assessStaleness(input: StalenessInput): TrackStaleness {
   // Non-active covers `deprecated` AND `pending_review`: both mean the resource is
   // no longer something we would seat in a fresh build, which is the question here.
@@ -74,18 +97,13 @@ export function assessStaleness(input: StalenessInput): TrackStaleness {
   // "corrected since" (a duration fix, a re-embed, a refile).
   const changedResources = input.resources.filter((r) => r.updatedAt > input.trackCreatedAt).length;
   const pathChanged = input.pathUpdatedAt > input.trackCreatedAt;
-  const stale =
-    input.inputsEdited ||
-    deprecatedResources > 0 ||
-    changedResources > 0 ||
-    pathChanged ||
-    input.conceptsChangedSince > 0;
+  const stale = input.inputsEdited || deprecatedResources > 0 || input.conceptsCreatedSince > 0;
   return {
     stale,
     deprecatedResources,
     changedResources,
     pathChanged,
-    conceptsChanged: input.conceptsChangedSince,
+    conceptsCreated: input.conceptsCreatedSince,
     inputsEdited: input.inputsEdited,
   };
 }
@@ -117,24 +135,13 @@ export function effectiveEdits(
   return keys.filter((k) => overrides[k] !== undefined && overrides[k] !== track[k]);
 }
 
-// ---------------------------------------------------------------------------
+// The Track columns the staleness reads need, shared by the precondition below
+// and R7's read-only status call so the dialog's copy and the refusal it would
+// hit are derived from exactly the same query.
+type StalenessTrack = { createdAt: Date; pathId: string; path: { updatedAt: Date } };
 
-export type RegenerateInput = {
-  userId: string;
-  programId: string;
-  trackId: string;
-  overrides?: RebuildOverrides;
-};
-
-export async function regenerateTrack(input: RegenerateInput): Promise<RegenerateResult> {
-  const { userId, programId, trackId } = input;
-  const overrides = input.overrides ?? {};
-
-  // 1. Ownership. The slot lookup and the enrollment check are separate refusals:
-  // an unknown (programId, trackId) pair is a 404, while a real slot the caller
-  // isn't enrolled in is a 403 — collapsing them would let a caller probe which
-  // Tracks exist.
-  const slot = await prisma.programPath.findFirst({
+function loadSlot(programId: string, trackId: string) {
+  return prisma.programPath.findFirst({
     where: { programId, trackId },
     select: {
       topic: true,
@@ -152,6 +159,47 @@ export async function regenerateTrack(input: RegenerateInput): Promise<Regenerat
       },
     },
   });
+}
+
+async function readStaleness(
+  trackId: string,
+  track: StalenessTrack,
+  inputsEdited: boolean,
+): Promise<TrackStaleness> {
+  const [links, conceptsCreatedSince] = await Promise.all([
+    prisma.lessonResource.findMany({
+      where: { lesson: { trackId } },
+      select: { resource: { select: { status: true, updatedAt: true } } },
+    }),
+    prisma.concept.count({ where: { pathId: track.pathId, createdAt: { gt: track.createdAt } } }),
+  ]);
+  return assessStaleness({
+    trackCreatedAt: track.createdAt,
+    resources: links.map((l) => l.resource),
+    pathUpdatedAt: track.path.updatedAt,
+    conceptsCreatedSince,
+    inputsEdited,
+  });
+}
+
+// ---------------------------------------------------------------------------
+
+export type RegenerateInput = {
+  userId: string;
+  programId: string;
+  trackId: string;
+  overrides?: RebuildOverrides;
+};
+
+export async function regenerateTrack(input: RegenerateInput): Promise<RegenerateResult> {
+  const { userId, programId, trackId } = input;
+  const overrides = input.overrides ?? {};
+
+  // 1. Ownership. The slot lookup and the enrollment check are separate refusals:
+  // an unknown (programId, trackId) pair is a 404, while a real slot the caller
+  // isn't enrolled in is a 403 — collapsing them would let a caller probe which
+  // Tracks exist.
+  const slot = await loadSlot(programId, trackId);
   if (!slot?.track) return { ok: false, refusal: 'not_found' };
   const { topic, track } = slot;
 
@@ -196,20 +244,7 @@ export async function regenerateTrack(input: RegenerateInput): Promise<Regenerat
   // 4. Staleness. A rebuild off an identical pool is a coin flip that costs a real
   // build, so it is refused — unless the learner changed what they're asking for.
   const edits = effectiveEdits(track, overrides);
-  const [links, conceptsChangedSince] = await Promise.all([
-    prisma.lessonResource.findMany({
-      where: { lesson: { trackId } },
-      select: { resource: { select: { status: true, updatedAt: true } } },
-    }),
-    prisma.concept.count({ where: { pathId: track.pathId, updatedAt: { gt: track.createdAt } } }),
-  ]);
-  const staleness = assessStaleness({
-    trackCreatedAt: track.createdAt,
-    resources: links.map((l) => l.resource),
-    pathUpdatedAt: track.path.updatedAt,
-    conceptsChangedSince,
-    inputsEdited: edits.length > 0,
-  });
+  const staleness = await readStaleness(trackId, track, edits.length > 0);
   if (!staleness.stale) return { ok: false, refusal: 'not_stale', staleness };
 
   // Effect. The transaction re-checks precondition 2 immediately before the insert,
@@ -256,4 +291,67 @@ export async function regenerateTrack(input: RegenerateInput): Promise<Regenerat
     deprecatedResources: staleness.deprecatedResources,
   });
   return { ok: true, requestId: created.id, topic, deduplicated: false };
+}
+
+// ---------------------------------------------------------------------------
+// R7's read side.
+// ---------------------------------------------------------------------------
+
+// The dialog has to state what changed and pre-fill the inputs BEFORE anything is
+// spent, and "POST and read the refusal" cannot supply that: the one outcome that
+// isn't a refusal is a real build. So the preconditions are also readable, without
+// side effects — same slot lookup, same staleness read, no insert.
+export type RebuildStatus =
+  | { ok: false; refusal: 'not_found' | 'not_enrolled' }
+  | {
+      ok: true;
+      inputs: TrackInputs;
+      staleness: TrackStaleness;
+      quota: RebuildQuota;
+      rebuilding: boolean;
+    };
+
+export async function getRebuildStatus(input: {
+  userId: string;
+  programId: string;
+  trackId: string;
+}): Promise<RebuildStatus> {
+  const { userId, programId, trackId } = input;
+  const slot = await loadSlot(programId, trackId);
+  if (!slot?.track) return { ok: false, refusal: 'not_found' };
+  const { track } = slot;
+
+  const enrollment = await prisma.enrolledProgram.findUnique({
+    where: { userId_programId: { userId, programId } },
+    select: { userId: true },
+  });
+  if (!enrollment) return { ok: false, refusal: 'not_enrolled' };
+
+  const [staleness, quota, inFlight] = await Promise.all([
+    // No overrides yet — the form is unedited when the dialog opens, so this is
+    // the staleness a submit-as-is would be judged on.
+    readStaleness(trackId, track, false),
+    rebuildQuota(userId),
+    prisma.courseRequest.count({
+      where: {
+        programId,
+        topic: slot.topic,
+        status: { in: [CourseRequestStatus.queued, CourseRequestStatus.running] },
+      },
+    }),
+  ]);
+
+  return {
+    ok: true,
+    inputs: {
+      priorKnowledge: track.priorKnowledge,
+      goal: track.goal,
+      timeframeWeeks: track.timeframeWeeks,
+      hoursPerWeek: track.hoursPerWeek,
+      targetMastery: track.targetMastery,
+    },
+    staleness,
+    quota,
+    rebuilding: inFlight > 0,
+  };
 }
