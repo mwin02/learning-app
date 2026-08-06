@@ -21,12 +21,12 @@ import { prisma } from '@/lib/db';
 import { logWarn } from '@/lib/log';
 import { reportBurst } from '@/lib/services/report-limits';
 import { verifyDeadLink } from '@/lib/curation/verify-dead-link';
+// R3 shares the cap with the dialog's textarea (report-view.ts is type-only-server-free).
+import { NOTE_MAX_CHARS } from '@/lib/report-view';
 
 export const runtime = 'nodejs';
 
 type Ctx = { params: Promise<{ id: string }> };
-
-export const NOTE_MAX_CHARS = 500;
 
 const bodySchema = z.object({
   // The Prisma enum object, so a new ReportCategory is accepted here the moment
