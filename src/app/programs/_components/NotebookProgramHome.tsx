@@ -83,7 +83,7 @@ export function NotebookProgramHome({
         goal-driven program · {PROGRAM_STATE_LABEL[program.status].toLowerCase()}
       </div>
       <h1 className="mb-2.5 mt-1.5 font-hand text-[52px] font-bold leading-[0.95] text-script">
-        <span style={{ background: 'linear-gradient(transparent 62%, rgb(var(--nb-highlighter) / .72) 62%)' }}>
+        <span style={{ background: 'linear-gradient(transparent 62%, var(--nb-swipe) 62%)' }}>
           {program.goal}
         </span>
       </h1>

@@ -20,7 +20,7 @@ export function Sheet({
       {['top-[130px]', 'top-1/2', 'bottom-[130px]'].map((pos) => (
         <div
           key={pos}
-          className={`absolute left-[26px] h-5 w-5 rounded-full bg-hole shadow-[inset_0_1px_3px_rgba(0,0,0,.32)] ${pos}`}
+          className={`absolute left-[26px] h-5 w-5 rounded-full bg-hole shadow-[var(--shadow-hole)] ${pos}`}
         />
       ))}
       {children}

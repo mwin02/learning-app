@@ -176,7 +176,7 @@ function FooterNav({
         onClick={onToggle}
         aria-pressed={done}
         className={`rounded-[9px_8px_11px_10px] border-2 px-4 py-1 font-hand text-[20px] font-bold ${
-          done ? 'border-crayon-green bg-crayon-green text-white' : 'border-crayon-green bg-transparent text-crayon-green'
+          done ? 'border-crayon-green bg-crayon-green text-on-accent' : 'border-crayon-green bg-transparent text-crayon-green'
         }`}
       >
         ✓ {done ? 'Completed' : 'Mark complete'}

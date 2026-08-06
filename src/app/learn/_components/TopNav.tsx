@@ -18,7 +18,7 @@ export function TopNav() {
   return (
     <div className="sticky top-0 z-[5] flex h-[var(--nav-h)] items-center gap-5 border-b border-line bg-card px-[26px]">
       <div className="flex items-center gap-2.5">
-        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-brand font-mono text-sm font-semibold text-white">
+        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-brand font-mono text-sm font-semibold text-on-accent">
           {BRAND.charAt(0)}
         </div>
         <span className="text-lg font-semibold tracking-[-0.2px]">{BRAND}</span>

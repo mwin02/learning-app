@@ -15,6 +15,13 @@
      (not @theme) so the dark block below can override them. */
   --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04);
   --gradient-thumb: linear-gradient(135deg, #eef2fb, #e1e8f6);
+  /* The sheet's lift off the desk, and the inset of a punch hole. Both are
+     theme-dependent by construction: on the dark desk the sheet gains a top
+     highlight (light can't come from a drop shadow alone) and the hole's inset
+     goes near-opaque. */
+  --shadow-sheet:
+    0 2px 3px rgba(0, 0, 0, 0.09), 0 18px 40px rgba(0, 0, 0, 0.16);
+  --shadow-hole: inset 0 1px 3px rgba(0, 0, 0, 0.32);
   /* The Desk's dotted-grid texture color. Dark ink on the light desk; the dark
      block flips it to a faint light dot so the grid stays visible on the near-
      black dark desk (black-on-black reads as flat otherwise). */
@@ -27,6 +34,15 @@
      and vanish on the yellow — see BookmarkTab). */
   --nb-highlighter: 255 224 102;
   --nb-highlighter-ink: #22303f;
+
+  /* The heading marker swipe and the row-hover wash. Unlike the solid
+     highlighter above, these are washes *behind* running text, so they must
+     flip: on dark paper a 72%-alpha yellow would bury the text. The dark values
+     are a dimmer gold at low alpha, and a pen-blue tint for hover (per the
+     Notebook Dark design). Full color values, not RGB channels, because the
+     alpha differs per theme too. */
+  --nb-swipe: rgb(255 224 102 / 0.72);
+  --nb-row-hover: rgb(255 224 102 / 0.14);
 }
 
 /* ===== Design tokens (the central palette) =====
@@ -84,9 +100,21 @@
   --color-desk: #c9c3b2; /* backdrop behind the sheet */
   --color-paper: #fcfaf1; /* the sheet itself */
   --color-rule: #bcd0e0; /* horizontal ruled lines */
+  --color-rule-strong: #c9c3b2; /* heavier pencil stroke ON paper: dotted
+     leaders, hand-drawn control outlines. Matches --color-desk in light, which
+     is why those callers used bg-desk — but desk goes near-black in dark, where
+     a stroke on paper must go lighter, so it needs its own token. */
   --color-margin: #e2a0a0; /* red margin line */
   --color-margin-soft: #eec4c4; /* its thinner companion */
   --color-hole: #d9d4c7; /* punch holes */
+  --color-doodle-track: #ffffff; /* unfilled progress-doodle track on paper */
+
+  /* Text/iconography sitting ON a saturated accent fill (chapter chips, bookmark
+     tabs, resume + primary buttons). White on the light theme's mid-tone
+     accents; the dark theme lightens every accent, so its on-color inverts to
+     near-black. Replaces the `text-white` that used to be hardcoded at each of
+     those call sites. */
+  --color-on-accent: #ffffff;
 
   --color-pen: #2f5aa8; /* pen-blue ink: links, primary buttons, kickers */
   --color-pen-deep: #1f3f7d; /* button under-shadow ("pressed ink") */
@@ -159,83 +187,112 @@
    token (and the two theme-dependent decoratives) on :root inside the media query.
    Because the tokens use plain @theme (var indirection, not @theme inline), the
    generated color utilities (text, bg, border) re-resolve to these values
-   app-wide — no per-component dark: variants. Values from the dark design files. */
+   app-wide — no per-component dark: variants. Values from the dark design files.
+
+   The palette below is the "Home Dashboard (Notebook Dark)" design, not an
+   inversion of the light one. Two structural differences from light drive most
+   of it: the desk goes darker than the paper (light has it the other way round,
+   a bright sheet on a dimmer desk), and every accent LIGHTENS rather than
+   darkens — which is why on-accent text inverts to near-black. Warm paper-ink
+   greys on cool charcoal surfaces is deliberate: it's what keeps a near-black
+   UI reading as a lit page rather than a dark app chrome. */
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0f1318;
-    --foreground: #e8ebf0;
+    --background: #12151a;
+    --foreground: #f2eee2;
 
-    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --gradient-thumb: linear-gradient(135deg, #1b2436, #161d2b);
-    --desk-dot: rgba(255, 255, 255, 0.05);
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.5);
+    --gradient-thumb: linear-gradient(135deg, #2b323c, #20252c);
+    --desk-dot: rgba(255, 255, 255, 0.035);
+    /* The top hairline is the sheet's lit edge — without it a dark sheet on a
+       darker desk has no readable boundary at the top, where no shadow falls. */
+    --shadow-sheet:
+      0 1px 0 rgba(255, 255, 255, 0.05), 0 22px 48px rgba(0, 0, 0, 0.55);
+    --shadow-hole:
+      inset 0 1px 3px rgba(0, 0, 0, 0.7), 0 1px 0 rgba(255, 255, 255, 0.06);
 
-    --color-brand: #5d87ef;
-    --color-brand-dark: #5079e3;
-    --color-brand-bg: #1c2433;
-    --color-brand-bg-soft: #1c2433;
+    --nb-swipe: rgb(224 183 77 / 0.32);
+    --nb-row-hover: rgb(143 182 240 / 0.07);
 
-    --color-ink: #e8ebf0;
-    --color-ink-soft: #c3cad3;
-    --color-body: #a3acb8;
-    --color-muted: #8b95a3;
-    --color-faint: #6f7884;
-    --color-faintest: #565f6b;
+    --color-brand: #8fb6f0;
+    --color-brand-dark: #b7d0f7; /* the hover/active step lightens in dark */
+    --color-brand-bg: #1e2733;
+    --color-brand-bg-soft: #1b232e;
 
-    --color-line: #2a313c;
-    --color-line-soft: #222a33;
-    --color-line-faint: #262d37;
+    --color-ink: #f2eee2;
+    --color-ink-soft: #dcd7cb;
+    --color-body: #b9b3a6;
+    --color-muted: #8b95a1;
+    --color-faint: #7d8794;
+    --color-faintest: #6b7480;
 
-    --color-surface: #0f1318;
-    --color-card: #181d25;
-    --color-fill: #20262f;
-    --color-track: #2a313c;
-    --color-hairline: #3a424d;
+    --color-line: #2f3d4b;
+    --color-line-soft: #262d37;
+    --color-line-faint: #2a323c;
 
-    --color-success: #38b583;
-    --color-success-bg: #15291f;
-    --color-fill-soft: #20262f;
+    --color-surface: #12151a;
+    --color-card: #262c35; /* raised above the paper, not level with it */
+    --color-fill: #262c35;
+    --color-track: #2f3d4b;
+    --color-hairline: #414c5a;
 
-    --color-accent-embed: #d99a3e;
-    --color-accent-embed-bg: #2c2415;
-    --color-accent-link: #46b2c1;
-    --color-accent-link-bg: #14292e;
-    --color-accent-exercise: #9a7ce8;
-    --color-accent-exercise-bg: #231d33;
+    --color-success: #8ecd8a;
+    --color-success-bg: #1c2a1e;
+    --color-fill-soft: #20252c;
 
-    /* Notebook palette, dark: a desk lamp at night — deep warm desk, charcoal
-       paper, inks lifted for contrast. First pass; tune against real pages. */
-    --color-desk: #17140f;
-    --color-paper: #211e17;
-    --color-rule: #333d4a;
-    --color-margin: #5e3636;
-    --color-margin-soft: #4a2f31;
-    --color-hole: #12100c;
+    --color-accent-embed: #e0bb6b;
+    --color-accent-embed-bg: #2a2519;
+    --color-accent-link: #6fc4d0;
+    --color-accent-link-bg: #17282c;
+    --color-accent-exercise: #a7aae8;
+    --color-accent-exercise-bg: #232536;
 
-    --color-pen: #7da2e0;
-    --color-pen-deep: #2c4270;
-    --color-script: #e6e1d3;
-    --color-script-body: #c6c0b0;
-    --color-script-faint: #8f8878;
-    --color-script-dim: #7d7669;
+    /* Notebook palette, dark: the desk lamp switched off — near-black desk,
+       cool charcoal paper, warm paper-ink lifted to carry the type. */
+    --color-desk: #12151a;
+    --color-paper: #20252c;
+    --color-rule: #2f3d4b;
+    --color-rule-strong: #4a5563;
+    --color-margin: #8f4f52;
+    --color-margin-soft: #5e3639;
+    --color-hole: #14181d;
+    --color-doodle-track: #191d23;
 
-    --color-note: #332e1a;
-    --color-note-edge: #4d461f;
+    --color-pen: #8fb6f0;
+    --color-pen-deep: #35538a; /* still the under-shadow: darker than the fill */
+    --color-script: #f2eee2;
+    --color-script-body: #b9b3a6;
+    --color-script-faint: #8b95a1;
+    --color-script-dim: #7d8794;
+
+    /* Not in the dark design — extrapolated from how the note behaves in light,
+       where #fff8dc against #fcfaf1 paper is only a whisper of yellow. A
+       literal dark "yellow note" turns into an olive slab against this cool
+       paper, so the fill stays a near-neutral lift and the gold lives in the
+       edge and the label instead. */
+    --color-note: #282a25;
+    --color-note-edge: #4a462f;
     --color-note-label: #d9b23e;
 
-    --color-crayon-red: #e06452;
-    --color-crayon-green: #74b97f;
+    --color-crayon-red: #ef8f78;
+    --color-crayon-green: #8ecd8a;
 
-    --color-nb-coral: #c96b52;
-    --color-nb-coral-ink: #e0937c;
-    --color-nb-gold: #c49c42;
-    --color-nb-gold-ink: #d9b969;
-    --color-nb-violet: #6f72a8;
-    --color-nb-violet-ink: #a2a5d6;
-    --color-nb-green: #5e9160;
-    --color-nb-green-ink: #8fc494;
-    --color-nb-pink: #ad5d87;
-    --color-nb-pink-ink: #d491b6;
-    --color-nb-slate: #3d4a57;
+    /* Accent pairs invert their relationship: in light the `ink` is the darker
+       partner (text/bars on cream paper), in dark it's the lighter one. */
+    --color-nb-coral: #e29179;
+    --color-nb-coral-ink: #ef8f78;
+    --color-nb-gold: #e0bb6b;
+    --color-nb-gold-ink: #e8c069;
+    --color-nb-violet: #a3a6df;
+    --color-nb-violet-ink: #a7aae8;
+    --color-nb-green: #8ecd8a;
+    --color-nb-green-ink: #8ecd8a;
+    /* No pink in the dark design — extrapolated on the same lighten-both rule. */
+    --color-nb-pink: #d18cad;
+    --color-nb-pink-ink: #dd9dbe;
+    --color-nb-slate: #7e8b99; /* a tab fill, so it lightens with the rest */
+
+    --color-on-accent: #15191e;
   }
 }
 
@@ -274,9 +331,7 @@ body {
       var(--color-rule) 33px 34px
     );
     border-radius: 3px 8px 8px 3px;
-    box-shadow:
-      0 2px 3px rgba(0, 0, 0, 0.09),
-      0 18px 40px rgba(0, 0, 0, 0.16);
+    box-shadow: var(--shadow-sheet);
   }
   /* Handwritten uppercase kicker (the notebook analog of .eyebrow). Pen-blue by
      default; override with a text utility (e.g. text-note-label). */
@@ -284,14 +339,14 @@ body {
     @apply font-script text-[13px] uppercase tracking-[1.5px] text-pen;
   }
   /* Faint highlighter wash on hover — the notebook analog of a row hover tint.
-     Uses the theme-fixed highlighter yellow at low alpha. */
+     Yellow on light paper, a pen-blue tint on dark (see --nb-row-hover). */
   .nb-hl-hover:hover {
-    background-color: rgb(var(--nb-highlighter) / 0.14);
+    background-color: var(--nb-row-hover);
   }
   /* Primary "inked" button: handwriting, pen fill, pressed-ink under-shadow.
      The uneven radius is the doodle look's default; vary per instance inline. */
   .btn-ink {
-    @apply inline-block cursor-pointer font-hand font-bold text-white;
+    @apply inline-block cursor-pointer font-hand font-bold text-on-accent;
     background: var(--color-pen);
     border-radius: 10px 13px 9px 12px;
     box-shadow: 0 4px 0 var(--color-pen-deep);

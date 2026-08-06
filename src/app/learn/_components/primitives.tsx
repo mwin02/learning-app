@@ -89,7 +89,7 @@ export function LessonStatusIcon({ status }: { status: LessonStatus }) {
   if (status === 'done') {
     return (
       <span
-        className="inline-flex flex-none items-center justify-center rounded-full bg-success text-white"
+        className="inline-flex flex-none items-center justify-center rounded-full bg-success text-on-accent"
         style={{ width: 18, height: 18 }}
       >
         <CheckIcon size={11} />

@@ -43,7 +43,7 @@ export function TocEntry({
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
           <span className="font-hand text-[28px] font-bold leading-none text-script">{title}</span>
-          <span className="min-w-6 flex-1 -translate-y-1 border-b-2 border-dotted border-desk" />
+          <span className="min-w-6 flex-1 -translate-y-1 border-b-2 border-dotted border-rule-strong" />
           {edge && <span className="font-script text-sm text-script-dim">{edge}</span>}
         </div>
         <div className="mt-0.5 font-script text-xs text-script-dim">{meta}</div>
@@ -66,7 +66,7 @@ export function TocEntry({
       </div>
 
       <span
-        className="flex-none self-center rotate-1 rounded-[8px_10px_9px_11px] px-[15px] py-[5px] font-hand text-[20px] font-bold text-white shadow-[0_3px_0_rgba(0,0,0,.22)]"
+        className="flex-none self-center rotate-1 rounded-[8px_10px_9px_11px] px-[15px] py-[5px] font-hand text-[20px] font-bold text-on-accent shadow-[0_3px_0_rgba(0,0,0,.22)]"
         style={{ background: accent.ink }}
       >
         Resume →
