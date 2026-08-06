@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
 import { requireAdminPage } from '@/lib/auth/viewer';
 import { listPendingReview, type PendingReviewRoot } from '@/lib/curation/pending-review';
 import { ReviewActions } from './review-actions';

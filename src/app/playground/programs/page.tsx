@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/db';
 import { requireAdminPage } from '@/lib/auth/viewer';
 import { PROGRAM_STATUS_STYLE } from './status-style';

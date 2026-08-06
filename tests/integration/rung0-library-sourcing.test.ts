@@ -57,9 +57,9 @@ vi.mock('@/lib/agents/map/candidate-judge', () => ({
     })),
 }));
 
-const youtubeProng = vi.fn(async (_args?: unknown) => []);
+const youtubeProng = vi.fn(async () => []);
 vi.mock('@/lib/agents/tools/youtube-search', () => ({
-  searchYouTubeForConcept: (args: unknown) => youtubeProng(args),
+  searchYouTubeForConcept: () => youtubeProng(),
 }));
 
 // Empty out the grounded discovery calls (real module otherwise — `tool` etc.).

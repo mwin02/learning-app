@@ -58,7 +58,6 @@ async function writeEmbedding(resourceId: string, vec: number[]) {
   );
 }
 
-let pathId: string;
 let conceptAlphaId: string;
 let conceptBetaId: string;
 let containerId: string;
@@ -108,7 +107,6 @@ describeDb('rejudgeForDemandingPaths — decompose-time hook', () => {
       },
       select: { id: true, concepts: { select: { id: true, slug: true } } },
     });
-    pathId = path.id;
     conceptAlphaId = path.concepts.find((c) => c.slug === 'rjsf-alpha')!.id;
     conceptBetaId = path.concepts.find((c) => c.slug === 'rjsf-beta')!.id;
 

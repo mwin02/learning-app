@@ -115,7 +115,7 @@ describeDb('concept merge (Block 3)', () => {
   });
 
   it('refuses a merge that would create a prerequisite cycle (nothing deleted)', async () => {
-    const source = await prisma.source.create({
+    await prisma.source.create({
       data: { slug: `${MARK}-src2`, name: 'src2', url: 'https://example.invalid/2', kind: 'community' },
     });
     const path = await prisma.path.create({ data: { topic: TOPIC_CYCLE, status: 'spine_ready' } });

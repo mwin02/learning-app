@@ -51,11 +51,9 @@
 //    previous block deliberately created. Do NOT compare the headline number
 //    to a run taken over a different vocabulary — re-derive both or neither.
 
-import type { ResourceStatus } from '@prisma/client';
 import { prisma } from '../src/lib/db';
 import { MIN_SECONDARY_PURITY } from '../src/lib/curation/topic-knn';
 
-const STATUSES: ResourceStatus[] = ['active', 'pending_review'];
 // Topics smaller than this can't characterize a centroid; reported separately.
 const MIN_MEMBERS = 5;
 
