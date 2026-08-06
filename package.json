@@ -11,7 +11,8 @@
     "test:unit": "vitest run --project unit",
     "test:int": "vitest run --project integration",
     "test:all": "vitest run",
-    "verify": "npm run lint && npx tsc --noEmit && npm test",
+    "typecheck": "tsc --noEmit",
+    "verify": "bash -c 'rc=0; for s in lint typecheck test; do npm run $s || rc=1; done; exit $rc'",
     "db:seed": "tsx --env-file=.env.local prisma/seed.ts",
     "worker": "tsx --env-file=.env.local scripts/course-worker.ts",
     "postinstall": "prisma generate"
