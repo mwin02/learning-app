@@ -31,6 +31,7 @@ const row = (over: Partial<UpdatedResource> = {}): UpdatedResource => ({
   decompositionStatus: 'atomic',
   durationMin: 45,
   difficulty: 'beginner',
+  requiresPurchase: false,
   ...over,
 });
 
@@ -71,6 +72,22 @@ describe('updateResource', () => {
     update.mockResolvedValue(row() as never);
     const result = await updateResource('res_1', { summary: 'A much better summary.' });
     expect(result).toMatchObject({ kind: 'updated', embeddingStale: true });
+  });
+
+  // requiresPurchase is an access flag, not embedded text (buildEmbeddingText
+  // reads title + summary + conceptsTaught only), so correcting it must not send
+  // the row through the re-embedding backfill.
+  it('applies a requiresPurchase correction without flagging embeddingStale', async () => {
+    update.mockResolvedValue(row({ requiresPurchase: false }) as never);
+    const result = await updateResource('res_1', { requiresPurchase: false });
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'res_1' }, data: { requiresPurchase: false } }),
+    );
+    expect(result).toMatchObject({
+      kind: 'updated',
+      changed: ['requiresPurchase'],
+      embeddingStale: false,
+    });
   });
 
   it('does not flag embeddingStale for difficulty', async () => {
@@ -125,6 +142,16 @@ describe('resourceUpdateSchema', () => {
       fields: { title: 'T', summary: 'A summary long enough.', difficulty: 'advanced' },
     });
     expect(Object.keys(parsed.fields)).toHaveLength(3);
+  });
+
+  it('accepts requiresPurchase in both directions', () => {
+    for (const value of [true, false]) {
+      const parsed = resourceUpdateSchema.parse({
+        resourceId: 'res_1',
+        fields: { requiresPurchase: value },
+      });
+      expect(parsed.fields).toEqual({ requiresPurchase: value });
+    }
   });
 
   it('rejects empty fields (at least one required)', () => {

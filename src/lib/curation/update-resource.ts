@@ -12,7 +12,10 @@
 // stored embedding stale (embeddedAt < updatedAt → the backfill re-embeds; the
 // embedding covers title + summary + conceptsTaught). No extra work needed —
 // the result just flags `embeddingStale: true` so the caller knows the backfill
-// will pick it up. durationMin/difficulty don't feed the embedding.
+// will pick it up. durationMin/difficulty/requiresPurchase don't feed the
+// embedding — the staleness test below is an allowlist of the two fields
+// buildEmbeddingText (ai/embeddings.ts) actually reads, so a new non-embedded
+// field needs no change there.
 
 import type { Difficulty, ResourceStatus, DecompositionStatus, ResourceType } from '@prisma/client';
 import { prisma } from '@/lib/db';
@@ -23,6 +26,10 @@ export type ResourceUpdateFields = {
   title?: string;
   summary?: string;
   difficulty?: Difficulty;
+  // Reports R4: the fix for a `paywalled` report. A wrong access flag is a field
+  // defect like a wrong duration — deprecating a good resource over it throws the
+  // resource away to correct a boolean.
+  requiresPurchase?: boolean;
 };
 
 export type UpdatedResource = {
@@ -34,6 +41,7 @@ export type UpdatedResource = {
   decompositionStatus: DecompositionStatus;
   durationMin: number;
   difficulty: Difficulty;
+  requiresPurchase: boolean;
 };
 
 export type ResourceUpdateResult =
@@ -78,6 +86,7 @@ export async function updateResource(
       decompositionStatus: true,
       durationMin: true,
       difficulty: true,
+      requiresPurchase: true,
     },
   });
 
