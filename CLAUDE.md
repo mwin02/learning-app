@@ -47,8 +47,6 @@ Full roadmap and phase plan: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 
 ## Repo conventions
 
-- Package manager: **npm** (locked by `package-lock.json`).
-- App Router, TypeScript, `src/` directory, `@/*` import alias.
 - Secrets live in `.env.local` (git-ignored); `.env.example` documents required keys.
 - Never commit secrets, service-account JSON, or Stripe keys.
 - **Commit messages: no `Co-Authored-By: Claude` trailer.** Write commit messages without the AI attribution footer.
