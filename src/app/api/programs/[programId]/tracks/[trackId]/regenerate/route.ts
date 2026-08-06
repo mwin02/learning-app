@@ -12,7 +12,7 @@ import { z, ZodError } from 'zod';
 import { Difficulty } from '@prisma/client';
 import { withAuth } from '@/lib/api/with-auth';
 import { log } from '@/lib/log';
-import { regenerateTrack } from '@/lib/services/regenerate-track';
+import { getRebuildStatus, regenerateTrack } from '@/lib/services/regenerate-track';
 
 export const runtime = 'nodejs';
 
@@ -30,6 +30,38 @@ const bodySchema = z
     targetMastery: z.enum(Difficulty),
   })
   .partial();
+
+// R7: the same preconditions, read-only. The dialog states what changed and
+// pre-fills the Track's inputs before anything is spent, and a POST cannot be the
+// probe for that — its only non-refusing outcome is a real build.
+export const GET = withAuth<Ctx>(async (_req, session, ctx) => {
+  if (!session.userId) {
+    return Response.json(
+      { error: 'Rebuilding a course requires a signed-in user.', code: 'UNAUTHENTICATED' },
+      { status: 401 }
+    );
+  }
+  const { programId, trackId } = await ctx.params;
+  const status = await getRebuildStatus({ userId: session.userId, programId, trackId });
+  if (!status.ok) {
+    return status.refusal === 'not_found'
+      ? Response.json({ error: 'Course not found in this program.', code: 'NOT_FOUND' }, { status: 404 })
+      : Response.json(
+          { error: 'You are not enrolled in this program.', code: 'NOT_ENROLLED' },
+          { status: 403 }
+        );
+  }
+  const { goal, timeframeWeeks, hoursPerWeek, targetMastery } = status.inputs;
+  // priorKnowledge is deliberately not sent: the dialog does not edit it, and it
+  // is free text the learner wrote about themselves.
+  return Response.json({
+    inputs: { goal, timeframeWeeks, hoursPerWeek, targetMastery },
+    staleness: status.staleness,
+    quota: status.quota,
+    rebuilding: status.rebuilding,
+    completedLessons: status.completedLessons,
+  });
+});
 
 export const POST = withAuth<Ctx>(async (req, session, ctx) => {
   // A rebuild is charged to a user (quota, and R6 carries progress over for exactly

@@ -15,6 +15,7 @@ import { ContinueCard } from '@/components/notebook/ContinueCard';
 import { SectionRow } from '@/components/notebook/SectionRow';
 import { PctDone, RingDoodle } from '@/components/notebook/primitives';
 import { accentFor } from '@/components/notebook/accents';
+import { RegenerateDialog } from '@/app/programs/_components/RegenerateDialog';
 
 function encouragement(pct: number): string {
   if (pct === 0) return 'start when you’re ready';
@@ -24,7 +25,7 @@ function encouragement(pct: number): string {
 
 export function NotebookCourseHome() {
   const { model, basePath } = useCourse();
-  const { programId } = useParams<{ programId: string }>();
+  const { programId, trackId } = useParams<{ programId: string; trackId: string }>();
 
   return (
     <>
@@ -136,6 +137,16 @@ export function NotebookCourseHome() {
             total={section.total}
           />
         ))}
+      </div>
+
+      {/* R7: the other end of the report loop — reported defects get fixed in
+          the library, and this is how a learner collects those fixes. Footer
+          placement is deliberate: a rebuild costs a real build. */}
+      <div className="mt-10 flex flex-wrap items-center gap-3 border-t-2 border-dashed border-rule pt-4">
+        <span className="font-script text-xs text-script-dim">
+          Broken links or material that has moved on? Rebuild it from the current library.
+        </span>
+        <RegenerateDialog programId={programId} trackId={trackId} />
       </div>
     </>
   );
