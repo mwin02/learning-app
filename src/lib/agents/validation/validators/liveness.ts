@@ -75,7 +75,9 @@ const ALIVE: LivenessVerdict = { alive: true };
 // is written out longhand at its call site, which keeps the distinction visible.
 const suspect = (reason: string): LivenessVerdict => ({ alive: false, reason, quarantine: true });
 
-async function checkLiveness(url: string): Promise<LivenessVerdict> {
+// Exported for reports R2: a learner's dead-link report re-runs exactly this
+// predicate, so the auto-action and the pipeline agree on what "dead" means.
+export async function checkLiveness(url: string): Promise<LivenessVerdict> {
   let host: string;
   try {
     host = new URL(url).hostname.replace(/^www\./, '');

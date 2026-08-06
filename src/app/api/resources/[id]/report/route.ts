@@ -11,7 +11,8 @@
 // the dev bypass's null userId gets a clean 401), zod-parsed body, burst cap after
 // validation and before the lookup, non-enumerable 404 on an unknown resource.
 //
-// R2 hangs the dead-link liveness probe off this handler; this block only records.
+// R2 hangs the dead-link liveness probe off this handler (see verify-dead-link.ts):
+// a `dead_link` report gets an inline verdict, every other category just records.
 
 import { z, ZodError } from 'zod';
 import { ReportCategory } from '@prisma/client';
@@ -19,6 +20,7 @@ import { withAuth } from '@/lib/api/with-auth';
 import { prisma } from '@/lib/db';
 import { logWarn } from '@/lib/log';
 import { reportBurst } from '@/lib/services/report-limits';
+import { verifyDeadLink } from '@/lib/curation/verify-dead-link';
 
 export const runtime = 'nodejs';
 
@@ -131,6 +133,21 @@ export const POST = withAuth<Ctx>(async (req, session, ctx) => {
     create: { userId: session.userId, resourceId, lessonId, note, category: body.category },
     select: { id: true, category: true, state: true },
   });
+
+  // R2: dead_link is the one category a machine can settle, so it is verified
+  // inline (bounded by liveness's 6s) — AFTER the upsert, so a re-report that
+  // reopened the row ends on the probe's verdict rather than the reopen's null.
+  // The verdict rides back in the response so the UI can say what happened
+  // instead of a generic thank-you; it never throws, so a probe failure still
+  // returns a recorded report.
+  if (body.category === 'dead_link') {
+    const deadLink = await verifyDeadLink({ resourceId, reportId: report.id });
+    return Response.json({
+      ok: true,
+      report: { ...report, state: deadLink.state },
+      deadLink: { outcome: deadLink.outcome, detail: deadLink.detail },
+    });
+  }
 
   return Response.json({ ok: true, report });
 });
