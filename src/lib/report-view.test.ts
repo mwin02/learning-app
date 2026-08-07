@@ -2,10 +2,12 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  NOTE_MAX_CHARS,
   acknowledgementFor,
   pendingLabelFor,
   reportCategoryOptions,
   reportErrorMessage,
+  tabStops,
 } from './report-view';
 
 describe('reportCategoryOptions', () => {
@@ -26,6 +28,57 @@ describe('reportCategoryOptions', () => {
       expect(opt.label.length).toBeGreaterThan(0);
       expect(opt.label).not.toContain('_');
     }
+  });
+});
+
+describe('tabStops', () => {
+  type Stop = { id: string; radioGroup?: string; checked?: boolean };
+  const read = (s: Stop) => ({ radioGroup: s.radioGroup, checked: s.checked });
+  const ids = (items: Stop[]) => tabStops(items, read).map((s) => s.id);
+
+  // The dialog's shape: a radio group, then the note field, then the buttons.
+  const panel = (checkedId?: string): Stop[] => [
+    ...['dead_link', 'wrong_topic', 'low_quality'].map((id) => ({
+      id,
+      radioGroup: 'report',
+      checked: id === checkedId,
+    })),
+    { id: 'note' },
+    { id: 'cancel' },
+    { id: 'send' },
+  ];
+
+  it('collapses a radio group to its checked member', () => {
+    expect(ids(panel('wrong_topic'))).toEqual(['wrong_topic', 'note', 'cancel', 'send']);
+  });
+
+  // The bug this exists to prevent: with DOM order, `first` stayed the top radio,
+  // so wrapping forward focused an UNCHECKED one and Space refiled the report
+  // under a category the learner never picked.
+  it('makes the checked radio the first stop, not the first radio in the DOM', () => {
+    expect(ids(panel('low_quality'))[0]).toBe('low_quality');
+  });
+
+  it('falls back to the first radio while nothing is checked', () => {
+    expect(ids(panel())).toEqual(['dead_link', 'note', 'cancel', 'send']);
+  });
+
+  it('keeps every non-radio stop, in order', () => {
+    expect(ids([{ id: 'a' }, { id: 'b' }, { id: 'c' }])).toEqual(['a', 'b', 'c']);
+  });
+
+  it('collapses each group independently', () => {
+    const items: Stop[] = [
+      { id: 'a1', radioGroup: 'a' },
+      { id: 'a2', radioGroup: 'a', checked: true },
+      { id: 'b1', radioGroup: 'b' },
+      { id: 'b2', radioGroup: 'b' },
+    ];
+    expect(ids(items)).toEqual(['a2', 'b1']);
+  });
+
+  it('is empty for no items', () => {
+    expect(ids([])).toEqual([]);
   });
 });
 
@@ -63,6 +116,12 @@ describe('reportErrorMessage', () => {
     expect(new Set(messages).size).toBe(codes.length);
   });
 
+  // The cap the route enforces and the cap the copy quotes were two independent
+  // literals, so raising NOTE_MAX_CHARS used to leave the refusal lying.
+  it('quotes the note cap the boundary actually enforces', () => {
+    expect(reportErrorMessage('INVALID_INPUT')).toContain(String(NOTE_MAX_CHARS));
+  });
+
   it('falls back for an unknown or missing code', () => {
     expect(reportErrorMessage(undefined)).toBe('Something went wrong. Please try again.');
     expect(reportErrorMessage('WAT')).toBe('Something went wrong. Please try again.');
@@ -79,9 +138,12 @@ describe('reportErrorMessage', () => {
       expect(message(60_000)).not.toMatch(/too many/i);
     });
 
-    it('names the scope and the remaining wait', () => {
+    // The cooldown is keyed on (user, resource, category), so copy that named only
+    // the resource read as "this row is blocked" — false, and it talks a learner
+    // out of reporting the second, different defect they were about to file.
+    it('names the problem scope, the resource scope and the remaining wait', () => {
       expect(message(7 * 60_000)).toBe(
-        'You already reported this resource — you can report it again in 7 minutes.'
+        'You already reported this problem with this resource — you can report a different problem now, or this one again in 7 minutes.'
       );
     });
 
@@ -91,7 +153,8 @@ describe('reportErrorMessage', () => {
     });
 
     it('degrades to a vaguer sentence when the wait is missing or junk', () => {
-      const vague = 'You already reported this resource — you can report it again shortly.';
+      const vague =
+        'You already reported this problem with this resource — you can report a different problem now, or this one again shortly.';
       expect(message(undefined)).toBe(vague);
       expect(message('soon')).toBe(vague);
       expect(message(Number.NaN)).toBe(vague);
