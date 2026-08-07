@@ -55,12 +55,30 @@ export function pendingLabelFor(category: ReportCategory): string {
   return category === 'dead_link' ? 'Checking the link…' : 'Sending…';
 }
 
-export function reportErrorMessage(code: unknown): string {
+// `retryAfterMs` arrives from untrusted JSON, so a value we can't read degrades to
+// a vaguer sentence rather than rendering "in NaN minutes".
+function retryPhrase(retryAfterMs: unknown): string {
+  if (typeof retryAfterMs !== 'number' || !Number.isFinite(retryAfterMs) || retryAfterMs <= 0) {
+    return 'shortly';
+  }
+  const minutes = Math.ceil(retryAfterMs / 60_000);
+  return minutes <= 1 ? 'in a minute' : `in ${minutes} minutes`;
+}
+
+// The route returns two 429s with different scopes, so they carry different codes.
+// RATE_LIMITED is the per-user burst across every resource. REPORT_COOLDOWN is the
+// per-(resource, category) cooldown F1 added, and rendering "too many reports
+// recently" for it is false on its face — the learner can hit it one report into a
+// limit of ten. Its copy names the two things that let them act: that the block is
+// scoped to this one resource, and when it lifts.
+export function reportErrorMessage(code: unknown, retryAfterMs?: unknown): string {
   switch (code) {
     case 'UNAUTHENTICATED':
       return 'Sign in to report a problem.';
     case 'RATE_LIMITED':
       return 'Too many reports recently — try again in a bit.';
+    case 'REPORT_COOLDOWN':
+      return `You already reported this resource — you can report it again ${retryPhrase(retryAfterMs)}.`;
     case 'INVALID_INPUT':
       return 'Please pick a problem and keep the note under 500 characters.';
     case 'NOT_FOUND':

@@ -18,8 +18,8 @@ import { z, ZodError } from 'zod';
 import { ReportCategory } from '@prisma/client';
 import { withAuth } from '@/lib/api/with-auth';
 import { prisma } from '@/lib/db';
-import { logWarn } from '@/lib/log';
-import { reportBurst } from '@/lib/services/report-limits';
+import { planReopen, resolveLessonContext } from '@/lib/services/report-intake';
+import { reportBurst, reportRepeat } from '@/lib/services/report-limits';
 import { verifyDeadLink } from '@/lib/curation/verify-dead-link';
 // R3 shares the cap with the dialog's textarea (report-view.ts is type-only-server-free).
 import { NOTE_MAX_CHARS } from '@/lib/report-view';
@@ -91,45 +91,40 @@ export const POST = withAuth<Ctx>(async (req, session, ctx) => {
     return Response.json({ error: 'Resource not found.', code: 'NOT_FOUND' }, { status: 404 });
   }
 
-  // lessonId is best-effort PLACEMENT CONTEXT, not the subject of the report, so an
-  // id we can't resolve is dropped rather than refused: the defect is still real and
-  // worth recording. Checked rather than passed straight through because an unknown
-  // id would otherwise surface as an FK violation — a 500 for a report we could keep.
-  let lessonId: string | null = null;
-  if (body.lessonId) {
-    const lesson = await prisma.lesson.findUnique({
-      where: { id: body.lessonId },
-      select: { id: true },
-    });
-    if (lesson) lessonId = lesson.id;
-    else logWarn('report.unknown_lesson', { resourceId, lessonId: body.lessonId });
+  const lessonId = body.lessonId ? await resolveLessonContext(resourceId, body.lessonId) : null;
+  const note = body.note ? body.note : null;
+
+  // Read before the upsert because the reopen rule is a function of the row's own
+  // settled resolution, which an update payload can't reference.
+  const key = {
+    userId_resourceId_category: { userId: session.userId, resourceId, category: body.category },
+  };
+  const existing = await prisma.resourceReport.findUnique({
+    where: key,
+    select: { resolution: true, priorResolution: true, updatedAt: true },
+  });
+
+  // Repetition cap. Separate from the burst cap above because the burst counts
+  // createdAt and a re-report creates nothing — without this, one existing row is a
+  // licence to run the handler (and, for dead_link, its outbound probe) in a loop.
+  // Checked before the upsert so a refused re-report writes nothing at all.
+  const repeat = reportRepeat(existing);
+  if (!repeat.allowed) {
+    return Response.json(
+      {
+        error: 'You already reported this resource recently — try again in a bit.',
+        // Its own code, not RATE_LIMITED: the two 429s have different scopes, and
+        // report-view.ts maps copy off the code alone (see reportErrorMessage).
+        code: 'REPORT_COOLDOWN',
+        details: { retryAfterMs: repeat.retryAfterMs },
+      },
+      { status: 429, headers: { 'Retry-After': String(Math.ceil(repeat.retryAfterMs / 1000)) } }
+    );
   }
 
-  const note = body.note ? body.note : null;
-  // Re-reporting REOPENS but never ERASES. Reopening is about the report's state:
-  // a resolved or dismissed report the learner raises again is fresh evidence the
-  // fix didn't take, so the operator sees it once more and the stale resolution
-  // doesn't linger next to an open complaint. The evidence itself is additive —
-  // `lessonId` and `note` are only overwritten when the new submission actually
-  // supplies one, because a re-report can legitimately carry neither. The same
-  // complaint raised from the library page has no ambient lesson, and an empty
-  // note field means "I didn't retype it", not "I retract it". Last-write-wins
-  // would make the ordinary case destructive: it would wipe the placement context
-  // that R4 triages `wrong_lesson_fit` on, and the free text that is the only
-  // evidence a `other` report carries at all.
-  const evidence = {
-    ...(lessonId ? { lessonId } : {}),
-    ...(note ? { note } : {}),
-  };
   const report = await prisma.resourceReport.upsert({
-    where: {
-      userId_resourceId_category: {
-        userId: session.userId,
-        resourceId,
-        category: body.category,
-      },
-    },
-    update: { ...evidence, state: 'open', resolution: null, resolvedAt: null },
+    where: key,
+    update: planReopen(existing, { lessonId, note }),
     create: { userId: session.userId, resourceId, lessonId, note, category: body.category },
     select: { id: true, category: true, state: true },
   });
