@@ -107,6 +107,19 @@ export const RATING_BURST_WINDOW_MS = 60 * 60 * 1000;
 export const REPORT_BURST_PER_HOUR = 10;
 export const REPORT_BURST_WINDOW_MS = 60 * 60 * 1000;
 
+// Reports F1: the minimum gap between two submissions of the SAME
+// (user, resource, category). The burst cap above counts createdAt, which is the
+// right column — others write these rows by design, so an updatedAt window spends
+// the learner's budget on writes they didn't make — but it leaves re-reports
+// unmetered: a re-report upserts an existing row and creates none, so `used` never
+// moves. The route does real work regardless (three queries and, for dead_link, an
+// inline outbound liveness probe), so the cap has to be per-submission, not per-row.
+//
+// Ten minutes because a learner who re-reports the same defect on the same resource
+// inside ten minutes is adding no information the first report didn't carry, while a
+// loop is held to six probes an hour against any one URL.
+export const REPORT_REPEAT_COOLDOWN_MS = 10 * 60 * 1000;
+
 // Phase 2.5f: targeted per-concept sourcing (sourceAndAttachConcept) budgets — the
 // thickener's spine-hole remediation. Deliberately smaller than the topic-level
 // FALLBACK_* above: a single narrow concept has far fewer good resources on the

@@ -28,18 +28,31 @@
 // `cascade: false` deliberately: a dead link on one child of a container says
 // nothing about its siblings — each child is a separate URL with a separate fate.
 //
-// Guards mirror evict-low-trust.ts: only `active` rows are probed (so a second
-// report on an already-deprecated row costs no network call — idempotent, and it
-// auto-resolves, see `already_deprecated`), `origin='generated'` rows never are
-// (authored on-ramps have no external URL to be dead), and a concurrent reject
-// surfacing as `raced` is logged, not thrown.
+// Which rows are probed is a question about SETTLEDNESS, not about `status`
+// (F1c). Only `deprecated` + `hard` is a settled dead-link defect: someone has
+// already recorded this exact verdict, so a second report costs no network call
+// and auto-resolves (`already_deprecated`). The other two non-`active` states are
+// not settled and are probed:
+//
+//   deprecated + soft (or unrecorded severity) — evict-low-trust.ts deprecates
+//     with `soft` for being DISLIKED, which says nothing about liveness. A
+//     genuinely dead row stuck at `soft` never reaches the flag a Track-patching
+//     layer reads, and Tracks are immutable, so in-flight learners keep seeing it.
+//     An authoritative verdict escalates it to `hard` in place.
+//   pending_review — still selectable (search-resources.ts's DEFAULT_STATUSES)
+//     and still sitting in persisted Paths. Closing it with "already deprecated"
+//     would be false, and would keep a dead row's chance of being approved.
+//
+// `origin='generated'` rows are never probed (authored on-ramps have no external
+// URL to be dead), and a concurrent reject surfacing as `raced` is logged, not
+// thrown — but not left open: see the re-read at the reject site (F1d).
 //
 // Runs synchronously inside the report request. Rejected alternatives: voiding
 // the promise (unsound on Cloud Run with min-instances=0 — the instance can be
 // frozen the moment the response is written) and a queue hop (a whole job type
 // for one HTTP call). See docs/resource-reports-plan.md § R2.
 
-import type { ReportState } from '@prisma/client';
+import type { Prisma, ReportState } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { applyPendingReview } from '@/lib/curation/pending-review';
 import { checkLiveness, type LivenessVerdict } from '@/lib/agents/validation/validators/liveness';
@@ -50,8 +63,9 @@ export type LivenessCheck = (url: string) => Promise<LivenessVerdict>;
 export type DeadLinkOutcome =
   // Authoritatively dead and hard-deprecated. The only outcome that acted.
   | 'confirmed_dead'
-  // The row was already out of `active` when the report arrived: the defect is
-  // settled, so the report is auto-resolved rather than left open. A state we
+  // The row was already hard-deprecated when the report arrived, or another
+  // request settled it mid-probe: the defect is recorded, so the report is
+  // auto-resolved rather than left open. A state we
   // KNOW, unlike the guesses above it — R3 can tell the learner the resource is
   // already gone, and R4 never sees a contextless duplicate.
   | 'already_deprecated'
@@ -106,32 +120,20 @@ async function probe({
   reportId: string;
   check?: LivenessCheck;
 }): Promise<DeadLinkProbe> {
-  const resource = await prisma.resource.findUnique({
-    where: { id: resourceId },
-    select: { status: true, origin: true, url: true, deprecationSeverity: true },
-  });
+  const resource = await loadResource(resourceId);
   if (!resource) {
     log('report.dead-link-skipped', { resourceId, reason: 'not-found' });
     return OPEN;
   }
 
-  // Already out of `active`: the defect this report names is settled, so resolve
-  // it instead of leaving it open. R1's reopen rule (a re-report clears
-  // `resolution` and flips back to `open`) is right in general — a re-report is
-  // evidence the fix didn't take — but it fires on the upsert, before anyone has
-  // looked at the row. Here we can see that the fix demonstrably DID take, and
-  // this runs after, so it gets the last word. Without this, every learner who
-  // re-reports an already-killed link mints a contextless open row in R4's queue.
-  if (resource.status !== 'active') {
-    const resolution = `resource already deprecated (${resource.deprecationSeverity ?? 'unspecified'} severity)`;
-    await resolve(reportId, resolution);
-    log('report.dead-link-already-deprecated', {
-      resourceId,
-      reportId,
-      severity: resource.deprecationSeverity,
-    });
-    return { outcome: 'already_deprecated', detail: resolution, state: 'auto_resolved' };
-  }
+  // The defect this report names is already settled, so resolve it instead of
+  // leaving it open. R1's reopen rule (a re-report clears `resolution` and flips
+  // back to `open`) is right in general — a re-report is evidence the fix didn't
+  // take — but it fires on the upsert, before anyone has looked at the row. Here
+  // we can see that the fix demonstrably DID take, and this runs after, so it gets
+  // the last word. Without this, every learner who re-reports an already-killed
+  // link mints a contextless open row in R4's queue.
+  if (isSettledDead(resource)) return alreadyDeprecated(resourceId, reportId, resource);
 
   // An authored on-ramp has no external URL to be dead, so there is nothing to
   // probe and nothing to conclude — a dead-link report against one is an oddity
@@ -153,6 +155,82 @@ async function probe({
     return { outcome: 'inconclusive', detail: verdict.reason, state: 'open' };
   }
 
+  return resource.status === 'deprecated'
+    ? escalateToHard(resourceId, reportId, verdict.reason)
+    : rejectAsDead(resourceId, reportId, verdict.reason);
+}
+
+const RESOURCE_SELECT = {
+  status: true,
+  origin: true,
+  url: true,
+  deprecationSeverity: true,
+} as const;
+
+type ResourceRow = Prisma.ResourceGetPayload<{ select: typeof RESOURCE_SELECT }>;
+
+function loadResource(resourceId: string): Promise<ResourceRow | null> {
+  return prisma.resource.findUnique({ where: { id: resourceId }, select: RESOURCE_SELECT });
+}
+
+// The one settled shape. An unrecorded severity is treated as unsettled on
+// purpose: nothing asserts the row is dead, so it is worth a probe, and the probe
+// can supply the `hard` the row is missing.
+function isSettledDead(resource: ResourceRow): boolean {
+  return resource.status === 'deprecated' && resource.deprecationSeverity === 'hard';
+}
+
+async function alreadyDeprecated(
+  resourceId: string,
+  reportId: string,
+  resource: ResourceRow
+): Promise<DeadLinkProbe> {
+  const resolution = `resource already deprecated (${resource.deprecationSeverity ?? 'unspecified'} severity)`;
+  await resolve(reportId, resolution);
+  log('report.dead-link-already-deprecated', {
+    resourceId,
+    reportId,
+    severity: resource.deprecationSeverity,
+  });
+  return { outcome: 'already_deprecated', detail: resolution, state: 'auto_resolved' };
+}
+
+// An authoritatively dead row that is already deprecated at a lower severity
+// (F1c). applyPendingReview can't reach it — its reject matches only
+// `pending_review`/`active` rows — and it doesn't need to: the candidate links
+// were dropped and readiness recomputed when the row was first deprecated, so
+// what is missing is only the `hard` flag itself.
+async function escalateToHard(
+  resourceId: string,
+  reportId: string,
+  reason: string
+): Promise<DeadLinkProbe> {
+  const { count } = await prisma.resource.updateMany({
+    // Spelled as an explicit OR rather than `{ not: 'hard' }`, which compiles to a
+    // plain SQL inequality and is therefore NULL — not true — for a NULL severity.
+    // NULL is the case that matters most: the column arrived with no backfill
+    // (20260606000000_resource_deprecation_severity), so every pre-June deprecation
+    // still carries NULL, and those are exactly the rows nobody has ever recorded a
+    // liveness verdict on.
+    where: {
+      id: resourceId,
+      status: 'deprecated',
+      OR: [{ deprecationSeverity: 'soft' }, { deprecationSeverity: null }],
+    },
+    data: { deprecationSeverity: 'hard' },
+  });
+  if (count === 0) return settledUnderUs(resourceId, reportId, reason);
+
+  await resolve(reportId, reason);
+  log('report.dead-link-escalated', { resourceId, reportId, reason });
+  return { outcome: 'confirmed_dead', detail: reason, state: 'auto_resolved' };
+}
+
+async function rejectAsDead(
+  resourceId: string,
+  reportId: string,
+  reason: string
+): Promise<DeadLinkProbe> {
   const result = await applyPendingReview({
     action: 'reject',
     resourceId,
@@ -160,24 +238,42 @@ async function probe({
     cascade: false,
   });
   if (result.kind !== 'rejected') {
-    // A concurrent decision won, or the row left the reviewable state under us.
-    // The resource is no longer ours to deprecate — record what the probe saw and
-    // hand the report to the operator rather than throwing away a real signal.
-    await stamp(reportId, verdict.reason);
     log('report.dead-link-reject-skipped', { resourceId, reportId, result: result.kind });
-    return { outcome: 'inconclusive', detail: verdict.reason, state: 'open' };
+    return settledUnderUs(resourceId, reportId, reason);
   }
 
-  await resolve(reportId, verdict.reason);
+  await resolve(reportId, reason);
   log('report.dead-link-confirmed', {
     resourceId,
     reportId,
-    reason: verdict.reason,
+    reason,
     conceptLinksRemoved: result.conceptLinksRemoved,
     pathsRecomputed: result.pathsRecomputed,
     pathsRegressed: result.pathsRegressed,
   });
-  return { outcome: 'confirmed_dead', detail: verdict.reason, state: 'auto_resolved' };
+  return { outcome: 'confirmed_dead', detail: reason, state: 'auto_resolved' };
+}
+
+// A write we expected to win didn't (F1d). `raced` alone can't tell us whether
+// another request just settled this row or whether it slipped out of a reviewable
+// state for some other reason, and guessing "inconclusive" produces the exact
+// outcome the already-deprecated branch exists to prevent: two learners on the
+// same 404 inside the probe's 6s window get contradictory copy, and R4 inherits an
+// open report on a settled resource. So re-read and let the row answer.
+async function settledUnderUs(
+  resourceId: string,
+  reportId: string,
+  reason: string
+): Promise<DeadLinkProbe> {
+  const current = await loadResource(resourceId);
+  if (current && current.status === 'deprecated') {
+    return alreadyDeprecated(resourceId, reportId, current);
+  }
+  // Still reviewable, or gone: the resource is not ours to deprecate, but the
+  // probe saw something real — record it and hand the report to the operator.
+  await stamp(reportId, reason);
+  log('report.dead-link-unsettled', { resourceId, reportId, status: current?.status ?? null });
+  return { outcome: 'inconclusive', detail: reason, state: 'open' };
 }
 
 // The verdict is written even when nothing was acted on, so R4's operator opens

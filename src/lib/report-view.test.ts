@@ -56,13 +56,46 @@ describe('pendingLabelFor', () => {
 
 describe('reportErrorMessage', () => {
   it('maps each route code to its own copy', () => {
-    const codes = ['UNAUTHENTICATED', 'RATE_LIMITED', 'INVALID_INPUT', 'NOT_FOUND'];
-    const messages = codes.map(reportErrorMessage);
+    const codes = ['UNAUTHENTICATED', 'RATE_LIMITED', 'REPORT_COOLDOWN', 'INVALID_INPUT', 'NOT_FOUND'];
+    // Not `codes.map(reportErrorMessage)` — map would pass the array index as
+    // retryAfterMs and quietly change what REPORT_COOLDOWN renders.
+    const messages = codes.map((code) => reportErrorMessage(code));
     expect(new Set(messages).size).toBe(codes.length);
   });
 
   it('falls back for an unknown or missing code', () => {
     expect(reportErrorMessage(undefined)).toBe('Something went wrong. Please try again.');
     expect(reportErrorMessage('WAT')).toBe('Something went wrong. Please try again.');
+  });
+
+  // F1's per-row cooldown is a second 429 with a different scope. Sharing
+  // RATE_LIMITED's line told a learner one report into a limit of ten that they had
+  // filed "too many reports recently" — false, and actionable by nobody.
+  describe('REPORT_COOLDOWN', () => {
+    const message = (retryAfterMs?: unknown) => reportErrorMessage('REPORT_COOLDOWN', retryAfterMs);
+
+    it('is distinct from the burst cap copy', () => {
+      expect(message(60_000)).not.toBe(reportErrorMessage('RATE_LIMITED'));
+      expect(message(60_000)).not.toMatch(/too many/i);
+    });
+
+    it('names the scope and the remaining wait', () => {
+      expect(message(7 * 60_000)).toBe(
+        'You already reported this resource — you can report it again in 7 minutes.'
+      );
+    });
+
+    it('rounds a partial minute up rather than saying zero', () => {
+      expect(message(90_000)).toMatch(/in 2 minutes/);
+      expect(message(30_000)).toMatch(/in a minute/);
+    });
+
+    it('degrades to a vaguer sentence when the wait is missing or junk', () => {
+      const vague = 'You already reported this resource — you can report it again shortly.';
+      expect(message(undefined)).toBe(vague);
+      expect(message('soon')).toBe(vague);
+      expect(message(Number.NaN)).toBe(vague);
+      expect(message(-1)).toBe(vague);
+    });
   });
 });
