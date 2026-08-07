@@ -28,6 +28,32 @@ export const NOTE_MAX_CHARS = 500;
 
 export type ReportCategoryOption = { value: ReportCategory; label: string };
 
+// Sequential focus order collapses a radio group to ONE stop — the checked radio,
+// or the first when none is checked — while querySelectorAll returns DOM order.
+// The dialog's focus trap needs the former, and the difference is not cosmetic:
+// built on DOM order, the trap's `first` is always the first radio, so it stops
+// being the panel's real first stop as soon as a learner picks anything but the
+// top option (Shift+Tab then escapes the modal), and wrapping forward calls
+// .focus() on an UNCHECKED radio — which Space would then check, filing the
+// report under a category the learner never chose.
+//
+// Generic over the element type so this stays pure and unit-testable without a DOM.
+export function tabStops<T>(
+  items: readonly T[],
+  read: (item: T) => { radioGroup?: string | null; checked?: boolean }
+): T[] {
+  const representative = new Map<string, T>();
+  for (const item of items) {
+    const { radioGroup, checked } = read(item);
+    if (!radioGroup) continue;
+    if (!representative.has(radioGroup) || checked) representative.set(radioGroup, item);
+  }
+  return items.filter((item) => {
+    const { radioGroup } = read(item);
+    return !radioGroup || representative.get(radioGroup) === item;
+  });
+}
+
 // `generated` rows are the AI-authored on-ramp lessons: they have no external URL,
 // so "Link is broken" is meaningless for them and R2 skips the probe anyway. The
 // pane knows this from `resource.content != null` (documented in track-view.ts as
@@ -69,8 +95,9 @@ function retryPhrase(retryAfterMs: unknown): string {
 // RATE_LIMITED is the per-user burst across every resource. REPORT_COOLDOWN is the
 // per-(resource, category) cooldown F1 added, and rendering "too many reports
 // recently" for it is false on its face — the learner can hit it one report into a
-// limit of ten. Its copy names the two things that let them act: that the block is
-// scoped to this one resource, and when it lifts.
+// limit of ten. Its copy names the three things that let them act: that the block
+// is scoped to this one PROBLEM (a different category on the same row goes
+// through), that it is scoped to this one resource, and when it lifts.
 export function reportErrorMessage(code: unknown, retryAfterMs?: unknown): string {
   switch (code) {
     case 'UNAUTHENTICATED':
@@ -78,9 +105,9 @@ export function reportErrorMessage(code: unknown, retryAfterMs?: unknown): strin
     case 'RATE_LIMITED':
       return 'Too many reports recently — try again in a bit.';
     case 'REPORT_COOLDOWN':
-      return `You already reported this resource — you can report it again ${retryPhrase(retryAfterMs)}.`;
+      return `You already reported this problem with this resource — you can report a different problem now, or this one again ${retryPhrase(retryAfterMs)}.`;
     case 'INVALID_INPUT':
-      return 'Please pick a problem and keep the note under 500 characters.';
+      return `Please pick a problem and keep the note under ${NOTE_MAX_CHARS} characters.`;
     case 'NOT_FOUND':
       return 'This resource is no longer available.';
     default:
