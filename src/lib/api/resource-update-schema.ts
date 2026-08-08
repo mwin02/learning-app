@@ -21,11 +21,15 @@
 
 import { z } from 'zod';
 
+// Exported so a form can reject an out-of-range duration in the operator's own
+// words instead of posting it and reading back a generic validation failure.
+export const MAX_EDITABLE_DURATION_MIN = 6000;
+
 export const resourceUpdateSchema = z.object({
   resourceId: z.string().trim().min(1),
   fields: z
     .strictObject({
-      durationMin: z.number().int().min(1).max(6000),
+      durationMin: z.number().int().min(1).max(MAX_EDITABLE_DURATION_MIN),
       title: z.string().trim().min(1),
       summary: z.string().trim().min(10),
       difficulty: z.enum(['beginner', 'intermediate', 'advanced']),

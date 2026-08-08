@@ -5,15 +5,22 @@
 // category offers is report-triage-view.ts's pure rule, and what each action does
 // is report-triage.ts's. This sends and refreshes.
 //
-// Two actions need a payload, so they reveal a small inline field instead of
-// firing immediately: `refile` (the target topic) and `edit` (the corrected
-// fields). Everything else is one click.
+// Three actions need a payload, so they reveal a small inline control instead of
+// firing immediately: `refile` (the target topic), `edit` (the corrected fields)
+// and — when the group was reported from more than one lesson — `unlink` (which
+// lesson). Everything else is one click.
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import type { ReportCategory, Difficulty } from '@prisma/client';
 import type { TriageAction } from '@/lib/curation/report-triage';
-import { actionsForCategory, ACTION_LABELS, ACTION_CLASSES } from '@/lib/report-triage-view';
+import {
+  actionsForCategory,
+  ACTION_LABELS,
+  ACTION_CLASSES,
+  type LessonChoice,
+} from '@/lib/report-triage-view';
+import { MAX_EDITABLE_DURATION_MIN } from '@/lib/api/resource-update-schema';
 
 type EditFields = {
   durationMin?: number;
@@ -26,18 +33,23 @@ type EditFields = {
 export function TriageActions({
   reportId,
   category,
+  lessonChoices,
   currentTopic,
   currentRequiresPurchase,
 }: {
   reportId: string;
   category: ReportCategory;
+  lessonChoices: LessonChoice[];
   currentTopic: string | null;
   currentRequiresPurchase: boolean;
 }) {
   const router = useRouter();
   const [isRefreshing, startTransition] = useTransition();
   const [busy, setBusy] = useState<TriageAction | null>(null);
-  const [open, setOpen] = useState<'refile' | 'edit' | null>(null);
+  const [open, setOpen] = useState<'refile' | 'edit' | 'unlink' | null>(null);
+  // Which reported lesson `unlink` acts on. It closes only the reports about the
+  // lesson it unlinked, so the choice IS the scope of the resolution.
+  const [pickedLessonReport, setPickedLessonReport] = useState<string | null>(null);
   const [topic, setTopic] = useState(currentTopic ?? '');
   const [duration, setDuration] = useState('');
   const [difficulty, setDifficulty] = useState('');
@@ -55,15 +67,30 @@ export function TriageActions({
 
   const disabled = busy !== null || isRefreshing;
   const actions = actionsForCategory(category);
+  // Derived, never stored: a successful unlink refreshes the page and the target
+  // it resolved leaves `lessonChoices`, but this component does not remount. A
+  // stored id would then match no <option> — the browser would show the first
+  // remaining lesson while the value still pointed at the closed report, so the
+  // next click acted on a resolved row and reported `not_open` against a lesson
+  // the operator was never shown. Falling back keeps what is displayed and what
+  // is sent the same thing.
+  const lessonReport =
+    lessonChoices.find((c) => c.reportId === pickedLessonReport)?.reportId ??
+    lessonChoices[0]?.reportId ??
+    reportId;
 
-  async function send(action: TriageAction, extra: Record<string, unknown> = {}) {
+  async function send(
+    action: TriageAction,
+    extra: Record<string, unknown> = {},
+    targetReportId = reportId,
+  ) {
     setBusy(action);
     setMsg(null);
     try {
       const res = await fetch('/api/playground/reports', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ reportId, action, resolveSiblings, ...extra }),
+        body: JSON.stringify({ reportId: targetReportId, action, resolveSiblings, ...extra }),
       });
       const data = await res.json().catch(() => ({}) as Record<string, unknown>);
       if (!res.ok) {
@@ -85,8 +112,20 @@ export function TriageActions({
 
   function submitEdit() {
     const fields: EditFields = {};
-    const minutes = Number(duration);
-    if (duration.trim() && Number.isInteger(minutes) && minutes > 0) fields.durationMin = minutes;
+    // A duration the API would reject is reported here rather than dropped — the
+    // old silent skip posted the OTHER fields and reported success, so "90 min"
+    // or "12.5" looked applied and was not.
+    if (duration.trim()) {
+      const minutes = Number(duration);
+      if (!Number.isInteger(minutes) || minutes < 1 || minutes > MAX_EDITABLE_DURATION_MIN) {
+        setMsg({
+          ok: false,
+          text: `durationMin must be a whole number of minutes, 1–${MAX_EDITABLE_DURATION_MIN} — “${duration.trim()}” was not applied.`,
+        });
+        return;
+      }
+      fields.durationMin = minutes;
+    }
     if (difficulty) fields.difficulty = difficulty as Difficulty;
     if (purchaseTouched) fields.requiresPurchase = requiresPurchase;
     if (Object.keys(fields).length === 0) {
@@ -104,11 +143,20 @@ export function TriageActions({
             key={action}
             type="button"
             disabled={disabled}
-            onClick={() =>
-              action === 'refile' || action === 'edit'
-                ? setOpen(open === action ? null : action)
-                : void send(action)
-            }
+            onClick={() => {
+              // One reported lesson (the common case) needs no picker — but it
+              // still acts on THAT lesson's report, which is not always the
+              // group's oldest.
+              if (action === 'unlink' && lessonChoices.length <= 1) {
+                void send(action, {}, lessonChoices[0]?.reportId ?? reportId);
+                return;
+              }
+              if (action === 'refile' || action === 'edit' || action === 'unlink') {
+                setOpen(open === action ? null : action);
+                return;
+              }
+              void send(action);
+            }}
             className={`rounded border px-2 py-0.5 text-xs disabled:cursor-not-allowed disabled:opacity-40 ${ACTION_CLASSES[action]}`}
           >
             {busy === action ? '…' : ACTION_LABELS[action]}
@@ -123,6 +171,31 @@ export function TriageActions({
           also close duplicates
         </label>
       </div>
+
+      {open === 'unlink' && (
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={lessonReport}
+            onChange={(e) => setPickedLessonReport(e.target.value)}
+            className="max-w-xs rounded border px-2 py-0.5 text-xs"
+          >
+            {lessonChoices.map((c) => (
+              <option key={c.reportId} value={c.reportId}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => void send('unlink', {}, lessonReport)}
+            className="rounded border border-amber-600 px-2 py-0.5 text-xs text-amber-700 disabled:opacity-40"
+          >
+            Unlink
+          </button>
+          <span className="text-xs text-gray-500">closes only this lesson&rsquo;s reports</span>
+        </div>
+      )}
 
       {open === 'refile' && (
         <div className="flex flex-wrap items-center gap-2">
