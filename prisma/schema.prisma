@@ -457,6 +457,15 @@ model Progress {
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   lesson      Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
   completedAt DateTime @default(now())
+  // Reports F5: set when this row was CARRIED from a rebuilt Track rather than earned
+  // by the learner here, naming the old lesson whose completion covered it. The
+  // rebuild's old Track and its Progress rows are deliberately kept, so a carried row
+  // is a second record of one study session — anything counting completion EVENTS
+  // (the home heatmap) must skip these or it double-counts real activity days.
+  // Deliberately NOT an FK, for the same reason as CourseRequest.replacesTrackId: the
+  // old Track may be cleaned up, and an FK's SetNull would silently reclassify a
+  // carried row as a genuine completion — the exact inflation this column prevents.
+  carriedFromLessonId String?
 
   @@id([userId, lessonId])
   @@index([lessonId])
@@ -1042,6 +1051,14 @@ model CourseRequest {
   // an id, for the same reason CourseRequest.trackId is nullable: the old Track may be
   // cleaned up, and this record of what it replaced must survive that.
   replacesTrackId String?
+  // Reports F5: stamped once the progress carry-over for this rebuild has been
+  // settled — either applied, or deliberately skipped (nothing completed to carry,
+  // or this build lost its topic to a newer sibling and nothing points at its
+  // Track). The durable record the carry-over previously lacked: it now runs OUTSIDE
+  // the slot-repoint transaction, so a failure leaves this null and the sweep retries
+  // it, and a later assembler pass can no longer resurrect lessons the learner has
+  // since un-completed. Null for first builds (nothing to carry, ever).
+  carriedOverAt   DateTime?
   // Failure diagnostic when status=failed.
   error          String?
   // H3 (audit 9.4): per-build token usage, written by the worker at finish —

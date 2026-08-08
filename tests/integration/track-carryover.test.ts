@@ -14,11 +14,16 @@
 import { beforeAll, afterAll, it, expect } from 'vitest';
 import { CourseRequestStatus, ProgramStatus } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import { maybeAssembleProgram } from '@/lib/services/program';
+import { maybeAssembleProgram, sweepPendingCarryOvers } from '@/lib/services/program';
 import { regenerateTrack } from '@/lib/services/regenerate-track';
 import { describeDb } from './db';
 
 const MARK = '__verify_carry__';
+
+// Completion days well before the rebuild, so "carried the old timestamp" and "stamped
+// today" cannot be confused for one another.
+const LONG_AGO = new Date('2026-01-06T10:00:00.000Z');
+const LESS_LONG_AGO = new Date('2026-02-17T10:00:00.000Z');
 
 async function cleanup() {
   await prisma.program.deleteMany({ where: { goal: { startsWith: MARK } } }); // cascades ProgramPath + CourseRequest
@@ -175,6 +180,32 @@ const completedTitles = async (userId: string, trackId: string) => {
   });
   return rows.map((r) => r.lesson.title).sort();
 };
+const completedAtByTitle = async (userId: string, trackId: string) => {
+  const rows = await prisma.progress.findMany({
+    where: { userId, lesson: { trackId } },
+    select: { completedAt: true, lesson: { select: { title: true } } },
+  });
+  return Object.fromEntries(rows.map((r) => [r.lesson.title, r.completedAt]));
+};
+// The home page's heatmap query (src/app/page.tsx), as a count of completion EVENTS per
+// day. Duplicated here on purpose: the point of the assertion is that this exact shape
+// stays truthful across a rebuild, and a helper shared with the page would hide a
+// regression in it.
+const heatDays = async (userId: string) => {
+  const rows = await prisma.progress.findMany({
+    where: { userId, carriedFromLessonId: null },
+    select: { completedAt: true },
+  });
+  const byDay: Record<string, number> = {};
+  for (const r of rows) {
+    const day = r.completedAt.toISOString().slice(0, 10);
+    byDay[day] = (byDay[day] ?? 0) + 1;
+  }
+  return byDay;
+};
+const carriedOverAt = async (requestId: string) =>
+  (await prisma.courseRequest.findUniqueOrThrow({ where: { id: requestId }, select: { carriedOverAt: true } }))
+    .carriedOverAt;
 const slotTrackId = async (programId: string, topic: string) =>
   (await prisma.programPath.findFirstOrThrow({ where: { programId, topic }, select: { trackId: true } })).trackId;
 
@@ -185,7 +216,10 @@ describeDb('progress carry-over across a rebuild (R6)', () => {
   it('carries completed material onto the rebuilt Track, through splits and merges', async () => {
     const slot = await seedSlot('happy');
     await prisma.progress.createMany({
-      data: [{ userId: slot.userId, lessonId: slot.lessons.limits }, { userId: slot.userId, lessonId: slot.lessons.derivatives }],
+      data: [
+        { userId: slot.userId, lessonId: slot.lessons.limits, completedAt: LONG_AGO },
+        { userId: slot.userId, lessonId: slot.lessons.derivatives, completedAt: LESS_LONG_AGO },
+      ],
     });
 
     const result = await regenerateTrack({ userId: slot.userId, programId: slot.programId, trackId: slot.trackId });
@@ -205,9 +239,38 @@ describeDb('progress carry-over across a rebuild (R6)', () => {
       'limits-only',
     ]);
 
+    // R6 #1: the carried rows keep the DAY THE WORK HAPPENED, taken from the old
+    // lessons that covered them — the rebuild day gets nothing.
+    const at = await completedAtByTitle(slot.userId, rebuilt.trackId);
+    expect(at['limits-only']).toEqual(LONG_AGO);
+    expect(at['continuity-only']).toEqual(LONG_AGO);
+    expect(at['derivatives-plus']).toEqual(LESS_LONG_AGO);
+
+    // …and every carried row is MARKED as carried, naming the old lesson it came from.
+    // Timestamps alone only move the inflation: the old Track's rows are kept, so three
+    // carried rows against two real completions would make Jan 6 read 3 and Feb 17 read
+    // 2 on a heatmap that was correct before the rebuild. The learner did two lessons on
+    // two days, and that is what the query must still say.
+    const carriedFrom = await prisma.progress.findMany({
+      where: { userId: slot.userId, lesson: { trackId: rebuilt.trackId } },
+      select: { carriedFromLessonId: true, lesson: { select: { title: true } } },
+    });
+    expect(Object.fromEntries(carriedFrom.map((r) => [r.lesson.title, r.carriedFromLessonId]))).toEqual({
+      'limits-only': slot.lessons.limits,
+      'continuity-only': slot.lessons.limits,
+      'derivatives-plus': slot.lessons.derivatives,
+    });
+    expect(await heatDays(slot.userId)).toEqual({
+      [LONG_AGO.toISOString().slice(0, 10)]: 1,
+      [LESS_LONG_AGO.toISOString().slice(0, 10)]: 1,
+    });
+
     // The old Track and its progress are untouched — the evidence for why the rebuild
     // happened, and nothing here mutates a built Track.
     expect(await completedTitles(slot.userId, slot.trackId)).toEqual(['derivatives', 'limits']);
+    // …and the rebuild is recorded as settled, which is what stops a later assembler
+    // pass from carrying it a second time.
+    expect(await carriedOverAt(result.requestId)).not.toBeNull();
   });
 
   it('carries only for the learner who requested the rebuild', async () => {
@@ -258,9 +321,11 @@ describeDb('progress carry-over across a rebuild (R6)', () => {
     expect(await completedTitles(slot.userId, built.trackId)).toEqual([]);
   });
 
-  it('does not resurrect a lesson the learner un-completed after the carry-over', async () => {
+  it('does not resurrect lessons the learner un-completed after the carry-over', async () => {
     const slot = await seedSlot('rerun');
-    await prisma.progress.create({ data: { userId: slot.userId, lessonId: slot.lessons.limits } });
+    await prisma.progress.create({
+      data: { userId: slot.userId, lessonId: slot.lessons.limits, completedAt: LONG_AGO },
+    });
 
     const result = await regenerateTrack({ userId: slot.userId, programId: slot.programId, trackId: slot.trackId });
     expect(result.ok).toBe(true);
@@ -269,10 +334,37 @@ describeDb('progress carry-over across a rebuild (R6)', () => {
     await maybeAssembleProgram(slot.programId);
     expect(await completedTitles(slot.userId, rebuilt.trackId)).toEqual(['continuity-only', 'limits-only']);
 
-    await prisma.progress.deleteMany({ where: { userId: slot.userId, lessonId: rebuilt.lessons['limits-only'] } });
-    // The assembler re-runs on its own (the stuck-Program sweep, a sibling finishing
-    // later). A re-run must be a no-op, not a second carry-over.
+    // A PARTIAL un-tick was always safe. A FULL one was not (Stack #3): the old guard
+    // read "no progress on the new Track" as "never carried", and the assembler re-runs
+    // after every sibling of the program terminates — forever. carriedOverAt is what
+    // makes the difference, so un-tick everything.
+    await prisma.progress.deleteMany({ where: { userId: slot.userId, lesson: { trackId: rebuilt.trackId } } });
     await maybeAssembleProgram(slot.programId);
-    expect(await completedTitles(slot.userId, rebuilt.trackId)).toEqual(['continuity-only']);
+    expect(await completedTitles(slot.userId, rebuilt.trackId)).toEqual([]);
+  });
+
+  it('completes a carry-over that did not settle, on a Program that is already ready', async () => {
+    const slot = await seedSlot('sweep');
+    await prisma.progress.create({
+      data: { userId: slot.userId, lessonId: slot.lessons.limits, completedAt: LONG_AGO },
+    });
+
+    const result = await regenerateTrack({ userId: slot.userId, programId: slot.programId, trackId: slot.trackId });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const rebuilt = await fulfillWith(result.requestId, slot.pathId, 'sweep');
+    await maybeAssembleProgram(slot.programId);
+
+    // Stand in for the carry-over having failed: unsettled marker, no rows. The repoint
+    // survives regardless — it commits in its own transaction now (R6 #4).
+    await prisma.progress.deleteMany({ where: { userId: slot.userId, lesson: { trackId: rebuilt.trackId } } });
+    await prisma.courseRequest.update({ where: { id: result.requestId }, data: { carriedOverAt: null } });
+    expect(await slotTrackId(slot.programId, slot.topic)).toBe(rebuilt.trackId);
+
+    // The Program is `ready`, so the stuck-Program sweep will never look at it and no
+    // further sibling is coming. This is the only route back.
+    await sweepPendingCarryOvers();
+    expect(await completedTitles(slot.userId, rebuilt.trackId)).toEqual(['continuity-only', 'limits-only']);
+    expect(await carriedOverAt(result.requestId)).not.toBeNull();
   });
 });
