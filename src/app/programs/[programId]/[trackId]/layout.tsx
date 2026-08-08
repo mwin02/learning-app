@@ -34,6 +34,9 @@ export default async function ProgramTrackLayout({
   // Unenrolled (anonymous included): the program layout shows the enroll
   // prompt before children render, so this redirect is defense-in-depth.
   if (access.kind === 'unenrolled') redirect(`/programs/${programId}`);
+  // R8: this course was rebuilt and the slot now points elsewhere — send the
+  // learner to the Track that replaced theirs rather than 404ing their bookmark.
+  if (access.kind === 'moved') redirect(`/programs/${programId}/${access.trackId}`);
   if (access.kind !== 'ok') notFound();
 
   return (
