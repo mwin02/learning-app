@@ -267,6 +267,33 @@ has a 30s stop timeout; the worker releases its claim in ~1s) before resetting.
 
 Rollback is the same three steps with the previous tag.
 
+### Ordering when one change spans app, migrations and worker
+
+The asymmetry above becomes a correctness problem the moment a feature's UI ships
+automatically while the code that makes it *do the right thing* lives worker-side. The
+resource-reports rebuild feature is the worked example: the regeneration route and its
+button are app code, but `maybeAssembleProgram` — which picks the winning fulfilled request,
+carries progress over, and sweeps pending carry-overs — is reachable only from `course-worker.ts`
+and `sweepStuckPrograms`. Nothing in the Next.js app calls it.
+
+**The only safe sequence is merge → migrations applied → worker reset (§9).** Both
+deviations are live failure modes, and both are silent:
+
+- **App ahead of worker.** The learner gets a working button driven by the *old* assembler:
+  no `ORDER BY` on the sibling `CourseRequest` rows it repoints from (so the program slot can
+  be repointed back to the very Track being replaced) and no carry-over (the rebuilt course
+  reads 0%). The monthly rebuild quota is spent and no error is surfaced anywhere.
+- **Worker ahead of migrations.** The new assembler selects columns the DB does not have yet
+  — both on **`CourseRequest`**: `replacesTrackId` and `carriedOverAt`. Prisma raises **P2022
+  on every `maybeAssembleProgram` call**, which breaks Program finalization for *all* builds,
+  not just rebuilds. The pending-carry-over sweep fails the same way.
+
+Migrations run as a step inside `cloudbuild.yaml`, ahead of the deploy, so "merge →
+migrations" is automatic; what needs a human is holding the worker reset until that build
+is green. Between the merge and the reset the button is live and wrong, so keep the gap
+short and do not merge such a stack half-way (see the per-feature merge checklist —
+`docs/resource-reports-plan.md` § "Merge checklist" for this one).
+
 ## 10. Operations
 
 | Task | Command |
