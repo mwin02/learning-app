@@ -37,7 +37,7 @@ import {
   reclaimStale,
   requeueCourseRequest,
 } from '@/lib/services/course-request';
-import { maybeAssembleProgram, sweepStuckPrograms } from '@/lib/services/program';
+import { maybeAssembleProgram, sweepPendingCarryOvers, sweepStuckPrograms } from '@/lib/services/program';
 
 // Workers-A2: `requeued` is NON-terminal — the request went back to `queued` (topic
 // contention backoff, or a graceful-shutdown release) and a later claim retries it.
@@ -389,6 +389,9 @@ export async function tickOnce(opts: { workerId?: string; shutdownSignal?: Abort
   // Backstop for Programs stranded in `building` (last-sibling hook failure or a
   // worker crash after finishCourseRequest) — reclaimStale doesn't re-trigger assembly.
   await sweepStuckPrograms();
+  // Reports F5: and for rebuilds whose carry-over never settled — their Program is
+  // `ready`, so the stuck sweep above never looks at it.
+  await sweepPendingCarryOvers();
   const cr = await claimNextQueued(opts.workerId);
   if (!cr) return false;
   await processCourseRequest(cr, { shutdownSignal: opts.shutdownSignal });

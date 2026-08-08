@@ -52,7 +52,10 @@ export default async function Home({
         }),
         loadContinueCard(viewer.userId),
         prisma.progress.findMany({
-          where: { userId: viewer.userId, completedAt: { gte: heatSince } },
+          // Carried rows excluded (F5): a track rebuild copies the learner's completions
+          // onto the new Track's lessons while the old Track's rows are kept, so counting
+          // both would show two-to-three completions on a day they finished one lesson.
+          where: { userId: viewer.userId, completedAt: { gte: heatSince }, carriedFromLessonId: null },
           select: { completedAt: true },
         }),
       ])

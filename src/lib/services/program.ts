@@ -184,32 +184,49 @@ type FulfilledSibling = {
   trackId: string;
   replacesTrackId: string | null;
   userId: string | null;
+  carriedOverAt: Date | null;
 };
 
-// Reports R6: the progress carry-over for every REBUILD among the fulfilled siblings,
-// as insert operations for the repoint transaction below. Returning ops rather than
-// writing them here is the point — the carry-over commits WITH the repoint, so the
-// rebuilt Track is never momentarily visible in the slot with an empty progress bar.
+// Stamp the "carry-over settled" marker, but only from unset — so two concurrent
+// assembler passes can both run this and the second is a no-op rather than a second
+// carry-over.
+const markCarriedOver = (requestId: string) =>
+  prisma.courseRequest.updateMany({
+    where: { id: requestId, carriedOverAt: null },
+    data: { carriedOverAt: new Date() },
+  });
+
+// Reports R6/F5: the progress carry-over for every REBUILD among the fulfilled siblings.
 //
-// Only the winner per topic is considered: the repoint applies its updateMany calls in
+// Runs AFTER the repoint transaction, not inside it (F5, R6 #4): an insert failure here
+// must not roll the slot repoint back — a rebuilt course the learner has to re-tick is
+// bad, one that never becomes visible is worse. The cost is that the new Track can be
+// visible with an empty progress bar for the moment between the two commits; the marker
+// below is what makes that moment recoverable rather than permanent.
+//
+// Idempotence is the marker's job, not the Progress rows' (F5, Stack #3). Inferring
+// "already carried" from progress on the new Track meant a learner who un-ticked every
+// carried lesson had them re-inserted by the next assembler pass — and that pass runs
+// after EVERY sibling of the program terminates, forever.
+//
+// Only the winner per topic is carried: the repoint applies its updateMany calls in
 // sibling order, so for a topic with several fulfilled builds the last one is the Track
 // the learner will actually see, and crediting a loser's lessons would write progress
-// into a Track nothing points at.
-async function carryOverOps(
-  programId: string,
-  fulfilled: FulfilledSibling[],
-): Promise<Prisma.PrismaPromise<Prisma.BatchPayload>[]> {
+// into a Track nothing points at. Losers are still marked settled, so the pending sweep
+// converges instead of re-examining them every tick.
+async function applyCarryOvers(programId: string, fulfilled: FulfilledSibling[]): Promise<void> {
   const winners = new Map(fulfilled.map((s) => [s.topic, s]));
-  const rebuilds = [...winners.values()].filter(
-    (s) => s.replacesTrackId != null && s.userId != null && s.replacesTrackId !== s.trackId,
-  );
+  const pending = fulfilled.filter((s) => s.replacesTrackId != null && s.carriedOverAt == null);
 
-  const ops: Prisma.PrismaPromise<Prisma.BatchPayload>[] = [];
-  for (const rebuild of rebuilds) {
+  for (const rebuild of pending) {
     // `userId`/`replacesTrackId` are non-null by the filter above; re-read defensively
     // rather than asserting, so the narrowing survives a later edit to that filter.
     const { userId, replacesTrackId } = rebuild;
-    if (!userId || !replacesTrackId) continue;
+    const superseded = winners.get(rebuild.topic)?.id !== rebuild.id;
+    if (!userId || !replacesTrackId || replacesTrackId === rebuild.trackId || superseded) {
+      await markCarriedOver(rebuild.id);
+      continue;
+    }
     try {
       const plan = await planCarryOver({ userId, oldTrackId: replacesTrackId, newTrackId: rebuild.trackId });
       log('program.carry-over-planned', {
@@ -220,23 +237,38 @@ async function carryOverOps(
         oldTrackId: replacesTrackId,
         newTrackId: rebuild.trackId,
         completedBefore: plan.completedBefore,
-        carried: plan.lessonIds.length,
+        carried: plan.lessons.length,
       });
-      if (plan.lessonIds.length === 0) continue;
-      ops.push(
-        prisma.progress.createMany({
-          data: plan.lessonIds.map((lessonId) => ({ userId, lessonId })),
-          skipDuplicates: true,
-        }),
-      );
+      // Inserts and marker commit together: either this rebuild is settled and its
+      // rows exist, or neither happened and the sweep retries it.
+      const ops: Prisma.PrismaPromise<unknown>[] = [];
+      if (plan.lessons.length > 0) {
+        ops.push(
+          prisma.progress.createMany({
+            // completedAt comes from the covering old lesson, NOT from now(): the row
+            // stands for work done then, and it is what the course page's own progress
+            // ordering reads. carriedFromLessonId is what keeps that honest — the old
+            // Track's rows are deliberately kept, so without the marker a carried row
+            // would be a SECOND completion event on a day the learner already studied,
+            // and the carry is not 1:1, so the inflation factor is arbitrary. Consumers
+            // that count events (the home heatmap) skip marked rows.
+            data: plan.lessons.map((lesson) => ({
+              userId,
+              lessonId: lesson.id,
+              completedAt: lesson.completedAt,
+              carriedFromLessonId: lesson.fromLessonId,
+            })),
+            skipDuplicates: true,
+          }),
+        );
+      }
+      ops.push(markCarriedOver(rebuild.id));
+      await prisma.$transaction(ops);
     } catch (err) {
-      // A carry-over failure must not take the slot repoint down with it: a rebuilt
-      // course the learner has to re-tick is bad, one that never becomes visible is
-      // worse. The learner keeps the old Track's progress rows either way.
+      // Left unmarked on purpose: sweepPendingCarryOvers retries it on a later tick.
       logError('program.carry-over-failed', { programId, requestId: rebuild.id, err });
     }
   }
-  return ops;
 }
 
 // The worker's post-fulfill hook: called after a child CourseRequest reaches a
@@ -261,7 +293,15 @@ export async function maybeAssembleProgram(programId: string): Promise<void> {
   const siblings = await prisma.courseRequest.findMany({
     where: { programId },
     orderBy: { createdAt: 'asc' },
-    select: { id: true, status: true, topic: true, trackId: true, replacesTrackId: true, userId: true },
+    select: {
+      id: true,
+      status: true,
+      topic: true,
+      trackId: true,
+      replacesTrackId: true,
+      userId: true,
+      carriedOverAt: true,
+    },
   });
   if (siblings.length === 0) return;
 
@@ -276,15 +316,18 @@ export async function maybeAssembleProgram(programId: string): Promise<void> {
       s.status === CourseRequestStatus.fulfilled && s.trackId != null,
   );
   if (fulfilled.length > 0) {
-    await prisma.$transaction([
-      ...fulfilled.map((s) =>
+    await prisma.$transaction(
+      fulfilled.map((s) =>
         prisma.programPath.updateMany({
           where: { programId, topic: s.topic },
           data: { trackId: s.trackId },
         }),
       ),
-      ...(await carryOverOps(programId, fulfilled)),
-    ]);
+    );
+    // Deliberately before the status flip below, which is guarded to fire once: the
+    // carry-over must stay reachable on every re-run of the assembler, including for a
+    // Program that is already `ready` (a rebuild's own assembly is exactly that case).
+    await applyCarryOvers(programId, fulfilled);
   }
 
   const anyFulfilled = siblings.some((s) => s.status === CourseRequestStatus.fulfilled);
@@ -334,6 +377,45 @@ export async function sweepStuckPrograms(): Promise<number> {
   });
   for (const p of stuck) await maybeAssembleProgram(p.id);
   return stuck.length;
+}
+
+// Reports F5: the carry-over backstop. sweepStuckPrograms cannot serve this — it selects
+// `building` Programs, and a rebuild's Program is `ready` throughout (R5 leaves it that
+// way deliberately). So a carry-over that threw, or whose transaction failed, has no
+// other route back: the assembler only re-runs when another sibling terminates, which
+// may be never.
+//
+// Re-runs the whole (idempotent) assembler for each Program holding an unsettled
+// rebuild, rather than carrying the row directly, so the winner-per-topic rule and the
+// repoint stay in one place. Returns how many Programs it touched, for the worker log.
+//
+// Both bounds below exist because this sweep runs on every tick of every worker and
+// nothing here can mark a row it cannot reach — an unbounded predicate is an infinite
+// retry loop, not a backstop:
+//   - `trackId != null` mirrors the assembler's own filter. CourseRequest.trackId is
+//     SetNull, so a fulfilled rebuild whose Track was deleted is a row applyCarryOvers
+//     never sees and therefore can never settle.
+//   - the age window bounds a carry-over that throws DETERMINISTICALLY. Nothing rewrites
+//     a fulfilled request while its carry-over is pending, so `updatedAt` is effectively
+//     "when it was fulfilled"; past the window the row is left unsettled (and logged, per
+//     attempt, by applyCarryOvers) rather than retried forever.
+const CARRY_OVER_RETRY_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+export async function sweepPendingCarryOvers(): Promise<number> {
+  const pending = await prisma.courseRequest.findMany({
+    where: {
+      status: CourseRequestStatus.fulfilled,
+      replacesTrackId: { not: null },
+      trackId: { not: null },
+      carriedOverAt: null,
+      programId: { not: null },
+      updatedAt: { gte: new Date(Date.now() - CARRY_OVER_RETRY_WINDOW_MS) },
+    },
+    select: { programId: true },
+    distinct: ['programId'],
+  });
+  for (const row of pending) if (row.programId) await maybeAssembleProgram(row.programId);
+  return pending.length;
 }
 
 // The "program ready" notification stub (mirrors course-worker's logBuiltTrack):
