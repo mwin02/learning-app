@@ -27,6 +27,7 @@ import type {
 import { prisma } from '@/lib/db';
 import { applyPendingReview } from '@/lib/curation/pending-review';
 import { setPrimaryTopic } from '@/lib/curation/resource-topics';
+import { listCanonicals, normalizeTopic, toCanonicalSlug } from '@/lib/agents/topic-registry';
 import { updateResource, type ResourceUpdateFields } from '@/lib/curation/update-resource';
 import { recomputeReadiness } from '@/lib/agents/map/recompute-readiness';
 import { markBankStale } from '@/lib/agents/content/mark-bank-stale';
@@ -47,8 +48,24 @@ export type TriageReportRow = {
   note: string | null;
   // R2's probe verdict when it had one (heuristic dead-link opinion). Read-only here.
   resolution: string | null;
+  // The settled resolution this row carried before a learner re-reported it (F1b).
+  // Shown to the operator: a re-report of something already "fixed" is the signal
+  // that the fix did not take.
+  priorResolution: string | null;
   lessonId: string | null;
   createdAt: Date;
+};
+
+// One actionable placement per distinct reported lesson (F3c). `unlink` acts on a
+// single lesson's concept links, so the operator has to be able to pick WHICH
+// reported lesson — acting on the group's oldest report silently unlinked one
+// lesson and closed the reports about the others. `reportId` is the oldest report
+// carrying that lesson, so the null bucket (a report whose Track was regenerated
+// out from under it, SetNull) can never hide the reports that still have context.
+export type LessonTarget = {
+  lessonId: string | null;
+  reportId: string;
+  reports: number;
 };
 
 export type TriageCategoryGroup = {
@@ -59,6 +76,7 @@ export type TriageCategoryGroup = {
   reporters: number;
   oldestAt: Date;
   reports: TriageReportRow[];
+  lessonTargets: LessonTarget[];
 };
 
 export type TriageGroup = {
@@ -96,11 +114,34 @@ export function groupReports(rows: TriageReportRow[]): TriageGroup[] {
           reporters: reports.length,
           oldestAt: oldest(reports),
           reports: [...reports].sort(byAge),
+          lessonTargets: lessonTargets(reports),
         })),
       ),
     };
   });
   return rank(groups);
+}
+
+// Pure. Lesson-bearing targets first (oldest lesson first), the contextless
+// bucket last if it exists — it is the only one `unlink` cannot act on, so it
+// must never be what the UI offers first.
+export function lessonTargets(reports: TriageReportRow[]): LessonTarget[] {
+  const byLesson = new Map<string | null, TriageReportRow[]>();
+  for (const r of reports) byLesson.set(r.lessonId, [...(byLesson.get(r.lessonId) ?? []), r]);
+
+  return [...byLesson]
+    .map(([lessonId, rows]) => ({
+      lessonId,
+      reportId: [...rows].sort(byAge)[0].id,
+      reports: rows.length,
+      oldestAt: oldest(rows),
+    }))
+    .sort(
+      (a, b) =>
+        Number(a.lessonId === null) - Number(b.lessonId === null) ||
+        a.oldestAt.getTime() - b.oldestAt.getTime(),
+    )
+    .map(({ lessonId, reportId, reports }) => ({ lessonId, reportId, reports }));
 }
 
 function isString(value: string | null): value is string {
@@ -157,6 +198,7 @@ export async function listReportTriage(
       category: true,
       note: true,
       resolution: true,
+      priorResolution: true,
       lessonId: true,
       createdAt: true,
     },
@@ -303,12 +345,20 @@ export async function resolveReport(input: ResolveInput): Promise<ResolveResult>
   if (input.resolveSiblings) {
     // Siblings deliberately do NOT inherit this row's `probe:` clause — their own
     // stamped verdict is about the same URL but is their own record.
+    //
+    // `unlink` is the one action scoped narrower than (resource, category): it
+    // removes THIS lesson's concept links and leaves every other placement
+    // standing, so closing another lesson's report with it would describe a fix
+    // that never touched that lesson (F3c). `lessonId: null` matches the
+    // contextless bucket, which is the correct scope for a report with no
+    // placement — never all of them.
     const { count } = await prisma.resourceReport.updateMany({
       where: {
         resourceId: report.resourceId,
         category: report.category,
         state: 'open',
         id: { not: input.reportId },
+        ...(input.action === 'unlink' ? { lessonId: report.lessonId } : {}),
       },
       data: { state, resolution: composeResolution(delegated.outcome, { note: input.note }), resolvedAt },
     });
@@ -343,6 +393,11 @@ async function delegate(
         severity,
         cascade: false,
       });
+      // A lost race means someone else deprecated this row between the read and
+      // the conditional write — the operator's intent already holds, so the
+      // report is settled, not refused. Only a row that is NOT deprecated after
+      // a `raced` verdict is a genuine failure (F3d).
+      if (result.kind === 'raced') return alreadyDeprecated(resourceId, severity);
       if (result.kind !== 'rejected') return { refused: `deprecation not applied (${result.kind})` };
       return {
         outcome: `deprecated (${severity}) — ${result.conceptLinksRemoved} candidate link(s) removed, ${result.pathsRegressed} map(s) → building`,
@@ -353,8 +408,7 @@ async function delegate(
       return unlinkFromLesson(resourceId, lessonId);
 
     case 'refile':
-      await setPrimaryTopic(resourceId, input.topic, { origin: 'review' });
-      return { outcome: `refiled to topic "${input.topic}"` };
+      return refile(resourceId, input.topic);
 
     case 'edit': {
       const result = await updateResource(resourceId, input.fields);
@@ -364,6 +418,53 @@ async function delegate(
       return { outcome: `edited ${result.changed.join(', ')}${stale}${warning}` };
     }
   }
+}
+
+async function alreadyDeprecated(
+  resourceId: string,
+  intended: DeprecationSeverity,
+): Promise<Delegated> {
+  const resource = await prisma.resource.findUnique({
+    where: { id: resourceId },
+    select: { status: true, deprecationSeverity: true },
+  });
+  if (!resource) return { refused: 'resource no longer exists' };
+  if (resource.status !== 'deprecated') {
+    return { refused: `deprecation not applied (raced, status ${resource.status})` };
+  }
+  const severity = resource.deprecationSeverity ?? 'unspecified';
+  const note = severity === intended ? '' : ` (asked for ${intended})`;
+  return { outcome: `already deprecated (${severity}) — nothing to do${note}` };
+}
+
+// The refile axis. `Resource.topic` is matched EXACTLY by the library (sourcing,
+// `relatedTopics`, retrieval), so an operator's free text is the one input on this
+// path that can mint a twin slug — "Linear Algebra" would file a row nothing
+// searching `linear-algebra` can ever see, and then close the report as fixed.
+// Every other caller of setPrimaryTopic derives its target from the registry or a
+// filing decision; this one canonicalizes first and refuses a slug the registry
+// (curated ∪ learned) has never seen, rather than inventing vocabulary from a
+// text box (F3b).
+async function refile(resourceId: string, input: string): Promise<Delegated> {
+  const topic = toCanonicalSlug(normalizeTopic(input));
+  if (!topic) return { refused: `"${input}" has no usable slug` };
+
+  const [resource, known] = await Promise.all([
+    prisma.resource.findUnique({ where: { id: resourceId }, select: { topic: true } }),
+    listCanonicals(),
+  ]);
+  if (!resource) return { refused: 'resource no longer exists' };
+  // The UI prefills the current topic, so one click on Refile would otherwise
+  // rewrite nothing but `origin` and close the report as refiled (F3d).
+  if (resource.topic === topic) {
+    return { refused: `already filed under "${topic}" — pick a different topic` };
+  }
+  if (!known.includes(topic)) {
+    return { refused: `"${topic}" is not a known topic — refile onto an existing one` };
+  }
+
+  await setPrimaryTopic(resourceId, topic, { origin: 'review' });
+  return { outcome: `refiled to topic "${topic}"` };
 }
 
 // The `wrong_lesson_fit` axis: drop this resource from the concepts THIS lesson

@@ -19,7 +19,7 @@
 
 import type { ReportCategory } from '@prisma/client';
 import { reportCategoryOptions } from '@/lib/report-view';
-import type { TriageAction } from '@/lib/curation/report-triage';
+import type { LessonTarget, TriageAction } from '@/lib/curation/report-triage';
 
 const LABELS = new Map(reportCategoryOptions({ generated: false }).map((o) => [o.value, o.label]));
 
@@ -47,6 +47,31 @@ const ACTIONS: Record<ReportCategory, TriageAction[]> = {
 
 export function actionsForCategory(category: ReportCategory): TriageAction[] {
   return ACTIONS[category];
+}
+
+// The operator's `unlink` choices, in the order the picker offers them: which
+// reported lesson to act on, and the report that carries it. A target whose
+// lesson row is gone (SetNull on a regenerated Track, or a lesson deleted since)
+// is kept and labelled — hiding it would leave its reports unreachable, which is
+// the group-blocking bug F3c fixes — but `unlink` will refuse it, so it never
+// leads.
+export type LessonChoice = { reportId: string; lessonId: string | null; label: string };
+
+export function lessonChoices(
+  targets: LessonTarget[],
+  lessons: { id: string; title: string; trackTitle: string | null }[],
+): LessonChoice[] {
+  const byId = new Map(lessons.map((l) => [l.id, l]));
+  return targets.map((t) => {
+    const lesson = t.lessonId === null ? undefined : byId.get(t.lessonId);
+    const name = lesson
+      ? `${lesson.trackTitle ?? 'track'} → ${lesson.title}`
+      : t.lessonId === null
+        ? 'no lesson context'
+        : `lesson ${t.lessonId} (gone)`;
+    const count = t.reports > 1 ? ` · ${t.reports} reports` : '';
+    return { reportId: t.reportId, lessonId: t.lessonId, label: `${name}${count}` };
+  });
 }
 
 export const ACTION_LABELS: Record<TriageAction, string> = {
