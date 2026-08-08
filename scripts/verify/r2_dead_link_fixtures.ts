@@ -31,7 +31,9 @@ async function clean() {
     select: { id: true },
   });
   const ids = rows.map((r) => r.id);
-  await prisma.resourceReport.deleteMany({ where: { userId: DEV_USER } });
+  // Scoped to the fixture resources, like the resource delete below: an unscoped
+  // `userId` filter wipes every report the dev user has filed on the dev DB.
+  await prisma.resourceReport.deleteMany({ where: { userId: DEV_USER, resourceId: { in: ids } } });
   await prisma.resource.deleteMany({ where: { id: { in: ids } } });
   return ids.length;
 }

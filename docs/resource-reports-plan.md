@@ -434,6 +434,35 @@ Standard gates apply: **nothing is committed until the block is manually verifie
 libraries are installed only when a block needs them (this plan needs none — every dependency
 it touches is already in the tree).
 
+## Merge checklist
+
+This feature is the first where the learner-facing half deploys automatically and the half
+that makes it correct does not, so the merge is ordered work rather than a series of
+independent PRs. Run the chain bottom-up in **one sitting** (`/merge-stacked-prs`), then:
+
+1. **Before the first merge, run the integration suite.** `npm test` is `--project unit`,
+   and this feature's two load-bearing regression guards are integration-only by
+   construction: `tests/integration/dead-link-escalation.test.ts` (a Prisma `not` filter
+   that never matches a NULL column is invisible to a mocked test) and
+   `tests/integration/track-carryover.test.ts`. Nothing in CI exercises them.
+
+   ```bash
+   docker compose --profile workers stop worker   # they poll the same DB and steal the tests' rows
+   npm run test:int
+   docker compose --profile workers up -d --build # without --build, compose reuses a stale image
+   ```
+
+   See `.claude/rules/testing.md` for why both halves of that stop/restart matter.
+
+2. **Merge → migrations applied → worker reset, in that order.** `cloudbuild.yaml` applies
+   migrations ahead of the app deploy on merge to `main`; the worker never auto-deploys.
+   Wait for the deploy build to go green, then run `docs/worker-deploy.md` §9. Deviating in
+   either direction fails silently — the two failure modes are written out in that runbook's
+   "Ordering when one change spans app, migrations and worker".
+
+3. **The rebuild button is live and wrong for the interval between step 2's merge and its
+   worker reset.** Keep it short; do not park the chain half-merged.
+
 ## Deliberately out of scope
 
 - **Patching in-flight Tracks.** Track immutability stands. `hard` deprecation records the
