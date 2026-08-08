@@ -4,7 +4,7 @@
 // getProgramTrackAccess is cache()'d — deduped with the layout's check.
 
 import type { Metadata } from 'next';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { getProgramTrackAccess } from '@/lib/auth/program-track-access';
 import { getViewer } from '@/lib/auth/viewer';
 import { buildLessonViewModel } from '@/lib/lesson-view-model';
@@ -34,7 +34,12 @@ export default async function ProgramLessonPage({
 }) {
   const { programId, trackId, lessonId } = await params;
   const access = await getProgramTrackAccess(programId, trackId);
-  if (access.kind !== 'ok') notFound(); // layout handles the redirect cases
+  // R8: a rebuilt course's lesson ids do not survive into the new Track, so a
+  // bookmarked lesson URL lands on the replacement course's home. Repeated here
+  // rather than left to the layout because this page renders alongside it, and
+  // its notFound() would otherwise race the layout's redirect.
+  if (access.kind === 'moved') redirect(`/programs/${programId}/${access.trackId}`);
+  if (access.kind !== 'ok') notFound(); // layout handles the unenrolled redirect
 
   const model = buildLessonViewModel(access.track, lessonId);
   if (!model) notFound();

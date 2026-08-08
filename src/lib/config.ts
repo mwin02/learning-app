@@ -687,6 +687,13 @@ export const FREE_TRACK_REBUILDS_PER_MONTH = 3;
 // the queue has already given up on. If that threshold moves, this moves with it.
 export const TRACK_REBUILD_DEDUP_WINDOW_MS = COURSE_REQUEST_STALE_MS;
 
+// Reports R8: how long the course page keeps saying "your last rebuild didn't
+// finish" after a failed rebuild request. Bounded because the notice is not
+// dismissible and the learner may simply not want to retry — an undismissable
+// banner on every visit forever is its own defect. A week is long enough that a
+// learner who only opens the course on weekends still sees why nothing changed.
+export const REBUILD_FAILURE_NOTICE_MS = 7 * 24 * 60 * 60 * 1000;
+
 // Decomposer-agent plan (Block 2): hard ceiling on model turns in the decompose
 // agent's tool loop (mirrors TRACK_COMPOSER_MAX_STEPS). One step = one model turn,
 // which may issue several tool calls. The happy path is short — a get_path_map per
