@@ -225,6 +225,45 @@ describe('regenerateTrack preconditions', () => {
     });
   });
 
+  // The bug this block exists for: `??` fell back to the Track's value for exactly
+  // `null`, so clearing a field satisfied precondition 4, spent a rebuild from the
+  // monthly quota, and enqueued a build with byte-identical inputs — repeatable
+  // until the quota was gone. Asserted on the `create` data, which is the only
+  // place the discard was visible.
+  it('writes a cleared goal as NULL rather than re-cloning the Track value', async () => {
+    await regenerateTrack({ ...input, overrides: { goal: null } });
+    expect(db.courseRequest.create.mock.calls[0][0].data).toMatchObject({ goal: null });
+  });
+
+  it('writes a cleared priorKnowledge as NULL', async () => {
+    db.programPath.findFirst.mockResolvedValue({
+      ...slot,
+      track: { ...slot.track, priorKnowledge: 'some python' },
+    });
+    await regenerateTrack({ ...input, overrides: { priorKnowledge: null } });
+    expect(db.courseRequest.create.mock.calls[0][0].data).toMatchObject({ priorKnowledge: null });
+  });
+
+  // A clear must never be the free bypass: on a track that is otherwise not stale,
+  // it either applies (an edit) or is refused — never spent on identical inputs.
+  it('spends a rebuild on a not-stale track only when the clear is a real change', async () => {
+    db.lessonResource.findMany.mockResolvedValue([
+      { resource: { status: 'active', updatedAt: BEFORE } },
+    ]);
+    const applied = await regenerateTrack({ ...input, overrides: { goal: null } });
+    expect(applied).toMatchObject({ ok: true });
+    expect(db.courseRequest.create.mock.calls[0][0].data).toMatchObject({ goal: null });
+
+    db.courseRequest.create.mockClear();
+    // The Track's goal is already null here, so clearing it changes nothing.
+    db.programPath.findFirst.mockResolvedValue({ ...slot, track: { ...slot.track, goal: null } });
+    expect(await regenerateTrack({ ...input, overrides: { goal: null } })).toMatchObject({
+      ok: false,
+      refusal: 'not_stale',
+    });
+    expect(db.courseRequest.create).not.toHaveBeenCalled();
+  });
+
   it('refuses an unknown slot before touching enrollment', async () => {
     db.programPath.findFirst.mockResolvedValue(null);
     expect(await regenerateTrack(input)).toEqual({ ok: false, refusal: 'not_found' });

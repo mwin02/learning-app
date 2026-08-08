@@ -135,6 +135,14 @@ export function effectiveEdits(
   return keys.filter((k) => overrides[k] !== undefined && overrides[k] !== track[k]);
 }
 
+// `??` cannot express this clone: `null` is a real edit (effectiveEdits counts it —
+// clearing the goal), and `??` falls back to the Track's value for exactly `null`.
+// That combination let a cleared field satisfy precondition 4, spend a rebuild from
+// the monthly quota, and enqueue a build with byte-identical inputs.
+function cloned<T>(override: T | undefined, current: T): T {
+  return override === undefined ? current : override;
+}
+
 // The Track columns the staleness reads need, shared by the precondition below
 // and R7's read-only status call so the dialog's copy and the refusal it would
 // hit are derived from exactly the same query.
@@ -267,11 +275,11 @@ export async function regenerateTrack(input: RegenerateInput): Promise<Regenerat
         programId,
         userId,
         replacesTrackId: trackId,
-        priorKnowledge: overrides.priorKnowledge ?? track.priorKnowledge,
-        goal: overrides.goal ?? track.goal,
-        timeframeWeeks: overrides.timeframeWeeks ?? track.timeframeWeeks,
-        hoursPerWeek: overrides.hoursPerWeek ?? track.hoursPerWeek,
-        targetMastery: overrides.targetMastery ?? track.targetMastery,
+        priorKnowledge: cloned(overrides.priorKnowledge, track.priorKnowledge),
+        goal: cloned(overrides.goal, track.goal),
+        timeframeWeeks: cloned(overrides.timeframeWeeks, track.timeframeWeeks),
+        hoursPerWeek: cloned(overrides.hoursPerWeek, track.hoursPerWeek),
+        targetMastery: cloned(overrides.targetMastery, track.targetMastery),
       },
       select: { id: true },
     });

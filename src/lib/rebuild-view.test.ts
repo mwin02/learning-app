@@ -2,6 +2,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  canSubmitRebuild,
   changeSummary,
   masteryOptions,
   progressWarning,
@@ -10,6 +11,7 @@ import {
   rebuildErrorMessage,
   rebuildStatusSchema,
   submitLabel,
+  type RebuildStatus,
   type Staleness,
 } from './rebuild-view';
 
@@ -107,12 +109,62 @@ describe('submitLabel', () => {
 });
 
 describe('quotaLine', () => {
-  it('states the allowance and what is left', () => {
-    expect(quotaLine({ used: 1, limit: 3 })).toBe('This uses one of your 3 rebuilds this month — 2 left.');
+  it('states the remainder AFTER the rebuild it describes', () => {
+    expect(quotaLine({ used: 1, limit: 3 })).toBe(
+      'This uses one of your 3 rebuilds this month — 1 left after this.',
+    );
   });
 
-  it('never shows a negative remainder', () => {
-    expect(quotaLine({ used: 5, limit: 3 })).toContain('0 left');
+  it('says none are left when this is the last one', () => {
+    expect(quotaLine({ used: 2, limit: 3 })).toContain('0 left');
+  });
+
+  // Every clause asserts a rebuild the learner can still start, so at the limit the
+  // whole sentence is false — the dialog shows FREE_LIMIT_REACHED there instead.
+  it('says nothing once the allowance is spent', () => {
+    expect(quotaLine({ used: 3, limit: 3 })).toBeNull();
+  });
+
+  it('says nothing when the count has somehow overrun the limit', () => {
+    expect(quotaLine({ used: 5, limit: 3 })).toBeNull();
+  });
+});
+
+describe('canSubmitRebuild', () => {
+  const status: RebuildStatus = {
+    inputs: { goal: 'pass the exam', timeframeWeeks: 8, hoursPerWeek: 5, targetMastery: 'beginner' },
+    staleness: { ...base, stale: false },
+    quota: { allowed: true, used: 0, limit: 3 },
+    rebuilding: false,
+    completedLessons: 0,
+  };
+
+  it('allows a stale track with no edits', () => {
+    expect(canSubmitRebuild({ ...status, staleness: base }, {})).toBe(true);
+  });
+
+  it('refuses an unedited form off an unchanged course — R5 would call it not_stale', () => {
+    expect(canSubmitRebuild(status, {})).toBe(false);
+  });
+
+  it('allows an unchanged course once the learner edits an input', () => {
+    expect(canSubmitRebuild(status, { hoursPerWeek: 10 })).toBe(true);
+  });
+
+  // The clear that started this block: `goal: null` is an edit like any other, and
+  // the button must arm for it exactly when the service will honour it.
+  it('counts a cleared field as an edit', () => {
+    expect(canSubmitRebuild(status, { goal: null })).toBe(true);
+  });
+
+  it('refuses while someone else is rebuilding the slot, however stale it is', () => {
+    expect(canSubmitRebuild({ ...status, staleness: base, rebuilding: true }, { goal: null })).toBe(false);
+  });
+
+  it('refuses when the monthly quota is spent', () => {
+    expect(
+      canSubmitRebuild({ ...status, staleness: base, quota: { allowed: false, used: 3, limit: 3 } }, {}),
+    ).toBe(false);
   });
 });
 
