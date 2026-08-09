@@ -29,7 +29,7 @@ const baseStaleness = {
   trackCreatedAt: BUILT,
   resources: [{ status: 'active' as const, updatedAt: BEFORE }],
   pathUpdatedAt: BEFORE,
-  conceptsChangedSince: 0,
+  conceptsCreatedSince: 0,
   inputsEdited: false,
 };
 
@@ -40,7 +40,7 @@ describe('assessStaleness', () => {
       deprecatedResources: 0,
       changedResources: 0,
       pathChanged: false,
-      conceptsChanged: 0,
+      conceptsCreated: 0,
       inputsEdited: false,
     });
   });
@@ -68,26 +68,42 @@ describe('assessStaleness', () => {
     expect(v.stale).toBe(true);
   });
 
-  it('is stale when a still-active resource was corrected since the build', () => {
+  // R7's tightening. Both mtime proxies are still COUNTED — the dialog's
+  // "corrected since" line reads one, the logs read the other — but neither may
+  // gate a build on its own any more.
+  it('reports a corrected resource without calling the track stale', () => {
     const v = assessStaleness({
       ...baseStaleness,
       resources: [{ status: 'active', updatedAt: AFTER }],
     });
-    expect(v).toMatchObject({ stale: true, deprecatedResources: 0, changedResources: 1 });
+    expect(v).toMatchObject({ stale: false, deprecatedResources: 0, changedResources: 1 });
   });
 
-  it('is stale when the Path moved (readiness flip bumps updatedAt)', () => {
+  it('is NOT stale when the Path row was merely touched', () => {
+    // The regression this whole tightening exists to prevent: a readiness flip or
+    // a remediation pass bumps Path.updatedAt, and on real data that alone made
+    // three of four live tracks offer a rebuild justified by nothing.
     expect(assessStaleness({ ...baseStaleness, pathUpdatedAt: AFTER })).toMatchObject({
-      stale: true,
+      stale: false,
       pathChanged: true,
     });
   });
 
-  it('is stale when the concept set changed', () => {
-    expect(assessStaleness({ ...baseStaleness, conceptsChangedSince: 2 })).toMatchObject({
+  it('is stale when a concept was created since the build', () => {
+    expect(assessStaleness({ ...baseStaleness, conceptsCreatedSince: 2 })).toMatchObject({
       stale: true,
-      conceptsChanged: 2,
+      conceptsCreated: 2,
     });
+  });
+
+  it('still refuses a track where only mtimes moved, everywhere at once', () => {
+    expect(
+      assessStaleness({
+        ...baseStaleness,
+        resources: [{ status: 'active', updatedAt: AFTER }],
+        pathUpdatedAt: AFTER,
+      }).stale
+    ).toBe(false);
   });
 
   it('is stale on an input edit even off an identical pool', () => {
@@ -283,6 +299,13 @@ describe('regenerateTrack preconditions', () => {
     const result = await regenerateTrack(input);
     expect(result).toMatchObject({ ok: false, refusal: 'not_stale' });
     expect(db.courseRequest.create).not.toHaveBeenCalled();
+  });
+
+  it('counts only concepts CREATED since the build, not merely touched ones', async () => {
+    await regenerateTrack(input);
+    expect(db.concept.count).toHaveBeenCalledWith({
+      where: { pathId: 'path1', createdAt: { gt: BUILT } },
+    });
   });
 
   it('allows a rebuild off an unchanged pool when the learner edited their inputs', async () => {

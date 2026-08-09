@@ -337,7 +337,13 @@ lesson, merged lesson, no overlap); integration test asserting a rebuilt track's
 ## R7. Regeneration UI (~240 LOC)
 
 **Where**: `NotebookCourseHome` (per-track entry point) + a `RegenerateDialog.tsx` client
-component + `submit-regenerate.ts`.
+component + `submit-regenerate.ts`, with the copy and derivations in `src/lib/rebuild-view.ts`.
+
+Shipped with one addition the plan hadn't accounted for: **a `GET` on the regenerate route**
+(`getRebuildStatus`, read-only — same slot lookup, same staleness read, plus quota and the
+in-flight flag). The dialog has to state what changed and pre-fill the Track's inputs *before*
+anything is spent, and a POST cannot be that probe — its only non-refusing outcome is a real
+build. The read fires on dialog open, so the course home pays nothing for it.
 
 **What**: a "Rebuild this course" action opening a dialog that:
 
@@ -353,7 +359,7 @@ component + `submit-regenerate.ts`.
 Each refusal from R5 gets its own message: already rebuilding, out of rebuilds this month,
 nothing has changed yet.
 
-**Also in R7: tighten R5's staleness proxies.** R5 shipped `assessStaleness` with two proxies
+**Also in R7: tighten R5's staleness proxies — SHIPPED in R7.** R5 shipped `assessStaleness` with two proxies
 the plan hadn't pinned — Path readiness → `path.updatedAt > track.createdAt`, and concept set
 → concepts touched since the build. Measured against real dev data at the R5 gate, **three of
 four live tracks read stale with zero broken resources**:
@@ -377,15 +383,35 @@ dialog saying "3 resources were removed as broken" next to a `stale=true` derive
 readiness flip is the bug made legible, and the threshold can be judged against real wording
 instead of guessed at. Deliberately deferred from R5 rather than tuned blind.
 
-Candidate tightenings, to be decided with the UI in front of you:
+**What shipped** (decided with the dialog in front of us — on the stale calculus track it
+offered an *enabled* Rebuild button justified by nothing but "This subject has been worked on
+since your course was built", with zero broken resources). The deciding rule: **a term that
+cannot be phrased for a learner should not gate spend.**
 
-- Weight the terms instead of OR-ing them: a deprecated resource is a real reason to rebuild;
-  a bumped `updatedAt` on its own probably isn't.
-- Replace the `pathChanged` proxy with something that reflects what a re-compose would
-  actually see — the Path's concept set or readiness *state*, not its row mtime. This likely
-  means recording readiness at build time, which the Track does not do today.
-- Distinguish "the pool changed" from "the pool changed in a way that would change the
-  course", which is the question precondition 4 is actually asking.
+```
+stale = inputsEdited || deprecatedResources > 0 || conceptsCreatedSince > 0
+```
+
+- `pathChanged` and `changedResources` were **dropped from the disjunction** — both are row
+  mtimes, bumped by writes (readiness recompute, remediation pass, re-embed, someone else's
+  vote triggering `recomputeResourceTrust`) that say nothing about whether the course would
+  come out different.
+- Both are still **computed and reported**, not deleted: `changedResources` carries the
+  dialog's "corrected since" line, and `pathChanged` remains a log/operator diagnostic. Its
+  fallback line in `changeSummary` becomes *rare* rather than dead — it still renders on a
+  track that is stale for another reason.
+- The concept term moved from `updatedAt` to **`createdAt`** (`conceptsChangedSince` →
+  `conceptsCreatedSince`, surfaced as `conceptsCreated`): a concept that did not exist at
+  build time is something a re-compose must seat; a touched concept row is usually a status
+  or embedding write.
+- Pinned by unit test: a track whose Path row was merely touched, with no deprecated
+  resources and no new concepts, is **not** stale.
+
+**What remains** (its own block, not R7): distinguishing "the pool changed" from "the pool
+changed in a way that would change the course" properly, by recording the Path's readiness /
+concept-set fingerprint on the Track **at build time** so the question is answerable directly
+instead of by proxy. That is a schema change (the Track records nothing of the kind today),
+which is why it did not ride along here.
 
 **Verify**: manual — the full loop end to end. Report a dead resource in a course → confirm
 auto-deprecation → rebuild the track → confirm the new Track omits it, the slot repointed,
