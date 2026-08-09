@@ -4,19 +4,20 @@
 // A vote is taste; this names WHICH defect, so triage can act on the right axis.
 //
 // Two hard-won constraints from RatingButtons, both about where this lives:
-//   - several placements sit inside an <a> / a <details> summary, so every click
-//     preventDefaults + stopPropagates — reporting must never navigate the row or
-//     toggle the disclosure it sits in.
+//   - several placements sit inside an <a> / a <details> summary, so the TRIGGER's
+//     click preventDefaults + stopPropagates — reporting must never navigate the
+//     row or toggle the disclosure it sits in. Inside the panel, only
+//     stopPropagation (see `stop` below).
 //   - the panel itself is PORTALED to <body>. Rendering it inline would put a
 //     form (and its Escape/typing/click surface) inside that same anchor or
 //     summary; out of the DOM subtree, its native events can't reach either.
 //
 // No aggregate report counts, same reasoning as the vote toggles.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ReportCategory } from '@prisma/client';
-import { NOTE_MAX_CHARS, pendingLabelFor, reportCategoryOptions } from '@/lib/report-view';
+import { NOTE_MAX_CHARS, pendingLabelFor, reportCategoryOptions, tabStops } from '@/lib/report-view';
 import { submitReport } from './submit-report';
 
 // Warning triangle rather than a flag: "flag" reads as bookmark/save in a
@@ -63,8 +64,17 @@ export function ReportDialog({
   const [phase, setPhase] = useState<Phase>({ kind: 'form', error: null });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const doneRef = useRef<HTMLButtonElement>(null);
+  const ackId = useId();
+  // Generation counter for in-flight sends. The dead-link probe is synchronous and
+  // bounded at 6s, so a learner can close (Escape or Cancel) seconds before the
+  // response lands; without this, the late `done` write reopens onto the
+  // acknowledgement screen with no picker. Every close invalidates the send it
+  // interrupted.
+  const sendId = useRef(0);
 
   const close = () => {
+    sendId.current += 1;
     setOpen(false);
     setCategory(null);
     setNote('');
@@ -76,26 +86,70 @@ export function ReportDialog({
     if (!open) return;
     panelRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.stopPropagation();
-      setOpen(false);
-      setCategory(null);
-      setNote('');
-      setPhase({ kind: 'form', error: null });
-      triggerRef.current?.focus();
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        close();
+        return;
+      }
+      // `aria-modal` only asserts that the rest of the page is inert; nothing
+      // enforces it, so Tab is cycled inside the panel by hand.
+      if (e.key !== 'Tab') return;
+      const panel = panelRef.current;
+      if (!panel) return;
+      const focusable = Array.from(
+        panel.querySelectorAll<HTMLElement>('button:not([disabled]), textarea:not([disabled]), input:not([disabled])')
+      );
+      // tabStops, not DOM order: a radio group is ONE stop, and it is the checked
+      // radio — see the comment on tabStops for what DOM order breaks.
+      const stops = tabStops(focusable, (el) =>
+        el instanceof HTMLInputElement && el.type === 'radio' ? { radioGroup: el.name, checked: el.checked } : {}
+      );
+      if (stops.length === 0) return;
+      const first = stops[0];
+      const last = stops[stops.length - 1];
+      const active = document.activeElement;
+      // Focus outside the panel entirely: the panel itself (tabIndex -1, where it
+      // starts), or <body>, where the browser drops it when "Send report" disables
+      // itself mid-send — a failure the phase-flip effect below cannot fix, since a
+      // send that comes back with an error never reaches the `done` phase.
+      if (active === panel || !(active instanceof Node) || !panel.contains(active)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+        return;
+      }
+      if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [open]);
 
+  // The acknowledgement swap unmounts the button that was focused, which drops
+  // focus to <body> — outside the dialog, with nothing announced. Move it to the
+  // one control the new screen has.
+  useEffect(() => {
+    if (phase.kind === 'done') doneRef.current?.focus();
+  }, [phase.kind]);
+
+  // Trigger-only. Several placements sit inside an <a> or a <details> summary, so
+  // opening the dialog must not navigate or toggle them. NOTHING inside the panel
+  // may use this: the panel is portaled to <body>, well clear of those elements,
+  // and preventDefault there cancels the <label> activation behaviour that
+  // forwards a click to its radio — which is what made the picker respond only to
+  // a direct hit on the ~13px dot.
   const stop = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
   };
 
-  const send = async (e: React.MouseEvent) => {
-    stop(e);
+  const send = async () => {
     if (!category || phase.kind === 'sending') return;
+    const id = ++sendId.current;
     setPhase({ kind: 'sending' });
     const trimmed = note.trim();
     const result = await submitReport({
@@ -104,6 +158,7 @@ export function ReportDialog({
       ...(lessonId ? { lessonId } : {}),
       ...(trimmed ? { note: trimmed } : {}),
     });
+    if (sendId.current !== id) return;
     setPhase(result.ok ? { kind: 'done', message: result.message } : { kind: 'form', error: result.message });
   };
 
@@ -129,10 +184,7 @@ export function ReportDialog({
         createPortal(
           <div
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-            onClick={(e) => {
-              stop(e);
-              close();
-            }}
+            onClick={close}
           >
             <div
               ref={panelRef}
@@ -140,7 +192,7 @@ export function ReportDialog({
               aria-modal="true"
               aria-label="Report a problem"
               tabIndex={-1}
-              onClick={stop}
+              onClick={(e) => e.stopPropagation()}
               className="max-h-[85vh] w-full max-w-[420px] overflow-y-auto rounded-[10px_12px_10px_12px] border-2 border-rule bg-paper p-5 shadow-[0_10px_28px_rgba(0,0,0,.3)] outline-none"
             >
               <div className="font-hand text-[26px] font-bold leading-none text-script">
@@ -150,16 +202,21 @@ export function ReportDialog({
 
               {phase.kind === 'done' ? (
                 <>
-                  <p className="mb-0 mt-4 font-script text-sm leading-[26px] text-script-body">
+                  <p id={ackId} className="mb-0 mt-4 font-script text-sm leading-[26px] text-script-body">
                     {phase.message}
                   </p>
                   <div className="mt-4 flex justify-end">
                     <button
+                      ref={doneRef}
                       type="button"
-                      onClick={(e) => {
-                        stop(e);
-                        close();
-                      }}
+                      // NOT a live region: this <p> is inserted already holding its
+                      // text, as part of the whole-subtree phase swap, and a
+                      // pre-populated region is not reliably announced (VoiceOver
+                      // drops it). Describing the button we move focus to says it
+                      // once, deterministically — and acknowledgementFor's branches
+                      // differ in substance, so silence would hide WHICH happened.
+                      aria-describedby={ackId}
+                      onClick={close}
                       className="btn-ink px-4 py-1 text-[19px]"
                     >
                       Done
@@ -181,7 +238,6 @@ export function ReportDialog({
                           checked={category === opt.value}
                           disabled={phase.kind === 'sending'}
                           onChange={() => setCategory(opt.value)}
-                          onClick={(e) => e.stopPropagation()}
                           className="accent-[var(--color-pen)]"
                         />
                         {opt.label}
@@ -194,7 +250,6 @@ export function ReportDialog({
                     maxLength={NOTE_MAX_CHARS}
                     disabled={phase.kind === 'sending'}
                     onChange={(e) => setNote(e.target.value)}
-                    onClick={(e) => e.stopPropagation()}
                     placeholder="Anything else we should know? (optional)"
                     aria-label="Optional note"
                     rows={3}
@@ -202,7 +257,9 @@ export function ReportDialog({
                   />
 
                   {phase.kind === 'form' && phase.error && (
-                    <p className="mb-0 mt-2 font-script text-2xs text-crayon-red">{phase.error}</p>
+                    <p role="alert" className="mb-0 mt-2 font-script text-2xs text-crayon-red">
+                      {phase.error}
+                    </p>
                   )}
 
                   <div className="mt-4 flex items-center justify-end gap-3">
@@ -213,10 +270,7 @@ export function ReportDialog({
                     )}
                     <button
                       type="button"
-                      onClick={(e) => {
-                        stop(e);
-                        close();
-                      }}
+                      onClick={close}
                       className="btn-doodle px-3.5 py-0.5 text-[19px]"
                     >
                       Cancel
