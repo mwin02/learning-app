@@ -68,7 +68,7 @@ when queue depth genuinely needs more than one worker.
   in the image, the metadata, or the env**.
 
 ```bash
-export PROJECT_ID=$(grep -oE '^GOOGLE_VERTEX_PROJECT=.*' .env.local | cut -d= -f2)
+export PROJECT_ID=learning-app-prod-mzw
 export REGION=us-west1
 # The VM's zone — NOT the image's region. The instance is in us-central1-a (the
 # capacity workaround in §0) while the Artifact Registry repo stays us-west1, so

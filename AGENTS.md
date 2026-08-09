@@ -31,7 +31,9 @@ Two indexes exist only in raw SQL inside migrations, so every `prisma migrate de
 
 # Secrets: never let one transit your shell as a value
 
-Both of this repo's real leaks (2026-07-31, same session) were caused by shell that printed a secret **as a side effect** — not by anyone deliberately echoing one. Neither looked dangerous while being typed:
+**Never read a `.env*` file.** Not with `Read`, not with `cat`/`head`/`grep`, not to check one value before editing another — that is how the 2026-08-09 leak happened, and it cost a four-credential rotation. `.claude/rules/env-files.md` has the read-free substitute for everything you might want from one (presence checks, byte counts, in-place edits). This applies to subagents, so **say it in the task prompt** when you spawn one anywhere near a `.env` file.
+
+Both of this repo's earlier leaks (2026-07-31, same session) were caused by shell that printed a secret **as a side effect** — not by anyone deliberately echoing one. Neither looked dangerous while being typed:
 
 | What was run | What happened |
 | --- | --- |
@@ -61,6 +63,18 @@ The transferable lesson is the second one: **any command that fails while holdin
 
 | Leaked | Rotate |
 | --- | --- |
-| Supabase DB password | Supabase → Settings → Database → reset; then **both** `supabase-database-url` and `supabase-session-url` (same password, different ports/hosts), `.env.local`, redeploy the app service, then restart the worker VM — in that order, or the worker boots onto a dead credential |
+| Supabase DB password | Supabase → Settings → Database → reset; then **both** `supabase-database-url` and `supabase-session-url` (same password, different ports — see below, this is where rotations go wrong), `.env.local`, redeploy the app service, then restart the worker VM — in that order, or the worker boots onto a dead credential |
 | `YOUTUBE_API_KEY` | new key in the console → `youtube-api-key` secret → `.env.local` → redeploy → delete the old key |
 | Supabase anon key | it is public by design (inlined into the client bundle) — rotating it means a **rebuild**, not a restart (`app-deploy.md` §3) |
+
+**Rewriting the two Supabase URLs: keep the pooler hostname.** Copy each from Supabase → Connect — **Transaction pooler** (`:6543`) for `supabase-database-url`, **Session pooler** (`:5432`) for `supabase-session-url`. Never the `db.<ref>.supabase.co:5432` direct endpoint: it is IPv6-only on current projects, and Cloud Build workers are IPv4-only, so the next deploy dies at `migrate` with `P1001` and ships nothing. This has now been the failure twice — the `supabase-session-url` version written 2026-07-31 held the direct endpoint, was corrected 2026-08-01, and the 2026-08-09 rotation reintroduced it.
+
+The two values differ only in port, so **they must have identical byte counts** — a check that survives a password of any length, unlike a hardcoded number:
+
+```bash
+for s in supabase-database-url supabase-session-url; do
+  gcloud secrets versions access latest --secret=$s --project <p> | wc -c
+done
+```
+
+Two different numbers means one of them is the direct endpoint: it loses the project-qualified username (`postgres.<ref>` → `postgres`), which is ~21 bytes shorter.
