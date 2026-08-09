@@ -1,17 +1,16 @@
-// Reports R6: the DB half of progress carry-over. Reads only — the INSERT is handed
-// back to maybeAssembleProgram so it lands in the same transaction as the slot
-// repoint, which is what guarantees the new Track is never visible with empty
-// progress. Nothing here touches either Track: the old one stays as the evidence for
-// why the rebuild happened, and Track immutability is unchanged.
+// Reports R6: the DB half of progress carry-over. Reads only — the writes are the
+// caller's (maybeAssembleProgram), which pairs them with the CourseRequest.carriedOverAt
+// marker in one small transaction. Nothing here touches either Track: the old one stays
+// as the evidence for why the rebuild happened, and Track immutability is unchanged.
 
 import { prisma } from '@/lib/db';
-import { carryOverProgress } from '@/lib/progress-carryover';
+import { carryOverProgress, type CarriedLesson } from '@/lib/progress-carryover';
 
 export type CarryOverPlan = {
   userId: string;
   oldTrackId: string;
   newTrackId: string;
-  lessonIds: string[];
+  lessons: CarriedLesson[];
   completedBefore: number;
 };
 
@@ -22,9 +21,10 @@ export type CarryOverPlan = {
  * slot of the learner who asked for it, so crediting a co-enrolled learner off
  * someone else's completions would be inventing progress they never made.
  *
- * Returns an empty plan when the new Track already carries progress for this user —
- * the assembler can re-run (the stuck-Program sweep), and a re-run must not resurrect
- * lessons the learner has since un-completed.
+ * Whether the carry-over has ALREADY run is deliberately not inferred here. It used to
+ * be, from the presence of Progress rows on the new Track — which made a full un-tick
+ * of the carried lessons look like "never ran" and let the next assembler pass
+ * resurrect them (F5). The caller owns that question now, via CourseRequest.carriedOverAt.
  */
 export async function planCarryOver(input: {
   userId: string;
@@ -32,29 +32,23 @@ export async function planCarryOver(input: {
   newTrackId: string;
 }): Promise<CarryOverPlan> {
   const { userId, oldTrackId, newTrackId } = input;
-  const empty: CarryOverPlan = { ...input, lessonIds: [], completedBefore: 0 };
-
-  const alreadyCarried = await prisma.progress.count({
-    where: { userId, lesson: { trackId: newTrackId } },
-  });
-  if (alreadyCarried > 0) return empty;
 
   const [completed, newLessons] = await Promise.all([
     prisma.progress.findMany({
       where: { userId, lesson: { trackId: oldTrackId } },
-      select: { lesson: { select: { id: true, conceptsTaught: true } } },
+      select: { completedAt: true, lesson: { select: { id: true, conceptsTaught: true } } },
     }),
     prisma.lesson.findMany({
       where: { trackId: newTrackId },
       select: { id: true, conceptsTaught: true },
     }),
   ]);
-  if (completed.length === 0) return empty;
+  if (completed.length === 0) return { ...input, lessons: [], completedBefore: 0 };
 
   return {
     ...input,
-    lessonIds: carryOverProgress(
-      completed.map((row) => row.lesson),
+    lessons: carryOverProgress(
+      completed.map((row) => ({ ...row.lesson, completedAt: row.completedAt })),
       newLessons,
     ),
     completedBefore: completed.length,

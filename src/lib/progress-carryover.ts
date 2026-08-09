@@ -14,6 +14,21 @@ export type CarryOverLesson = {
   conceptsTaught: string[];
 };
 
+// A completed old lesson carries WHEN it was completed. Reports F5: the insert used
+// to drop this and let Progress.completedAt default to now(), which stamped a whole
+// course's history onto the rebuild day of the home heatmap (which reads completedAt
+// across every track).
+export type CompletedCarryOverLesson = CarryOverLesson & { completedAt: Date };
+
+// `fromLessonId` is the completed old lesson this carry is evidenced by (the one that
+// supplied the latest covering concept). Persisted on the carried Progress row so
+// completion-EVENT consumers can tell a carry from real work — see Progress.carriedFromLessonId.
+export type CarriedLesson = {
+  id: string;
+  completedAt: Date;
+  fromLessonId: string;
+};
+
 // Half the new lesson's concepts. The plan's asymmetry decides this number:
 // over-crediting costs a learner a skipped review they can redo in one click,
 // under-crediting costs them re-doing work they already finished — and that is what
@@ -37,28 +52,47 @@ export const CARRY_OVER_MIN_COVERAGE = 0.5;
 const normalize = (concept: string) => concept.trim().toLowerCase();
 
 /**
- * The new lesson ids to mark complete, given the old Track's lessons the learner had
+ * The new lessons to mark complete, given the old Track's lessons the learner had
  * completed and every lesson of the new Track. Returned in `newLessons` order.
  *
  * A new lesson with no `conceptsTaught` never carries: there is no evidence either
  * way, and inventing some would credit every rebuild's contentless lessons for free.
+ *
+ * Each carried lesson's `completedAt` is the LATEST completion among the old lessons
+ * that covered it — the moment the learner had actually finished enough of it. Latest
+ * rather than earliest because the earlier ones alone did not yet cover the lesson.
  */
 export function carryOverProgress(
-  completedOldLessons: CarryOverLesson[],
+  completedOldLessons: CompletedCarryOverLesson[],
   newLessons: CarryOverLesson[],
-): string[] {
-  const covered = new Set(
-    completedOldLessons.flatMap((lesson) => lesson.conceptsTaught.map(normalize)),
-  );
+): CarriedLesson[] {
+  // concept → the latest completion that taught it.
+  const covered = new Map<string, { at: Date; lessonId: string }>();
+  for (const lesson of completedOldLessons) {
+    for (const concept of lesson.conceptsTaught.map(normalize)) {
+      const seen = covered.get(concept);
+      if (!seen || lesson.completedAt > seen.at) {
+        covered.set(concept, { at: lesson.completedAt, lessonId: lesson.id });
+      }
+    }
+  }
   if (covered.size === 0) return [];
 
-  return newLessons
-    .filter((lesson) => {
-      const concepts = new Set(lesson.conceptsTaught.map(normalize));
-      if (concepts.size === 0) return false;
-      let hits = 0;
-      for (const concept of concepts) if (covered.has(concept)) hits += 1;
-      return hits / concepts.size >= CARRY_OVER_MIN_COVERAGE;
-    })
-    .map((lesson) => lesson.id);
+  const carried: CarriedLesson[] = [];
+  for (const lesson of newLessons) {
+    const concepts = new Set(lesson.conceptsTaught.map(normalize));
+    if (concepts.size === 0) continue;
+    let hits = 0;
+    let latest: { at: Date; lessonId: string } | null = null;
+    for (const concept of concepts) {
+      const hit = covered.get(concept);
+      if (!hit) continue;
+      hits += 1;
+      if (!latest || hit.at > latest.at) latest = hit;
+    }
+    if (latest && hits / concepts.size >= CARRY_OVER_MIN_COVERAGE) {
+      carried.push({ id: lesson.id, completedAt: latest.at, fromLessonId: latest.lessonId });
+    }
+  }
+  return carried;
 }

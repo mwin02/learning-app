@@ -23,7 +23,7 @@ import { prisma } from '../src/lib/db';
 import { log, logError } from '../src/lib/log';
 import { tickOnce, reclaimStaleClaims, processCourseRequest } from '../src/lib/services/course-worker';
 import { claimNextQueued, queueDepth } from '../src/lib/services/course-request';
-import { sweepStuckPrograms } from '../src/lib/services/program';
+import { sweepPendingCarryOvers, sweepStuckPrograms } from '../src/lib/services/program';
 
 // D6: worker identity, stamped on every claim (CourseRequest.claimedBy) and
 // carried in log lines. Cloud Run worker pools expose CLOUD_RUN_INSTANCE_ID;
@@ -51,6 +51,10 @@ async function runWatch(shutdownSignal: AbortSignal) {
     // finishCourseRequest) — reclaim doesn't cover it.
     const swept = await sweepStuckPrograms();
     if (swept) console.log(`[course-worker ${workerId}] swept stuck programs`, { swept });
+    // Reports F5: rebuilds whose progress carry-over never settled. A separate sweep
+    // because their Program is `ready`, not `building`, so the one above never sees it.
+    const carryOvers = await sweepPendingCarryOvers();
+    if (carryOvers) console.log(`[course-worker ${workerId}] swept pending carry-overs`, { carryOvers });
     // Workers-D: queue-depth gauge, once per poll cycle BEFORE draining — it
     // reads as backlog-at-wakeup. H3 JSON → (at deploy) a Cloud Logging
     // log-based metric; locally, `docker compose logs worker | jq`. Emitted
