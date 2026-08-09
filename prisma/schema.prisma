@@ -214,6 +214,12 @@ model ResourceReport {
   state      ReportState    @default(open)
   // Set by R2's probe (the liveness verdict) or by the operator at resolve time.
   resolution String?
+  // The resolution this row carried before a learner re-reported and reopened it.
+  // Reopening clears `resolution` so a stale verdict can't sit next to a live
+  // complaint, but the settled record — an operator's fix note, a dismissal reason,
+  // the probe's liveness verdict — is what tells triage whether the fix didn't take.
+  // Holds the most recent settled outcome only; an older one is superseded.
+  priorResolution String?
   resolvedAt DateTime?
   createdAt  DateTime       @default(now())
   updatedAt  DateTime       @updatedAt

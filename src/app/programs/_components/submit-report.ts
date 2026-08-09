@@ -39,6 +39,17 @@ function readCode(data: unknown): unknown {
   return (data as { code: unknown }).code;
 }
 
+// REPORT_COOLDOWN's copy needs the remaining wait, which is the only part of that
+// refusal the learner can act on. Narrowed like the fields above and left as
+// `unknown` — reportErrorMessage does the validating, so an absent or junk value
+// still produces a sentence.
+function readRetryAfterMs(data: unknown): unknown {
+  if (!data || typeof data !== 'object' || !('details' in data)) return undefined;
+  const details = (data as { details: unknown }).details;
+  if (!details || typeof details !== 'object' || !('retryAfterMs' in details)) return undefined;
+  return (details as { retryAfterMs: unknown }).retryAfterMs;
+}
+
 export async function submitReport(payload: SubmitReportPayload): Promise<SubmitReportResult> {
   const { resourceId, ...body } = payload;
   let res: Response;
@@ -52,6 +63,8 @@ export async function submitReport(payload: SubmitReportPayload): Promise<Submit
     return { ok: false, message: reportErrorMessage(undefined) };
   }
   const data: unknown = await res.json().catch(() => ({}));
-  if (!res.ok) return { ok: false, message: reportErrorMessage(readCode(data)) };
+  if (!res.ok) {
+    return { ok: false, message: reportErrorMessage(readCode(data), readRetryAfterMs(data)) };
+  }
   return { ok: true, message: acknowledgementFor(readOutcome(data)) };
 }
