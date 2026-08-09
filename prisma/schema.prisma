@@ -1029,6 +1029,13 @@ model CourseRequest {
   // row for audit if the (immutable) Track is later deleted in cleanup.
   trackId        String?
   track          Track?              @relation(fields: [trackId], references: [id], onDelete: SetNull)
+  // Reports R5: marks this request as a REBUILD of an existing Track rather than a
+  // first build. The assembler needs no change (it matches on programId + topic), but
+  // the worker's post-fulfill hook branches on this to carry progress over (R6), and it
+  // is the audit record of why a slot's Track changed. Deliberately NOT an FK — it is
+  // an id, for the same reason CourseRequest.trackId is nullable: the old Track may be
+  // cleaned up, and this record of what it replaced must survive that.
+  replacesTrackId String?
   // Failure diagnostic when status=failed.
   error          String?
   // H3 (audit 9.4): per-build token usage, written by the worker at finish —

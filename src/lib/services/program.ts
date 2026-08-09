@@ -190,8 +190,15 @@ async function failProgram(
 // idempotent (exactly one caller flips the status and logs). Do not "fix" the race
 // here with a lock — the sweep is the designed recovery path.
 export async function maybeAssembleProgram(programId: string): Promise<void> {
+  // Reports R5: ordered by createdAt because a REBUILD (a second CourseRequest with
+  // the same programId + topic, replacesTrackId set) means a topic can now have more
+  // than one fulfilled sibling. The repoint below applies them in this array's order,
+  // so without an ORDER BY the winner is whatever order Postgres happened to return —
+  // i.e. the rebuild could be silently overwritten by the Track it replaced. Oldest
+  // first, so the newest fulfilled build writes last and wins.
   const siblings = await prisma.courseRequest.findMany({
     where: { programId },
+    orderBy: { createdAt: 'asc' },
     select: { status: true, topic: true, trackId: true },
   });
   if (siblings.length === 0) return;
