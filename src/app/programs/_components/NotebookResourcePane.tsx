@@ -20,6 +20,7 @@ import { EmbedIcon, LinkIcon, PlayIcon } from '@/app/learn/_components/icons';
 import type { LessonTypeKind } from '@/lib/course-home-model';
 import type { VoteValue } from '@/lib/rating-db';
 import { RatingButtons } from './RatingButtons';
+import { ReportDialog } from './ReportDialog';
 
 // Free-beta A2: the viewer's own votes, keyed by Resource id (NOT LessonResource
 // id — ratings are resource-global). Hydrated server-side by the lesson page.
@@ -29,6 +30,33 @@ export type MyVotes = Record<string, VoteValue>;
 // vote — the thumbs pair reads its initial state from the map.
 function voteOf(myVotes: MyVotes, r: TrackResourceView): VoteValue | null {
   return myVotes[r.resource.id] ?? null;
+}
+
+// Reports R3: the taste channel (thumbs) and the defect channel (flag) always
+// travel together, so every placement renders one element and the two stay
+// aligned. `content != null` is track-view's documented marker for an
+// origin='generated' row — those have no external URL, which is what lets the
+// dialog drop its "Link is broken" option without new data plumbing.
+function ResourceActions({
+  resource: r,
+  vote,
+  lessonId,
+}: {
+  resource: TrackResourceView;
+  vote: VoteValue | null;
+  lessonId?: string;
+}) {
+  return (
+    <span className="inline-flex flex-none items-center gap-0.5">
+      <RatingButtons resourceId={r.resource.id} initial={vote} />
+      <ReportDialog
+        resourceId={r.resource.id}
+        lessonId={lessonId}
+        generated={r.resource.content != null}
+        resourceTitle={r.resource.title}
+      />
+    </span>
+  );
 }
 
 export function TypeIcon({ type, size = 16 }: { type: LessonTypeKind; size?: number }) {
@@ -50,9 +78,13 @@ function Tape() {
 export function NotebookResourcePane({
   resources,
   myVotes = {},
+  lessonId,
 }: {
   resources: TrackResourceView[];
   myVotes?: MyVotes;
+  // R3: ambient placement context for a report — WHERE the learner hit the
+  // resource, so triage can tell a placement defect from a row defect.
+  lessonId?: string;
 }) {
   // Cores each render full-size; alternates list below. Defensive: if a lesson
   // somehow has no primary row, promote the first resource so something plays.
@@ -76,22 +108,24 @@ export function NotebookResourcePane({
       <div className="flex flex-col gap-7">
         {cores.map((r) =>
           r.resource.content != null ? (
-            <Handout key={r.id} resource={r} vote={voteOf(myVotes, r)} />
+            <Handout key={r.id} resource={r} vote={voteOf(myVotes, r)} lessonId={lessonId} />
           ) : r.deliveryMode === 'embed' ? (
-            <TapedPlayer key={r.id} resource={r} vote={voteOf(myVotes, r)} />
+            <TapedPlayer key={r.id} resource={r} vote={voteOf(myVotes, r)} lessonId={lessonId} />
           ) : (
-            <OpenCard key={r.id} resource={r} vote={voteOf(myVotes, r)} />
+            <OpenCard key={r.id} resource={r} vote={voteOf(myVotes, r)} lessonId={lessonId} />
           )
         )}
       </div>
-      {alternates.length > 0 && <OtherResources resources={alternates} myVotes={myVotes} />}
+      {alternates.length > 0 && (
+        <OtherResources resources={alternates} myVotes={myVotes} lessonId={lessonId} />
+      )}
     </div>
   );
 }
 
-type CoreProps = { resource: TrackResourceView; vote: VoteValue | null };
+type CoreProps = { resource: TrackResourceView; vote: VoteValue | null; lessonId?: string };
 
-function TapedPlayer({ resource, vote }: CoreProps) {
+function TapedPlayer({ resource, vote, lessonId }: CoreProps) {
   const { url, title } = resource.resource;
   const src = toEmbedSrc(resource);
   // 16:9 for actual video; the taller 16:10 better suits embedded articles/widgets.
@@ -117,7 +151,7 @@ function TapedPlayer({ resource, vote }: CoreProps) {
             open it in a new tab ↗
           </a>
         </span>
-        <RatingButtons resourceId={resource.resource.id} initial={vote} />
+        <ResourceActions resource={resource} vote={vote} lessonId={lessonId} />
       </figcaption>
     </figure>
   );
@@ -125,14 +159,14 @@ function TapedPlayer({ resource, vote }: CoreProps) {
 
 // A generated lesson body: printed page taped into the notebook. font-sans +
 // .lesson-prose keep the long-form typography of the old design on purpose.
-function Handout({ resource, vote }: CoreProps) {
+function Handout({ resource, vote, lessonId }: CoreProps) {
   const { title, content } = resource.resource;
   return (
     <article className="relative rounded-[3px] border border-note-edge bg-card p-6 shadow-[0_6px_14px_rgba(0,0,0,.1)] sm:p-8">
       <Tape />
       <div className="mb-3 flex items-center justify-between gap-3 font-script text-2xs uppercase tracking-[1px] text-script-dim">
         <span>printed handout</span>
-        <RatingButtons resourceId={resource.resource.id} initial={vote} />
+        <ResourceActions resource={resource} vote={vote} lessonId={lessonId} />
       </div>
       <div className="font-sans">
         <h2 className="mb-4 text-2xl font-bold tracking-[-0.5px] text-ink">{title}</h2>
@@ -142,7 +176,7 @@ function Handout({ resource, vote }: CoreProps) {
   );
 }
 
-function OpenCard({ resource, vote }: CoreProps) {
+function OpenCard({ resource, vote, lessonId }: CoreProps) {
   const { url, title, type } = resource.resource;
   const kind = resourceTypeKind(resource);
   return (
@@ -162,15 +196,24 @@ function OpenCard({ resource, vote }: CoreProps) {
         </div>
         <div className="truncate font-hand text-[24px] font-bold leading-none text-script">{title}</div>
       </div>
-      {/* Sits inside the card's <a>; RatingButtons preventDefault/stopPropagation
-          keep a vote from following the link. */}
-      <RatingButtons resourceId={resource.resource.id} initial={vote} />
+      {/* Sits inside the card's <a>; both actions preventDefault/stopPropagation
+          (and the report panel portals out of the anchor) so neither follows the
+          link. */}
+      <ResourceActions resource={resource} vote={vote} lessonId={lessonId} />
       <span className="btn-ink flex-none px-4 py-1 text-[19px]">Open ↗</span>
     </a>
   );
 }
 
-function OtherResources({ resources, myVotes }: { resources: TrackResourceView[]; myVotes: MyVotes }) {
+function OtherResources({
+  resources,
+  myVotes,
+  lessonId,
+}: {
+  resources: TrackResourceView[];
+  myVotes: MyVotes;
+  lessonId?: string;
+}) {
   return (
     <div className="mt-6">
       <div className="mb-2 flex items-baseline gap-2.5">
@@ -184,9 +227,9 @@ function OtherResources({ resources, myVotes }: { resources: TrackResourceView[]
             className="max-w-[640px] rounded-[3px] border-2 border-dashed border-rule bg-card px-3.5"
           >
             {r.resource.content != null ? (
-              <GeneratedAlternate resource={r} vote={voteOf(myVotes, r)} />
+              <GeneratedAlternate resource={r} vote={voteOf(myVotes, r)} lessonId={lessonId} />
             ) : (
-              <ExternalAlternate resource={r} vote={voteOf(myVotes, r)} />
+              <ExternalAlternate resource={r} vote={voteOf(myVotes, r)} lessonId={lessonId} />
             )}
           </li>
         ))}
@@ -207,7 +250,7 @@ function AlternateLabel({ r }: { r: TrackResourceView }) {
   );
 }
 
-function ExternalAlternate({ resource: r, vote }: { resource: TrackResourceView; vote: VoteValue | null }) {
+function ExternalAlternate({ resource: r, vote, lessonId }: CoreProps) {
   return (
     <a
       href={r.resource.url}
@@ -219,14 +262,14 @@ function ExternalAlternate({ resource: r, vote }: { resource: TrackResourceView;
         <TypeIcon type={resourceTypeKind(r)} size={15} />
       </span>
       <AlternateLabel r={r} />
-      <RatingButtons resourceId={r.resource.id} initial={vote} />
+      <ResourceActions resource={r} vote={vote} lessonId={lessonId} />
       <span className="flex-none font-hand text-[19px] font-bold text-pen">Open ↗</span>
     </a>
   );
 }
 
 // A generated alternate has no external page — it expands inline as a handout.
-function GeneratedAlternate({ resource: r, vote }: { resource: TrackResourceView; vote: VoteValue | null }) {
+function GeneratedAlternate({ resource: r, vote, lessonId }: CoreProps) {
   return (
     <details className="group [&_summary::-webkit-details-marker]:hidden">
       <summary className="flex cursor-pointer list-none items-center gap-3 py-2.5">
@@ -234,7 +277,7 @@ function GeneratedAlternate({ resource: r, vote }: { resource: TrackResourceView
           <LinkIcon size={15} />
         </span>
         <AlternateLabel r={r} />
-        <RatingButtons resourceId={r.resource.id} initial={vote} />
+        <ResourceActions resource={r} vote={vote} lessonId={lessonId} />
         <span className="flex-none font-hand text-[19px] font-bold text-pen group-open:hidden">Read ↓</span>
         <span className="hidden flex-none font-hand text-[19px] font-bold text-pen group-open:inline">Hide ↑</span>
       </summary>

@@ -43,7 +43,7 @@ export function NotebookLessonView({ model, myVotes }: { model: LessonViewModel;
         </span>
       </div>
 
-      <NotebookResourcePane resources={model.resources} myVotes={myVotes} />
+      <NotebookResourcePane resources={model.resources} myVotes={myVotes} lessonId={model.id} />
 
       {model.summary && (
         <p className="mb-5 mt-6 max-w-[660px] text-lg leading-[34px]">{model.summary}</p>
