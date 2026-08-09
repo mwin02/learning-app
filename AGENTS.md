@@ -31,7 +31,9 @@ Two indexes exist only in raw SQL inside migrations, so every `prisma migrate de
 
 # Secrets: never let one transit your shell as a value
 
-Both of this repo's real leaks (2026-07-31, same session) were caused by shell that printed a secret **as a side effect** — not by anyone deliberately echoing one. Neither looked dangerous while being typed:
+**Never read a `.env*` file.** Not with `Read`, not with `cat`/`head`/`grep`, not to check one value before editing another — that is how the 2026-08-09 leak happened, and it cost a four-credential rotation. `.claude/rules/env-files.md` has the read-free substitute for everything you might want from one (presence checks, byte counts, in-place edits). This applies to subagents, so **say it in the task prompt** when you spawn one anywhere near a `.env` file.
+
+Both of this repo's earlier leaks (2026-07-31, same session) were caused by shell that printed a secret **as a side effect** — not by anyone deliberately echoing one. Neither looked dangerous while being typed:
 
 | What was run | What happened |
 | --- | --- |

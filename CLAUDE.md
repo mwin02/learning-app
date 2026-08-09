@@ -51,7 +51,7 @@ Full roadmap and phase plan: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 - Never commit secrets, service-account JSON, or Stripe keys.
 - **Commit messages: no `Co-Authored-By: Claude` trailer.** Write commit messages without the AI attribution footer.
 - **Pull Requests: no `Generated with Claude Code` trailer** whenever opening new pull requests.
-- Tracked under `.claude/`: shared skills (`.claude/skills/`), rules (`.claude/rules/`), and agents (`.claude/agents/`); everything else there stays git-ignored (local settings, worktrees).
+- Tracked under `.claude/`: shared skills (`.claude/skills/`), rules (`.claude/rules/`), agents (`.claude/agents/`), and `settings.json` — which is shared because its `deny` list is the only *enforced* half of `.claude/rules/env-files.md`. Everything else there stays git-ignored (`settings.local.json`, worktrees).
 
 ## Feature workflow
 

@@ -41,11 +41,15 @@ yarn-error.log*
 .env*
 !.env.example
 
-# claude code local files (CLAUDE.md, shared skills/rules/agents are tracked; the rest is local)
+# claude code local files (CLAUDE.md, shared skills/rules/agents/settings are
+# tracked; the rest is local — settings.local.json stays personal)
 .claude/*
 !.claude/skills/
 !.claude/rules/
 !.claude/agents/
+# settings.json is shared because it carries the .env* read denies that back
+# .claude/rules/env-files.md — advisory in a rule, enforced only from here.
+!.claude/settings.json
 
 # vercel
 .vercel
