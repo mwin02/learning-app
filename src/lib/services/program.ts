@@ -13,6 +13,7 @@ import { ProgramStatus, CourseRequestStatus, Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { log, logError, logWarn, traceUsageSnapshot } from '@/lib/log';
 import { planProgram, type ProgramPlan, type ProgramPlanInput } from '@/lib/agents/program/plan';
+import { planCarryOver } from '@/lib/services/carry-over-progress';
 
 // inputHash: the H1 idempotency fingerprint (programInputHash), persisted on the
 // anchor row so findRecentDuplicate can match a resubmit. Null for operator/dev
@@ -177,6 +178,67 @@ async function failProgram(
     .catch(() => {});
 }
 
+type FulfilledSibling = {
+  id: string;
+  topic: string;
+  trackId: string;
+  replacesTrackId: string | null;
+  userId: string | null;
+};
+
+// Reports R6: the progress carry-over for every REBUILD among the fulfilled siblings,
+// as insert operations for the repoint transaction below. Returning ops rather than
+// writing them here is the point — the carry-over commits WITH the repoint, so the
+// rebuilt Track is never momentarily visible in the slot with an empty progress bar.
+//
+// Only the winner per topic is considered: the repoint applies its updateMany calls in
+// sibling order, so for a topic with several fulfilled builds the last one is the Track
+// the learner will actually see, and crediting a loser's lessons would write progress
+// into a Track nothing points at.
+async function carryOverOps(
+  programId: string,
+  fulfilled: FulfilledSibling[],
+): Promise<Prisma.PrismaPromise<Prisma.BatchPayload>[]> {
+  const winners = new Map(fulfilled.map((s) => [s.topic, s]));
+  const rebuilds = [...winners.values()].filter(
+    (s) => s.replacesTrackId != null && s.userId != null && s.replacesTrackId !== s.trackId,
+  );
+
+  const ops: Prisma.PrismaPromise<Prisma.BatchPayload>[] = [];
+  for (const rebuild of rebuilds) {
+    // `userId`/`replacesTrackId` are non-null by the filter above; re-read defensively
+    // rather than asserting, so the narrowing survives a later edit to that filter.
+    const { userId, replacesTrackId } = rebuild;
+    if (!userId || !replacesTrackId) continue;
+    try {
+      const plan = await planCarryOver({ userId, oldTrackId: replacesTrackId, newTrackId: rebuild.trackId });
+      log('program.carry-over-planned', {
+        programId,
+        requestId: rebuild.id,
+        topic: rebuild.topic,
+        userId,
+        oldTrackId: replacesTrackId,
+        newTrackId: rebuild.trackId,
+        completedBefore: plan.completedBefore,
+        carried: plan.lessonIds.length,
+      });
+      if (plan.lessonIds.length === 0) continue;
+      ops.push(
+        prisma.progress.createMany({
+          data: plan.lessonIds.map((lessonId) => ({ userId, lessonId })),
+          skipDuplicates: true,
+        }),
+      );
+    } catch (err) {
+      // A carry-over failure must not take the slot repoint down with it: a rebuilt
+      // course the learner has to re-tick is bad, one that never becomes visible is
+      // worse. The learner keeps the old Track's progress rows either way.
+      logError('program.carry-over-failed', { programId, requestId: rebuild.id, err });
+    }
+  }
+  return ops;
+}
+
 // The worker's post-fulfill hook: called after a child CourseRequest reaches a
 // terminal state. If ALL siblings of the program are terminal, fill each fulfilled
 // slot's trackId and finalize the Program (ready | partial | failed). A no-op while
@@ -199,7 +261,7 @@ export async function maybeAssembleProgram(programId: string): Promise<void> {
   const siblings = await prisma.courseRequest.findMany({
     where: { programId },
     orderBy: { createdAt: 'asc' },
-    select: { status: true, topic: true, trackId: true },
+    select: { id: true, status: true, topic: true, trackId: true, replacesTrackId: true, userId: true },
   });
   if (siblings.length === 0) return;
 
@@ -214,14 +276,15 @@ export async function maybeAssembleProgram(programId: string): Promise<void> {
       s.status === CourseRequestStatus.fulfilled && s.trackId != null,
   );
   if (fulfilled.length > 0) {
-    await prisma.$transaction(
-      fulfilled.map((s) =>
+    await prisma.$transaction([
+      ...fulfilled.map((s) =>
         prisma.programPath.updateMany({
           where: { programId, topic: s.topic },
           data: { trackId: s.trackId },
         }),
       ),
-    );
+      ...(await carryOverOps(programId, fulfilled)),
+    ]);
   }
 
   const anyFulfilled = siblings.some((s) => s.status === CourseRequestStatus.fulfilled);
