@@ -102,6 +102,21 @@ export function rebuildEdits(inputs: RebuildInputs, form: RebuildFormState): Reb
   return edits;
 }
 
+// Shown only while a Track built without a target mastery is still unedited, and
+// deliberately NOT selectable: the wire format's `targetMastery` is a non-nullable
+// enum, so "no preference" is a choice the request cannot carry. Offering it as a
+// real option either disabled Rebuild with no explanation or was silently ignored.
+export const MASTERY_UNSET_LABEL = 'Choose a level';
+
+// R5's precondition 4, mirrored so the refusal is visible before it is spent: an
+// unedited form off an unchanged course would be refused as `not_stale`. Lives here
+// rather than inline in the dialog because it is the one place the client can drift
+// from the service's rule.
+export function canSubmitRebuild(status: RebuildStatus, edits: RebuildEdits): boolean {
+  if (status.rebuilding || !status.quota.allowed) return false;
+  return status.staleness.stale || Object.keys(edits).length > 0;
+}
+
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 // Precondition 4 made legible. `changedResources` and `pathChanged` no longer gate
@@ -165,9 +180,16 @@ export function submitLabel(confirming: boolean): string {
   return confirming ? 'Yes, rebuild' : 'Rebuild';
 }
 
-export function quotaLine(quota: { used: number; limit: number }): string {
-  const left = Math.max(0, quota.limit - quota.used);
-  return `This uses one of your ${quota.limit} rebuilds this month — ${left} left.`;
+// The remainder AFTER the rebuild this sentence describes — `limit - used` is the
+// remainder before it, which reads "1 left" on the click that leaves none.
+//
+// Null once the allowance is gone, because every clause here asserts a rebuild the
+// learner can still start ("this uses one of your…"). At the limit that is simply
+// false, and it would render directly above FREE_LIMIT_REACHED and a dead button.
+export function quotaLine(quota: { used: number; limit: number }): string | null {
+  const left = quota.limit - quota.used - 1;
+  if (left < 0) return null;
+  return `This uses one of your ${quota.limit} rebuilds this month — ${left} left after this.`;
 }
 
 export function rebuildErrorMessage(code: unknown, limit?: number): string {

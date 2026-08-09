@@ -15,11 +15,13 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import {
+  canSubmitRebuild,
   changeSummary,
   CONFIRM_PROMPT,
   EDIT_HINT,
   formStateFrom,
   masteryOptions,
+  MASTERY_UNSET_LABEL,
   NOTHING_CHANGED,
   progressWarning,
   PROGRESS_LINE,
@@ -90,12 +92,11 @@ export function RegenerateDialog({ programId, trackId }: { programId: string; tr
 
   const edits = status && form ? rebuildEdits(status.inputs, form) : {};
   const changed = status ? changeSummary(status.staleness) : [];
-  // R5's precondition 4, mirrored so the refusal is visible before it is spent:
-  // an unedited form off an unchanged course would be refused as `not_stale`.
-  const canSubmit =
-    !!status && !status.rebuilding && status.quota.allowed && (status.staleness.stale || Object.keys(edits).length > 0);
+  const canSubmit = !!status && canSubmitRebuild(status, edits);
 
   const warning = status ? progressWarning(status.completedLessons) : null;
+  // Null at the limit — the FREE_LIMIT_REACHED line below says the true thing instead.
+  const quota = status ? quotaLine(status.quota) : null;
 
   const set = (patch: Partial<RebuildFormState>) => {
     setConfirming(false);
@@ -212,7 +213,11 @@ export function RegenerateDialog({ programId, trackId }: { programId: string; tr
                             onChange={(e) => set({ targetMastery: e.target.value })}
                             className={inputCls}
                           >
-                            <option value="">No preference</option>
+                            {form.targetMastery === '' && (
+                              <option value="" disabled>
+                                {MASTERY_UNSET_LABEL}
+                              </option>
+                            )}
                             {masteryOptions().map((o) => (
                               <option key={o.value} value={o.value}>
                                 {o.label}
@@ -249,7 +254,8 @@ export function RegenerateDialog({ programId, trackId }: { programId: string; tr
                       </div>
 
                       <p className="mb-0 mt-3.5 font-script text-xs text-script-dim">
-                        {PROGRESS_LINE} {quotaLine(status.quota)}
+                        {PROGRESS_LINE}
+                        {quota && ` ${quota}`}
                       </p>
 
                       {warning && (
