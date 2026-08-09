@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { listReportTriage, REPORT_ROW_CAP, type TriageItem } from '@/lib/curation/report-triage';
 import { requireAdminPage } from '@/lib/auth/viewer';
-import { categoryLabel } from '@/lib/report-triage-view';
+import { categoryLabel, lessonChoices } from '@/lib/report-triage-view';
 import { TriageActions } from './triage-actions';
 
 export const dynamic = 'force-dynamic';
@@ -106,13 +106,23 @@ export default async function ReportsPage() {
                         <div key={report.id} className="mt-1 text-xs text-gray-600">
                           {report.note && <p className="italic">&ldquo;{report.note}&rdquo;</p>}
                           {report.resolution && <p className="text-blue-700">probe: {report.resolution}</p>}
+                          {/* Re-reported after being settled: what the last resolution
+                              or dismissal said is the evidence that the fix didn't take. */}
+                          {report.priorResolution && (
+                            <p className="text-amber-700">
+                              re-reported · previously: {report.priorResolution}
+                            </p>
+                          )}
                         </div>
                       ))}
                       {/* Acts on the OLDEST report of the group; the rest close with
-                          it by default (five reports of one dead link are one defect). */}
+                          it by default (five reports of one dead link are one defect).
+                          `unlink` is the exception — it picks a lesson, and closes only
+                          that lesson's reports. */}
                       <TriageActions
                         reportId={group.reports[0].id}
                         category={group.category}
+                        lessonChoices={lessonChoices(group.lessonTargets, item.lessons)}
                         currentTopic={item.resource?.topic ?? null}
                         currentRequiresPurchase={item.resource?.requiresPurchase ?? false}
                       />

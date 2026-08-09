@@ -10,8 +10,13 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('@/lib/db', () => ({ prisma: {} }));
 
-import { groupReports, composeResolution, type TriageReportRow } from '@/lib/curation/report-triage';
-import { actionsForCategory } from '@/lib/report-triage-view';
+import {
+  groupReports,
+  composeResolution,
+  lessonTargets,
+  type TriageReportRow,
+} from '@/lib/curation/report-triage';
+import { actionsForCategory, lessonChoices } from '@/lib/report-triage-view';
 
 let seq = 0;
 const row = (over: Partial<TriageReportRow> = {}): TriageReportRow => ({
@@ -21,6 +26,7 @@ const row = (over: Partial<TriageReportRow> = {}): TriageReportRow => ({
   category: 'dead_link',
   note: null,
   resolution: null,
+  priorResolution: null,
   lessonId: null,
   createdAt: new Date('2026-08-01T00:00:00Z'),
   ...over,
@@ -91,6 +97,74 @@ describe('groupReports', () => {
 
   it('is empty for no reports', () => {
     expect(groupReports([])).toEqual([]);
+  });
+});
+
+// F3c: `unlink` acts on ONE lesson, so the queue — which groups by
+// (resource, category) — has to expose the lessons separately or the operator
+// fixes one placement and closes the reports about the others.
+describe('lessonTargets', () => {
+  it('gives one target per reported lesson, oldest report first within each', () => {
+    const targets = lessonTargets([
+      row({ id: 'r_a2', lessonId: 'les_a', createdAt: at('2026-03-02T00:00:00Z') }),
+      row({ id: 'r_a1', lessonId: 'les_a', createdAt: at('2026-03-01T00:00:00Z') }),
+      row({ id: 'r_b1', lessonId: 'les_b', createdAt: at('2026-04-01T00:00:00Z') }),
+    ]);
+    expect(targets).toEqual([
+      { lessonId: 'les_a', reportId: 'r_a1', reports: 2 },
+      { lessonId: 'les_b', reportId: 'r_b1', reports: 1 },
+    ]);
+  });
+
+  // The group-blocking case: SetNull fires when a regenerated Track's lessons
+  // disappear, and that report is the oldest. Binding the action to the oldest
+  // report made the whole group permanently un-unlinkable.
+  it('puts the contextless bucket last even when it holds the oldest report', () => {
+    const targets = lessonTargets([
+      row({ id: 'r_null', lessonId: null, createdAt: at('2026-01-01T00:00:00Z') }),
+      row({ id: 'r_live', lessonId: 'les_a', createdAt: at('2026-06-01T00:00:00Z') }),
+    ]);
+    expect(targets.map((t) => t.reportId)).toEqual(['r_live', 'r_null']);
+  });
+
+  it('ranks lesson targets by age, so the longest-rotting placement leads', () => {
+    const targets = lessonTargets([
+      row({ id: 'r_new', lessonId: 'les_new', createdAt: at('2026-07-01T00:00:00Z') }),
+      row({ id: 'r_old', lessonId: 'les_old', createdAt: at('2026-02-01T00:00:00Z') }),
+    ]);
+    expect(targets.map((t) => t.lessonId)).toEqual(['les_old', 'les_new']);
+  });
+
+  it('is carried on every category group', () => {
+    const groups = groupReports([
+      row({ userId: 'u1', category: 'wrong_lesson_fit', lessonId: 'les_a' }),
+      row({ userId: 'u2', category: 'wrong_lesson_fit', lessonId: 'les_b' }),
+    ]);
+    expect(groups[0].categories[0].lessonTargets).toHaveLength(2);
+  });
+});
+
+describe('lessonChoices', () => {
+  const lessons = [{ id: 'les_a', title: 'Vectors', trackTitle: 'Linear Algebra' }];
+
+  it('labels a live lesson with its track and counts its reports', () => {
+    expect(lessonChoices([{ lessonId: 'les_a', reportId: 'r1', reports: 2 }], lessons)).toEqual([
+      { reportId: 'r1', lessonId: 'les_a', label: 'Linear Algebra → Vectors · 2 reports' },
+    ]);
+  });
+
+  it('keeps a target whose lesson row is gone, rather than hiding its reports', () => {
+    const choices = lessonChoices(
+      [
+        { lessonId: 'les_a', reportId: 'r1', reports: 1 },
+        { lessonId: 'les_gone', reportId: 'r2', reports: 1 },
+        { lessonId: null, reportId: 'r3', reports: 1 },
+      ],
+      lessons,
+    );
+    expect(choices.map((c) => c.reportId)).toEqual(['r1', 'r2', 'r3']);
+    expect(choices[1].label).toContain('gone');
+    expect(choices[2].label).toBe('no lesson context');
   });
 });
 
