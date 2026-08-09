@@ -29,6 +29,7 @@ export const resourceUpdateSchema = z.object({
       title: z.string().trim().min(1),
       summary: z.string().trim().min(10),
       difficulty: z.enum(['beginner', 'intermediate', 'advanced']),
+      requiresPurchase: z.boolean(),
     })
     .partial()
     .refine((f) => Object.keys(f).length > 0, {
