@@ -97,6 +97,16 @@ export const TRUST_EVICT_MIN_VOTES = 5;
 export const RATING_BURST_PER_HOUR = 100;
 export const RATING_BURST_WINDOW_MS = 60 * 60 * 1000;
 
+// Reports R1: the report route's per-user burst cap (services/report-limits.ts).
+// Deliberately an order of magnitude below RATING_BURST_PER_HOUR, for a reason
+// that isn't write load: a report carries free text and (for dead_link) triggers
+// an outbound liveness probe, so the payload is both moderatable content and a
+// request we make on the reporter's behalf. A genuine learner files a handful of
+// reports in a session at most — reporting is rare and deliberate, unlike voting
+// through a track — so a low cap costs nobody anything and bounds the abuse.
+export const REPORT_BURST_PER_HOUR = 10;
+export const REPORT_BURST_WINDOW_MS = 60 * 60 * 1000;
+
 // Phase 2.5f: targeted per-concept sourcing (sourceAndAttachConcept) budgets — the
 // thickener's spine-hole remediation. Deliberately smaller than the topic-level
 // FALLBACK_* above: a single narrow concept has far fewer good resources on the

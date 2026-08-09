@@ -87,6 +87,7 @@ model Resource {
   sourcedFor           ResourceSourcedFor[]
   candidateRejections  ConceptCandidateRejection[]
   ratings              ResourceRating[]
+  reports              ResourceReport[]
   topics               ResourceTopic[]
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
@@ -190,6 +191,54 @@ model ResourceRating {
 
   @@unique([userId, resourceId])
   @@index([resourceId])
+}
+
+// Reports R1: the learner-driven DEFECT channel, distinct from ResourceRating's
+// taste channel. A vote is a consensus signal whose only lever is deprecation;
+// a report names WHICH defect, so triage can act on the right axis (deprecate,
+// refile, unlink, or correct a field). Reports deliberately do NOT feed
+// trustScore — see docs/resource-reports-plan.md.
+model ResourceReport {
+  id         String         @id @default(cuid())
+  userId     String
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resourceId String
+  resource   Resource       @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  // Placement context: WHERE the learner hit this. Null for reports raised outside a
+  // lesson. SetNull (not Cascade) — a regenerated Track's lessons disappear, and the
+  // report about the resource must survive that.
+  lessonId   String?
+  lesson     Lesson?        @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  category   ReportCategory
+  note       String? // learner free text, length-capped at the boundary
+  state      ReportState    @default(open)
+  // Set by R2's probe (the liveness verdict) or by the operator at resolve time.
+  resolution String?
+  resolvedAt DateTime?
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  @@unique([userId, resourceId, category])
+  @@index([state, createdAt])
+  @@index([resourceId])
+}
+
+enum ReportCategory {
+  dead_link // 404, removed video, host gone
+  wrong_topic // good resource, filed under the wrong subject
+  wrong_lesson_fit // good resource, wrong lesson — a placement defect, not a row defect
+  wrong_duration // durationMin materially wrong
+  wrong_difficulty // level mismatch
+  paywalled // requiresPurchase is wrong
+  low_quality // bad but not broken
+  other // free text only
+}
+
+enum ReportState {
+  open
+  auto_resolved // R2's probe acted without a human
+  resolved // operator acted
+  dismissed // operator judged it not a defect
 }
 
 // Phase 2.5-AR (AR-5): persisted topic canonicalization registry. The topic
@@ -323,6 +372,7 @@ model User {
   programs       Program[]
   intakeSessions IntakeSession[]
   ratings        ResourceRating[]
+  reports        ResourceReport[]
 }
 
 enum UserRole {
@@ -504,6 +554,7 @@ model Lesson {
   resources       LessonResource[]
   exercises       Exercise[]
   progress        Progress[]
+  resourceReports ResourceReport[]
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 
