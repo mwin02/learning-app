@@ -17,12 +17,24 @@ const CATEGORIES: ReportCategory[] = [
   'other',
 ];
 
+// The fixtures sit on real library resources, so the note prefix is what identifies
+// them — deleting by `userId` alone would take every report the dev user has filed.
+const NOTE_PREFIX = 'verification fixture: ';
+
+async function clean() {
+  const { count } = await prisma.resourceReport.deleteMany({
+    where: { userId: DEV_USER, note: { startsWith: NOTE_PREFIX } },
+  });
+  return count;
+}
+
 async function main() {
-  await prisma.resourceReport.deleteMany({});
   if (process.argv.includes('--clean')) {
-    console.log(JSON.stringify({ cleaned: true }));
+    console.log(JSON.stringify({ deletedReports: await clean() }));
     return;
   }
+
+  await clean();
 
   // Reports carry lessonId so the unlink path (which needs it) is drivable.
   const lessonRows = await prisma.lessonResource.findMany({
@@ -46,7 +58,7 @@ async function main() {
         resourceId: pair.resourceId,
         lessonId: pair.lessonId,
         category,
-        note: `verification fixture: ${category}`,
+        note: `${NOTE_PREFIX}${category}`,
         // R2 stamps a machine verdict on some open reports; seed one so the
         // operator-vs-probe resolution composition is observable.
         resolution: category === 'dead_link' ? 'url not reachable' : null,
