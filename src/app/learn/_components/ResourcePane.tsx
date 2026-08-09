@@ -123,7 +123,7 @@ function MainCard({ resource }: { resource: TrackResourceView }) {
         </div>
         <div className="mt-1 truncate text-md font-semibold">{title}</div>
       </div>
-      <span className="flex-none rounded-button bg-brand px-4 py-2 text-sm font-semibold text-white shadow-[0_1px_2px_rgba(63,106,216,0.3)]">
+      <span className="flex-none rounded-button bg-brand px-4 py-2 text-sm font-semibold text-on-accent shadow-[0_1px_2px_rgba(63,106,216,0.3)]">
         Open ↗
       </span>
     </a>

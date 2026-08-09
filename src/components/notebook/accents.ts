@@ -1,7 +1,8 @@
 // Notebook UI (Block B): the course accent cycle. Dashboard chapters, bookmark
 // tabs, and section badges color-code by position using these five pairs — a
-// fill (`bg`, white text on top) and a darker matching ink (`ink`, for text and
-// progress fills on paper). CSS var references so dark mode resolves for free.
+// fill (`bg`, with `text-on-accent` on top) and a matching ink (`ink`, for text
+// and progress fills on paper — darker than the fill in light, lighter in dark).
+// CSS var references so dark mode resolves for free.
 
 export type Accent = { bg: string; ink: string };
 

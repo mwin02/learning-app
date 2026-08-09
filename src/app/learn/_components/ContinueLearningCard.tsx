@@ -16,7 +16,7 @@ export function ContinueLearningCard({
   if (!lesson) {
     return (
       <div className="card mb-[var(--space-section)] flex items-center gap-[18px] p-4">
-        <span className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-success text-white">
+        <span className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-success text-on-accent">
           <CheckIcon size={18} />
         </span>
         <div>
@@ -34,7 +34,7 @@ export function ContinueLearningCard({
         style={{ background: 'var(--gradient-thumb)' }}
       >
         <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand shadow-[0_3px_10px_rgba(63,106,216,0.38)]">
-          <PlayIcon size={15} className="text-white" />
+          <PlayIcon size={15} className="text-on-accent" />
         </div>
       </div>
       <div className="flex-1">
@@ -44,7 +44,7 @@ export function ContinueLearningCard({
       </div>
       <Link
         href={`${basePath}/${lesson.id}`}
-        className="rounded-button bg-brand px-5 py-[11px] text-sm font-semibold text-white shadow-[0_1px_2px_rgba(63,106,216,0.3)] hover:bg-brand-dark"
+        className="rounded-button bg-brand px-5 py-[11px] text-sm font-semibold text-on-accent shadow-[0_1px_2px_rgba(63,106,216,0.3)] hover:bg-brand-dark"
       >
         Resume →
       </Link>

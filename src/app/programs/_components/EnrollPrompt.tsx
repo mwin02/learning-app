@@ -153,7 +153,7 @@ export async function EnrollPrompt({
       <Sheet>
         <div className="nb-kicker pt-2">goal-driven program · free to join</div>
         <h1 className="mb-2.5 mt-1.5 font-hand text-[52px] font-bold leading-[0.95] text-script">
-          <span style={{ background: 'linear-gradient(transparent 64%, rgb(var(--nb-highlighter) / .72) 64%)' }}>
+          <span style={{ background: 'linear-gradient(transparent 64%, var(--nb-swipe) 64%)' }}>
             {program.goal}
           </span>
         </h1>

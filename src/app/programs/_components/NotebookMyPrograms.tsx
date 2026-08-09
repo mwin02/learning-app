@@ -81,7 +81,7 @@ export function NotebookMyPrograms({
       <div className="nb-kicker pt-2">welcome back{firstName ? `, ${firstName}` : ''}</div>
       <h1 className="mb-1.5 mt-1 font-hand text-[56px] font-bold leading-[0.92] text-script">
         My{' '}
-        <span style={{ background: 'linear-gradient(transparent 60%, rgb(var(--nb-highlighter) / .72) 60%)' }}>
+        <span style={{ background: 'linear-gradient(transparent 60%, var(--nb-swipe) 60%)' }}>
           Table of Contents
         </span>
       </h1>

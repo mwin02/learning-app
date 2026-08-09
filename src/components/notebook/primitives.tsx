@@ -12,7 +12,9 @@ export function ProgressDoodle({
   className?: string;
 }) {
   return (
-    <div className={`h-[9px] overflow-hidden rounded-md border-[1.5px] border-desk bg-card ${className}`}>
+    <div
+      className={`h-[9px] overflow-hidden rounded-md border-[1.5px] border-rule-strong bg-doodle-track ${className}`}
+    >
       <div className="h-full" style={{ width: `${Math.min(100, Math.max(0, pct))}%`, background: ink }} />
     </div>
   );
@@ -83,7 +85,7 @@ export function ChapterChip({
 }) {
   return (
     <div
-      className={`flex flex-none -rotate-3 items-center justify-center rounded-[9px_11px_8px_12px] font-hand font-bold text-white shadow-[0_3px_6px_rgba(0,0,0,.13)] ${className}`}
+      className={`flex flex-none -rotate-3 items-center justify-center rounded-[9px_11px_8px_12px] font-hand font-bold text-on-accent shadow-[0_3px_6px_rgba(0,0,0,.13)] ${className}`}
       style={{ width: size, height: size, background: bg, fontSize: Math.round(size * 0.55) }}
     >
       {label}

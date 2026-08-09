@@ -54,7 +54,7 @@ export function ContinueCard({ card }: { card: ContinueCardData }) {
           </div>
         </div>
         <span
-          className="flex-none rotate-1 rounded-[8px_10px_9px_11px] px-[18px] py-[7px] font-hand text-[22px] font-bold text-white shadow-[0_3px_0_rgba(0,0,0,.22)]"
+          className="flex-none rotate-1 rounded-[8px_10px_9px_11px] px-[18px] py-[7px] font-hand text-[22px] font-bold text-on-accent shadow-[0_3px_0_rgba(0,0,0,.22)]"
           style={{ background: accent.ink }}
         >
           {complete ? 'Revisit →' : card.started ? 'Continue →' : 'Start →'}
