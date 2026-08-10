@@ -28,6 +28,14 @@ model Resource {
   difficulty           Difficulty
   prerequisiteConcepts String[]
   conceptsTaught       String[]
+  // Library-quality Q1: where `conceptsTaught` came from. A decomposition child
+  // whose own derivation failed inherits its parent's array — which used to be
+  // indistinguishable from a real derivation, so contaminated tags fed back into
+  // the grounding vocabulary (loadTopicVocab admits `derived` only). The default
+  // is deliberately `inherited`, the claim that asserts nothing: rows predating
+  // this column cannot be truthfully stamped by a migration, and Q3 back-fills
+  // the ones it repairs.
+  conceptOrigin        ConceptOrigin  @default(inherited)
   requiresPurchase     Boolean        @default(false)
   origin               Origin         @default(seed)
   status               ResourceStatus @default(active)
@@ -303,6 +311,13 @@ enum Difficulty {
   beginner
   intermediate
   advanced
+}
+
+// Provenance of Resource.conceptsTaught (library-quality Q1).
+enum ConceptOrigin {
+  derived // the concept deriver returned tags for this resource
+  inherited // derivation failed or was never attempted; the parent's array was copied
+  fallback // no derivation and no parent concepts either; the array is just [topic]
 }
 
 enum Origin {

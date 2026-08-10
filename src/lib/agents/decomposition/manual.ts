@@ -16,7 +16,7 @@
 //   order       — the supplied list order (the human/agent vouches for it)
 // There is no oversize gate: a hand-supplied list is vouched by construction.
 
-import { deriveChildConcepts } from './concepts';
+import { deriveChildConcepts, resolveConcepts } from './concepts';
 import type { ChildInput } from './decompose';
 import type { ManualChildInput } from '@/lib/api/decomposition-review-schema';
 
@@ -48,23 +48,16 @@ export async function decomposeManual(args: {
     items: items.map((it) => ({ ref: it.url, title: it.title, description: it.summary ?? '' })),
   });
 
-  const children: ChildInput[] = items.map((it, idx) => {
-    const derived = concepts.get(it.url);
-    return {
-      url: it.url,
-      title: it.title,
-      type: it.type ?? inferType(it.url),
-      difficulty,
-      durationMin: it.durationMin ?? DEFAULT_DURATION_MIN,
-      summary: it.summary?.trim() || it.title,
-      // Never leave a child with no conceptsTaught (dedup keys on it): fall back
-      // to the parent's concepts, then the topic, if derivation dropped this ref.
-      prerequisiteConcepts: derived?.prerequisiteConcepts ?? [],
-      conceptsTaught:
-        derived?.conceptsTaught ?? (parentConcepts.length > 0 ? parentConcepts : [topic]),
-      orderInParent: idx,
-    };
-  });
+  const children: ChildInput[] = items.map((it, idx) => ({
+    url: it.url,
+    title: it.title,
+    type: it.type ?? inferType(it.url),
+    difficulty,
+    durationMin: it.durationMin ?? DEFAULT_DURATION_MIN,
+    summary: it.summary?.trim() || it.title,
+    ...resolveConcepts({ derived: concepts.get(it.url), parentConcepts, topic }),
+    orderInParent: idx,
+  }));
 
   return { children };
 }

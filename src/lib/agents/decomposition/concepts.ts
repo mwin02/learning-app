@@ -15,16 +15,22 @@
 
 import { generateObject } from 'ai';
 import { z } from 'zod';
+import type { ConceptOrigin } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { getModel } from '@/lib/ai/models';
+import { logWarn } from '@/lib/log';
 import { CONCEPT_DERIVATION_CHUNK_SIZE } from '@/lib/config';
 
 // The distinct concept tags already in use by a topic — the vocabulary new tags
 // are grounded against. Includes pending_review rows so freshly-found resources
 // contribute their tags before promotion.
+//
+// Only `derived` rows count. Grounding on an inherited array would tell the next
+// derivation to reuse the tags a *failed* derivation left behind — the feedback
+// loop that spread one bad batch across a topic's whole vocabulary (P1).
 export async function loadTopicVocab(topic: string): Promise<string[]> {
   const rows = await prisma.resource.findMany({
-    where: { topic, status: { in: ['active', 'pending_review'] } },
+    where: { topic, status: { in: ['active', 'pending_review'] }, conceptOrigin: 'derived' },
     select: { conceptsTaught: true, prerequisiteConcepts: true },
   });
   const set = new Set<string>();
@@ -37,6 +43,34 @@ export async function loadTopicVocab(topic: string): Promise<string[]> {
 
 export type DerivableItem = { ref: string; title: string; description: string };
 export type DerivedConcepts = { prerequisiteConcepts: string[]; conceptsTaught: string[] };
+
+// What every ChildInput-producing router writes for one child. The origin is the
+// point: a child that inherited its parent's array must never be storable as if
+// it had been derived, because that is exactly what made P1 invisible.
+export type ResolvedConcepts = DerivedConcepts & { conceptOrigin: ConceptOrigin };
+
+// Single decision point for all four inheritance sites (the three routers' leaf
+// paths plus doc-TOC's sub-container path, which never attempts derivation and
+// so always passes `undefined`).
+export function resolveConcepts(args: {
+  derived: DerivedConcepts | undefined;
+  parentConcepts: string[];
+  topic: string;
+}): ResolvedConcepts {
+  const { derived, parentConcepts, topic } = args;
+  if (derived) {
+    return {
+      prerequisiteConcepts: derived.prerequisiteConcepts,
+      conceptsTaught: derived.conceptsTaught,
+      conceptOrigin: 'derived',
+    };
+  }
+  // Never leave a child with no conceptsTaught — cross-resource dedup keys on it.
+  if (parentConcepts.length > 0) {
+    return { prerequisiteConcepts: [], conceptsTaught: parentConcepts, conceptOrigin: 'inherited' };
+  }
+  return { prerequisiteConcepts: [], conceptsTaught: [topic], conceptOrigin: 'fallback' };
+}
 
 const DerivedSchema = z.object({
   results: z.array(
@@ -83,10 +117,14 @@ export async function deriveChildConcepts(args: {
   // path a container decomposes synchronously, and the oversize gate caps it at
   // DECOMPOSITION_MAX_AUTO_CHILDREN, so this fans out to at most a couple of
   // concurrent calls (no rate-limit concern) while halving latency for >1-batch
-  // containers. A failed batch resolves to empty; the caller falls back to the
-  // parent's concepts for those refs.
+  // containers. Refs a batch never recovers stay unmapped; the caller resolves
+  // them to an `inherited`/`fallback` array via resolveConcepts.
   const batches = chunk(items, CONCEPT_DERIVATION_CHUNK_SIZE);
-  const batchResults = await Promise.all(batches.map((batch) => deriveBatch(topic, grounding, batch)));
+  const batchResults = await Promise.all(
+    batches.map((batch) =>
+      deriveWithBisect(batch, (b) => callDeriver(topic, grounding, b), { topic }),
+    ),
+  );
   for (const result of batchResults) {
     for (const [ref, concepts] of result) out.set(ref, concepts);
   }
@@ -94,40 +132,89 @@ export async function deriveChildConcepts(args: {
   return out;
 }
 
-async function deriveBatch(
+// Retry once, then bisect. A whole batch failing is usually ONE malformed item
+// poisoning the structured-output parse for all 25, so halving isolates the
+// poison and recovers the other 24 instead of writing off the batch. Recursion
+// bottoms out at a single item, which is either derived or genuinely undeducible
+// — and that one loss is now logged and stamped rather than silent.
+//
+// Worst case (every item poisonous) is bounded: 2 attempts per node over a
+// 2*n-1-node bisection tree, and a real batch fails at one or two leaves.
+//
+// `run` is injected so the bisection is testable without the model.
+export async function deriveWithBisect(
+  batch: DerivableItem[],
+  run: (b: DerivableItem[]) => Promise<Map<string, DerivedConcepts>>,
+  ctx: { topic: string },
+): Promise<Map<string, DerivedConcepts>> {
+  if (batch.length === 0) return new Map();
+
+  let lastError = '';
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      return await run(batch);
+    } catch (err) {
+      lastError = (err as Error).message;
+      logWarn('concepts.derive_batch_failed', {
+        topic: ctx.topic,
+        batchSize: batch.length,
+        attempt,
+        error: lastError,
+      });
+    }
+  }
+
+  if (batch.length === 1) {
+    logWarn('concepts.derive_item_abandoned', {
+      topic: ctx.topic,
+      ref: batch[0].ref,
+      error: lastError,
+    });
+    return new Map();
+  }
+
+  const mid = Math.ceil(batch.length / 2);
+  const halves = await Promise.all([
+    deriveWithBisect(batch.slice(0, mid), run, ctx),
+    deriveWithBisect(batch.slice(mid), run, ctx),
+  ]);
+  const out = new Map<string, DerivedConcepts>();
+  for (const half of halves) {
+    for (const [ref, concepts] of half) out.set(ref, concepts);
+  }
+  return out;
+}
+
+// One model call. Throws on failure — deriveWithBisect owns the recovery policy.
+async function callDeriver(
   topic: string,
   grounding: string[],
   batch: DerivableItem[],
 ): Promise<Map<string, DerivedConcepts>> {
   const out = new Map<string, DerivedConcepts>();
   const { model, temperature, maxOutputTokens } = getModel('conceptDeriver');
-  try {
-    const result = await generateObject({
-      model,
-      temperature,
-      maxOutputTokens,
-      schema: DerivedSchema,
-      system: DERIVE_SYSTEM_PROMPT,
-      prompt: [
-        `Topic: ${topic}`,
-        '',
-        'Existing topic vocabulary (reuse these tags where they fit):',
-        grounding.length > 0 ? JSON.stringify(grounding) : '(none yet)',
-        '',
-        'Videos to tag:',
-        JSON.stringify(
-          batch.map((it) => ({ ref: it.ref, title: it.title, description: it.description.slice(0, 500) })),
-          null,
-          2,
-        ),
-      ].join('\n'),
-    });
-    for (const r of result.object.results) {
-      out.set(r.ref, { prerequisiteConcepts: r.prerequisiteConcepts, conceptsTaught: r.conceptsTaught });
-    }
-  } catch (err) {
-    console.log('[concepts] derivation batch failed', { topic, batchSize: batch.length, error: (err as Error).message });
-    // Leave this batch's refs unmapped; caller falls back to parent concepts.
+  const result = await generateObject({
+    model,
+    temperature,
+    maxOutputTokens,
+    schema: DerivedSchema,
+    system: DERIVE_SYSTEM_PROMPT,
+    prompt: [
+      `Topic: ${topic}`,
+      '',
+      'Existing topic vocabulary (reuse these tags where they fit):',
+      grounding.length > 0 ? JSON.stringify(grounding) : '(none yet)',
+      '',
+      'Videos to tag:',
+      JSON.stringify(
+        batch.map((it) => ({ ref: it.ref, title: it.title, description: it.description.slice(0, 500) })),
+        null,
+        2,
+      ),
+    ].join('\n'),
+  });
+  for (const r of result.object.results) {
+    out.set(r.ref, { prerequisiteConcepts: r.prerequisiteConcepts, conceptsTaught: r.conceptsTaught });
   }
   return out;
 }

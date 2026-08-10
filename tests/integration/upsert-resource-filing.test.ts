@@ -84,6 +84,7 @@ describeDb('upsertResource — filing decision becomes memberships (T2b)', () =>
             summary: 'leaf',
             prerequisiteConcepts: [],
             conceptsTaught: [],
+            conceptOrigin: 'derived',
             orderInParent: 1,
           },
         ],
