@@ -68,10 +68,10 @@ Every plan carries one, directly under the H1, in this form:
    place facts hide:
    - a hard invariant with blast radius → `AGENTS.md`
    - a convention that applies to a file type → `.claude/rules/`
-   - an operational procedure → a runbook (`docs/app-deploy.md`, `docs/worker-deploy.md`,
-     `docs/operator-tooling.md`)
-   - a milestone → `docs/ROADMAP.md`
+   - an operational procedure → a runbook (`app-deploy.md`, `worker-deploy.md`,
+     `operator-tooling.md`)
+   - a milestone → `ROADMAP.md`
    - everything else stays in the plan and goes to `archive/` with `git mv`
 
 **Abandoned plans that never produced code get deleted, not archived** — there is no code
-for them to explain. `docs/track-budget-fill-plan.md` was deleted this way in `5e96658`.
+for them to explain. `track-budget-fill-plan.md` was deleted this way in `5e96658`.

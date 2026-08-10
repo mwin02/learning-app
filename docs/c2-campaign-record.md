@@ -1,11 +1,11 @@
 # C2 — warm-path campaign record
 
-Per-topic outcomes for the free-beta warm campaign (`docs/plans/archive/free-beta.md` § C2,
+Per-topic outcomes for the free-beta warm campaign (`free-beta.md` § C2,
 step 6). Written for the beta announcement's honesty: what the 12 warm Paths are
 actually made of, and where they are thin.
 
 **Run against production** (Supabase `aws-1-us-west-1.pooler.supabase.com:6543/postgres`)
-starting 2026-08-01, per `docs/operator-tooling.md`.
+starting 2026-08-01, per `operator-tooling.md`.
 
 ## Prerequisites resolved during the campaign
 

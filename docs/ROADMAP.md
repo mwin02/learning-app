@@ -10,7 +10,7 @@ The product loop is complete end-to-end: a stranger lands on the notebook home p
 
 ### ⭐ NEXT UP — Free public beta (ratings → GCP migration → observability → warm paths)
 
-**Decided 2026-07-18**, displacing Stripe: launch as a **free beta** first. Full block-by-block plan (locked decisions, codebase facts, open questions — written so each block is workable from a fresh conversation): **[docs/plans/archive/free-beta.md](plans/archive/free-beta.md)**.
+**Decided 2026-07-18**, displacing Stripe: launch as a **free beta** first. Full block-by-block plan (locked decisions, codebase facts, open questions — written so each block is workable from a fresh conversation): **[free-beta.md](plans/archive/free-beta.md)**.
 
 **1. Feature A — resource ratings** (stacked chain; live before beta users arrive):
 
@@ -21,10 +21,10 @@ The product loop is complete end-to-end: a stranger lands on the notebook home p
 
 **2. Feature D — GCP migration** (compute to Cloud Run; **Supabase stays** for DB+auth; custom domain incoming):
 
-- [ ] **D1 — app Dockerfile** (~60 LOC) off the existing `output: 'standalone'`; `docs/app-deploy.md` drafted.
+- [ ] **D1 — app Dockerfile** (~60 LOC) off the existing `output: 'standalone'`; `app-deploy.md` drafted.
 - [ ] **D2 — Supabase schema deploy + library data migration** — `migrate deploy` (verify the two hand-written indexes), `scripts/migrate-library.ts` copying `Source`/`TopicAlias`/`Resource` local → Supabase (upserts, no embeddings — re-embed backfill after). Maps/Tracks/Programs deliberately not migrated (C rebuilds them).
 - [ ] **D3 — Cloud Run app service live** (ops) — Secret Manager env, domain mapping + Supabase OAuth cutover, Vercel decommissioned.
-- [ ] **D4 — Cloud Run worker pools live** (ops) — per [docs/worker-deploy.md](worker-deploy.md), against the Supabase queue.
+- [ ] **D4 — Cloud Run worker pools live** (ops) — per [worker-deploy.md](worker-deploy.md), against the Supabase queue.
 
 **3. Feature B — GCP-native error reporting** (post-D3):
 
@@ -190,7 +190,7 @@ A `Program` is a goal-driven plan composed of multiple single-topic Tracks. Chea
 
 ### Shipped — concurrent workers A–D (PRs [#234](https://github.com/mwin02/learning-app/pull/234)–[#238](https://github.com/mwin02/learning-app/pull/238), 2026-07-13)
 
-- [x] Queue retry primitives + contention requeue + graceful shutdown; containerized worker (`Dockerfile.worker`); local multi-replica compose (`docker compose --profile workers up`); queue-depth gauge + alert/scaling docs. Cloud Run worker-pool promotion is scripted in [docs/worker-deploy.md](worker-deploy.md) — trigger: real users waiting on builds (always-on billing starts then).
+- [x] Queue retry primitives + contention requeue + graceful shutdown; containerized worker (`Dockerfile.worker`); local multi-replica compose (`docker compose --profile workers up`); queue-depth gauge + alert/scaling docs. Cloud Run worker-pool promotion is scripted in [worker-deploy.md](worker-deploy.md) — trigger: real users waiting on builds (always-on billing starts then).
 
 ### Remaining — Stripe (deferred behind the free beta)
 
@@ -198,11 +198,11 @@ See the checklist at the top of this file — Stripe restarts post-beta, Block 5
 
 ## Phase 3.1 — Launch readiness (curriculum-agent audit)
 
-Non-security audit findings to address before real traffic. Full audit: [docs/curriculum-agent-audit.md](curriculum-agent-audit.md).
+Non-security audit findings to address before real traffic. Full audit: [curriculum-agent-audit.md](curriculum-agent-audit.md).
 
 ### Codebase audit — July 2026 ✅ complete → fix blocks queued
 
-All seven audit sections are done: [docs/audits/codebase-audit-2026-07.md](audits/codebase-audit-2026-07.md) (summary table at the top; the doc is the source of truth for finding detail). Its **[Prioritized action plan](audits/codebase-audit-2026-07.md#prioritized-action-plan)** groups the top findings into ten branch-sized fix blocks (<300 LOC each, ordered by severity × effort — cheapest high-impact first). Work them as normal feature blocks:
+All seven audit sections are done: [codebase-audit-2026-07.md](audits/codebase-audit-2026-07.md) (summary table at the top; the doc is the source of truth for finding detail). Its **[Prioritized action plan](audits/codebase-audit-2026-07.md#prioritized-action-plan)** groups the top findings into ten branch-sized fix blocks (<300 LOC each, ordered by severity × effort — cheapest high-impact first). Work them as normal feature blocks:
 
 - [x] **Block 1 — Read-layer authz + leak one-liners** (6.1, 6.2, 1.6; ~30 LOC — PR [#240](https://github.com/mwin02/learning-app/pull/240)) — `getAuthorizedTrackView` on the /learn lesson page + `generateMetadata`; blank `requestError` in `sanitizeProgramView`; fixed string for the rejudge hook's error echo. The only content-exposure hole in the app.
 - [x] **Block 2 — Cost-bleeder stamps** (3.1 High, 3.3; ~120 LOC — PR [#242](https://github.com/mwin02/learning-app/pull/242)) — escalation fast-fail with a 24h cool-down, keyed on the Path's most recent terminal RemediationJob (no new columns; subset-of-escalated-holes check, invalidated by map edits/new holes/`--force`) — stops re-running the full remediation sourcing ladder on every request for an uncoverable topic; new `Concept.bankAttemptedAt` stamped on empty/thrown bank generation so backfill skips it for 24h instead of re-paying a Pro call per request (skips visible as `cooling` in the backfill summary).
@@ -247,7 +247,7 @@ All seven audit sections are done: [docs/audits/codebase-audit-2026-07.md](audit
 
 ### Cross-cutting (audit Section 9)
 
-- [x] **Delimit `priorKnowledge` in prompts (9.3)** — closed in place: the retrieval/select/critic prompts belonged to the 2b agent retired at the 2.5g cutover, and every surviving call site fences the free text as untrusted data (`priorKnowledge` + `goal` in both track composers, goal/background JSON-delimited in the program decomposer). Residual: the `<<< >>>` fences don't sanitize a literal `>>>` in user text — tracked as finding 1.4 in [docs/audits/codebase-audit-2026-07.md](audits/codebase-audit-2026-07.md).
+- [x] **Delimit `priorKnowledge` in prompts (9.3)** — closed in place: the retrieval/select/critic prompts belonged to the 2b agent retired at the 2.5g cutover, and every surviving call site fences the free text as untrusted data (`priorKnowledge` + `goal` in both track composers, goal/background JSON-delimited in the program decomposer). Residual: the `<<< >>>` fences don't sanitize a literal `>>>` in user text — tracked as finding 1.4 in [codebase-audit-2026-07.md](audits/codebase-audit-2026-07.md).
 
 ## Phase 4 — Tutor agent (deep feature — spec §6)
 
@@ -286,4 +286,4 @@ Native mobile, certificates, spaced repetition, multi-seat, VARK personalization
 - Whether to add Resend (email) for transactional emails — defer unless Stripe needs it; the "course ready" email also waits on this
 - ~~Whether to migrate hosting to Cloud Run before or after launch~~ — decided 2026-07-18: before (free-beta plan, Feature D)
 - **Composer-agent cutover** — flip `TRACK_COMPOSER_MODE` default to `'agent'` and delete `'single'` once the parity/observability gate proves out (2.5e-8). Audit 3.6: the mode is a compile-time const, so the parity A/B can't actually run in a deployment — make it env-overridable first, and fix the agent's two tool errors that reference nonexistent tools.
-- **When to move course workers to the cloud** — ~~trigger: real users waiting on builds~~ — decided 2026-07-18: scheduled as free-beta block D4 ([docs/plans/archive/free-beta.md](plans/archive/free-beta.md)), runbook in [docs/worker-deploy.md](worker-deploy.md).
+- **When to move course workers to the cloud** — ~~trigger: real users waiting on builds~~ — decided 2026-07-18: scheduled as free-beta block D4 ([free-beta.md](plans/archive/free-beta.md)), runbook in [worker-deploy.md](worker-deploy.md).

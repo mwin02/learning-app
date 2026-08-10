@@ -115,8 +115,10 @@ that way and will survive review because the plan said so. Specifically confirm:
 - Prisma via the `@/lib/db` singleton; raw SQL only where Prisma cannot express it
 - no `any`, no `as`, no `!` to silence the checker
 - new pure logic has a colocated unit test; DB tests use `describeDb`
-- any migration block carries the `.claude/rules/prisma-migrations.md` `DROP INDEX` warning
+- any migration block carries the `prisma-migrations.md` `DROP INDEX` warning
 - new dependencies are named as needing the user's OK (JIT rule)
+- docs are referenced by filename, not by path (CLAUDE.md § coding conventions) — this
+  applies to the plan doc you are writing as much as to the code it describes
 
 Record any deliberate deviation as a row in **Locked decisions** with its justification.
 An unjustified deviation is a bug in the plan.

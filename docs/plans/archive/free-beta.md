@@ -98,7 +98,7 @@ Fresh conversations: trust these, but re-verify line numbers before editing.
 6. **Existing ops assets:** `scripts/prewarm.ts` (drive one topic through
    `ensurePathMap` + `remediatePath`), `scripts/reset-content.ts` (wipes content INCLUDING
    the library — too blunt for C1; snapshots to `backups/` first), `scripts/remediate.ts`,
-   `scripts/embed-resources.ts` (re-embed backfill), `docs/worker-deploy.md` (complete
+   `scripts/embed-resources.ts` (re-embed backfill), `worker-deploy.md` (complete
    Cloud Run worker-pool runbook, verified 2026-07-13), `Dockerfile.worker`,
    `next.config.ts` already sets `output: 'standalone'`. Review skills:
    `/decompose`, `/review-pending-resources` (browser-graded rubric + API execution).
@@ -235,8 +235,8 @@ the floor?); whether the reject call happens sync in the vote request or is defe
   `Dockerfile.worker`'s conventions (base image, non-root user if it has one).
 - Verify by running the container locally against `.env.local` (app boots, a page
   renders, an API route answers). No cloud resources touched.
-- Draft `docs/app-deploy.md` skeleton alongside (filled during D3), companion to
-  `docs/worker-deploy.md`.
+- Draft `app-deploy.md` skeleton alongside (filled during D3), companion to
+  `worker-deploy.md`.
 
 **OPEN:** whether the app image needs Prisma engine binaries for the target platform
 (standalone output usually bundles them — verify `linux-musl` vs `debian` engine matches
@@ -310,13 +310,13 @@ window (no workers yet, so probably irrelevant); whether existing prod rows (if 
 Resources exist from the live deploy) win conflicts or local wins (lean: local wins — the
 local library is the curated, backfilled, reviewed one).
 
-### D3 — Cloud Run app service live (ops; runbook into `docs/app-deploy.md`)
+### D3 — Cloud Run app service live (ops; runbook into `app-deploy.md`)
 
 > **DONE 2026-07-29, except the deferred domain half.** The service is live at
 > `https://learning-app-74223797331.us-west1.run.app` and verified: SSR, DB
 > probe, Google sign-in round-trip, program creation 202 (which proves ADC →
 > Vertex in-cloud), admin gate 404, structured logs in Cloud Logging.
-> `docs/app-deploy.md` is stamped; §6 (domain mapping, OAuth cutover, Vercel
+> `app-deploy.md` is stamped; §6 (domain mapping, OAuth cutover, Vercel
 > decommission) stays unexecuted because the domain is not acquired.
 >
 > **Decisions settled here, which D4 and B1 inherit:**
@@ -378,7 +378,7 @@ drift audit (`.env.example` completeness) belongs to this block.
 
 ### D4 — Cloud Run worker pools live (ops)
 
-Follow `docs/worker-deploy.md` end-to-end (it's complete and was verified against the
+Follow `worker-deploy.md` end-to-end (it's complete and was verified against the
 project's GCP state on 2026-07-13) with the Supabase DB URL as the queue/database. Start
 at 1 instance; the compose workers (`docker compose --profile workers`) are retired from
 duty (kept for local dev).
@@ -446,7 +446,7 @@ a cloud worker claim + build it, structured logs visible in Cloud Logging.
 > 3. COS's cloud-init emits an ERROR (`Failed to wait for network`) on every healthy boot —
 >    a second reason not to alert on resource type alone.
 >
-> `docs/worker-deploy.md` is restructured around the VM
+> `worker-deploy.md` is restructured around the VM
 > (Cloud Run worker pool demoted to §13, the scale-up path). New tracked artifacts:
 > `cloudbuild.worker.yaml` and `deploy/worker-vm-startup.sh`. SA `course-worker`
 > created with five roles; image `course-worker:2e3330c` built and pushed.
@@ -505,7 +505,7 @@ a cloud worker claim + build it, structured logs visible in Cloud Logging.
   alerted.
 
 > **DONE 2026-07-30 (code + runbook); the notification channel is the one
-> remaining console step.** `docs/app-deploy.md` §8 is the runbook.
+> remaining console step.** `app-deploy.md` §8 is the runbook.
 >
 > **The plan's design was incomplete, and the gap is the interesting part.** A
 > client error boundary CANNOT capture server errors: in production Next replaces
@@ -623,7 +623,7 @@ concurrency; the CourseRequest queue is for real learner requests. Verify agains
 ### C2 — the campaign itself (ops; no code)
 
 Runs **after D4** (cloud workers + Supabase library) **and after topic-filing T4**
-(`docs/plans/archive/topic-filing.md`) — it is the shakedown run for both.
+(`topic-filing.md`) — it is the shakedown run for both.
 
 > ⚠️ **Added dependency on topic-filing T4 (2026-07-25).** Measured on the dev DB while
 > verifying C1: **933 of 1,927 resources (~48%) are unreachable by the warm set.** The warm
@@ -654,7 +654,7 @@ Runs **after D4** (cloud workers + Supabase library) **and after topic-filing T4
 > **100% of spine holes were rung-0 saturated** — none had ever reached web discovery, and
 > thin shelves (`physics-mechanics`, a 10-row shelf) were as exposed as borrowed ones.
 >
-> **Fixed by `docs/plans/archive/rung0-starvation.md` R1–R2** (shipped 2026-08-01): the web budget
+> **Fixed by `rung0-starvation.md` R1–R2** (shipped 2026-08-01): the web budget
 > now derives from what actually attached, spine-hole callers are floored at one web look,
 > and judged-and-rejected rows are remembered so they can't re-consume the budget. C2 step
 > 2 (adding sources) is only worth doing on top of this — a wider allowlist feeds rungs
@@ -732,7 +732,7 @@ DATABASE_URL="$SUPABASE_POOLER_URL" npm run dev
 Every skill then works unchanged and writes to Supabase. Same override for the two direct-DB
 helpers, since shell env beats `--env-file`.
 
-Deliverables: a section in `docs/app-deploy.md` (or a short `docs/operator-tooling.md`) and a
+Deliverables: a section in `app-deploy.md` (or a short `operator-tooling.md`) and a
 prerequisite line in each affected skill saying which DB the server was started against.
 
 **The hazards to write down, because they are the whole risk of this pattern:**
@@ -763,7 +763,7 @@ the line lands in the dev-server terminal in response to a skill's own precondit
 ahead of any mutation, and is emitted once per process. Verified locally 2026-07-31:
 `{"event":"db.client_created","severity":"INFO","target":"localhost:55432/learning_app"}`.
 
-**Delivered:** `docs/operator-tooling.md` (chosen over an `app-deploy.md` section — that doc
+**Delivered:** `operator-tooling.md` (chosen over an `app-deploy.md` section — that doc
 is about deploying the service, this is about pointing a laptop at production data, and it
 dies at E2); `app-deploy.md` §7 and §8 now link it, replacing §8's "E1 will document it
 properly" placeholder; a target-confirmation precondition in each of the four HTTP skills
@@ -813,7 +813,7 @@ Answers to the four open questions:
   worse answer than the plan assumed: `adminId` was reaching every handler as `null` and **no
   handler reads it**. `origin: 'review'` records *that* a review happened, never *who*. E2
   makes `adminId` a real User id and logs `admin.operator_token_auth` per call; persisting it
-  onto the rows is a separate change, noted in `docs/operator-tooling.md`.
+  onto the rows is a separate change, noted in `operator-tooling.md`.
 - **No operator UI.** The skills remain the surface for beta.
 
 **Delivered.**
@@ -835,7 +835,7 @@ Answers to the four open questions:
   states that its **direct-DB helper is a separate target** — E2 creates a second way for the
   two to disagree (API base vs. `DATABASE_URL`), which E1 did not have.
 - `.env.example`, `cloudbuild.yaml` (two Secret Manager mounts), and a rewritten
-  `docs/operator-tooling.md` — now a setup procedure, not a description of a stopgap.
+  `operator-tooling.md` — now a setup procedure, not a description of a stopgap.
 
 **Verified 2026-08-04** against a **production build** (`next start`, so `NODE_ENV=production`)
 with `DEV_AUTH=1` deliberately set, proving the bypass is inert where it claims to be:
@@ -855,7 +855,7 @@ with no token, and a sub-32-byte token all exit before any request goes out.
 
 **One operational step remains before the skills can drive production** (credentials, not
 code): create the `operator-admin-token` / `operator-admin-user-id` secrets, grant the
-runtime SA `secretAccessor` on each, and deploy. Step-by-step in `docs/operator-tooling.md`.
+runtime SA `secretAccessor` on each, and deploy. Step-by-step in `operator-tooling.md`.
 
 **Fact 4 is now stale** — it recorded "there is no admin on the deployed service", true when
 E2 was written. Checked 2026-08-04: production has exactly one `User` row,

@@ -4,10 +4,10 @@
 (scoped to this plan; see the prefix registry in [../README.md](../README.md))
 · **Started:** 2026-07-31
 
-Unblocks free-beta **C2** (`docs/plans/archive/free-beta.md` § C2). The defect below is described in
+Unblocks free-beta **C2** (`free-beta.md` § C2). The defect below is described in
 the past tense from here on — it is what the code did before R1.
 **Scope:** one retrieval defect in the sourcing ladder. Deliberately narrow — this is
-*not* `docs/plans/library-quality.md`, and neither plan fixes the other's problem.
+*not* `library-quality.md`, and neither plan fixes the other's problem.
 
 ---
 
@@ -158,7 +158,7 @@ Per spine hole it prints `rung0Hits`, the resulting `webShortfall`, a
 
 Costs one query embedding per concept. Writes nothing. Takes the standard
 `DATABASE_URL="$SUPABASE_POOLER_URL"` override to run against production
-(`docs/operator-tooling.md`).
+(`operator-tooling.md`).
 
 **Verification:** run against local `machine-learning` and production `precalculus`;
 reproduces the table above.
@@ -269,9 +269,9 @@ concept can't hide the saturating rows and turn the run green for the wrong reas
 - `src/types/resource.ts` (the `precalculus` note in `TOPIC_RELATIONS`) — the starvation it
   describes is reframed as this bug, now fixed; the note's actual argument (keep the edge)
   is untouched.
-- `docs/plans/archive/free-beta.md` § C2 — the C1 measurement block, plus a dependency on R1–R2 in
+- `free-beta.md` § C2 — the C1 measurement block, plus a dependency on R1–R2 in
   the block table.
-- `docs/plans/library-quality.md` — a "not in this plan" section: this defect is
+- `library-quality.md` — a "not in this plan" section: this defect is
   retrieval-side, and the production `precalculus` d=0.25/relevance-0.90 case is the
   evidence P3/B3 cannot reach it.
 - this file — status, and the gate re-measure of the evidence table.

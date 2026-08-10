@@ -8,7 +8,7 @@
 > and each brief below names the P/B items it discharges. An earlier status header called
 > P/B the block IDs; it was wrong.
 
-Companion to `docs/audits/library-sanity-review.md` (the audit that motivated this).
+Companion to `library-sanity-review.md` (the audit that motivated this).
 
 Two halves, in dependency order:
 
@@ -30,7 +30,7 @@ That is the single structural defect behind every symptom in the audit.
 
 ## Not in this plan: rung-0 starvation (retrieval-side)
 
-`docs/plans/archive/rung0-starvation.md` fixes a defect that looks adjacent and is not: the sourcing
+`rung0-starvation.md` fixes a defect that looks adjacent and is not: the sourcing
 ladder counted rung-0's **raw search hits** against its target, so any concept with three
 library rows inside the distance ceiling never reached web discovery — regardless of whether
 those rows taught it. Every plan here is **ingestion-side** (fields written with no way to say
@@ -829,7 +829,7 @@ from every learner's retrieval.
 3. **Scope of B1** — repair only the 306 exact parent-array matches, or the full 554-row
    shared-array set? The extra 248 include legitimate sharing and need spot-checking.
 4. **Beta timing** — this is a lot of churn against a live free beta
-   (`docs/plans/archive/free-beta.md`). Land Part 1 first and let Part 2 run gradually?
+   (`free-beta.md`). Land Part 1 first and let Part 2 run gradually?
 5. **If Q6a finds no server-side slug→id route** — is a one-time browser-harvested id map an
    acceptable standing dependency, or should KA durations stay `unknown` until a reviewer
    touches them? 879 rows ride on this.

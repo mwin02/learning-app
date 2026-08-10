@@ -14,7 +14,7 @@ A Next.js + Vertex AI (Gemini) app that generates personalized, context-aware le
 
 Original spec: `/Users/myozawwin/Downloads/learning-path-mvp-spec.md` (external to repo).
 
-Full roadmap and phase plan: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
+Full roadmap and phase plan: **[ROADMAP.md](docs/ROADMAP.md)**.
 
 ## Locked decisions
 
@@ -44,6 +44,7 @@ Full roadmap and phase plan: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 - **Errors**: no silent catches. Catch only where you can handle or translate; otherwise let it propagate. Any caught-and-continued error goes through `logError`.
 - **Types**: `strict` is on; no `any`, no `as` casts or `!` assertions to silence the checker — fix the type. A justified exception gets a one-line comment.
 - **New pure logic gets a colocated unit test** (`src/**/*.test.ts`). If it's hard to unit-test, that's a layering smell — extract the pure part.
+- **Reference a doc by its filename, never its path.** Write `` `worker-deploy.md` ``, not `` `docs/worker-deploy.md` ``. Filenames under `docs/` are unique and stable; paths are not — moving the plan docs into `docs/plans/` broke twenty references in one commit. This covers code comments, error messages, prose in other docs, skills, and rules. Two exceptions: a **markdown link target** needs a working relative path (`[worker-deploy.md](worker-deploy.md)`) — name in the label, path in the target; and a path used as an **argument or a write target** (`git mv docs/plans/x.md docs/plans/archive/`, `--out=docs/audits/y.json`) is an operation, not a reference. `README.md` also keeps its path, since two of them exist. A bare name resolves via [docs/README.md](docs/README.md).
 
 ## Repo conventions
 
