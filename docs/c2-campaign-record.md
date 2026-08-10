@@ -1,6 +1,6 @@
 # C2 — warm-path campaign record
 
-Per-topic outcomes for the free-beta warm campaign (`docs/plans/free-beta.md` § C2,
+Per-topic outcomes for the free-beta warm campaign (`docs/plans/archive/free-beta.md` § C2,
 step 6). Written for the beta announcement's honesty: what the 12 warm Paths are
 actually made of, and where they are thin.
 

@@ -14,8 +14,7 @@ work — write a new plan instead.
 
 | Plan | Status | Open blocks |
 | --- | --- | --- |
-| [free-beta.md](free-beta.md) | active | C2 — the warm-path campaign (ops, no code) |
-| [library-quality.md](library-quality.md) | active, not started | P1–P7, B1–B6 |
+| [library-quality.md](library-quality.md) | active, not started | Q1–Q8 |
 | [tutor-agent.md](tutor-agent.md) | active, not started | T1–T4 |
 
 ## Archive
@@ -23,26 +22,32 @@ work — write a new plan instead.
 | Plan | Shipped | Blocks |
 | --- | --- | --- |
 | [archive/resource-reports.md](archive/resource-reports.md) | 2026-08-09 | R1–R8 (#310–#317), F1–F7 (#320–#326) |
+| [archive/free-beta.md](archive/free-beta.md) | 2026-08-04 | A1–A4, B1, C1–C2, D1–D4, E1–E2 |
 | [archive/rung0-starvation.md](archive/rung0-starvation.md) | 2026-08-01 | R0–R3 (#295–#300) |
 | [archive/topic-filing.md](archive/topic-filing.md) | 2026-07-29 | T1–T4e (#259–#281) |
 
 ## Block ID prefix registry
 
 Block IDs are scoped to their plan, not globally unique — the table below is what
-`/plan-feature` reads to avoid minting a prefix that already means something else. Three
+`/plan-feature` reads to avoid minting a prefix that already means something else. Two
 collisions predate the registry and are left alone rather than renumbered, because the IDs
 are in shipped PR titles and in source comments:
 
 | Prefix | Claimed by | Note |
 | --- | --- | --- |
-| `A` `C` `D` `E` | free-beta | |
-| `B` | free-beta (error reporting), library-quality (backfill) | collision, pre-registry |
+| `A` `B` `C` `D` `E` | free-beta | |
 | `F` | resource-reports (review-fix chain) | |
-| `P` | library-quality (pipeline) | |
+| `Q` | library-quality | |
 | `R` | resource-reports, rung0-starvation | collision, pre-registry |
 | `T` | topic-filing, tutor-agent | collision, pre-registry |
 
-New plans pick an unclaimed letter. `G`–`O`, `Q`, `S`, `U`–`Z` are free.
+New plans pick an unclaimed letter. `G`–`P`, `S`, `U`–`Z` are free.
+
+**A prefix that isn't a block prefix doesn't belong here.** `library-quality.md` uses `P1`–`P7`
+and `B1`–`B6` for defects and backfill tasks — analysis, not blocks — and its blocks are
+`Q1`–`Q8`. Registering `P`/`B` for it was a misreading, and it invented a collision with
+free-beta's `B` that never existed. Read what `/orchestrate-feature` would consume, not every
+identifier in the doc.
 
 ## Status header
 

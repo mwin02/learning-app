@@ -4,7 +4,7 @@
 (scoped to this plan; see the prefix registry in [../README.md](../README.md))
 · **Started:** 2026-07-31
 
-Unblocks free-beta **C2** (`docs/plans/free-beta.md` § C2). The defect below is described in
+Unblocks free-beta **C2** (`docs/plans/archive/free-beta.md` § C2). The defect below is described in
 the past tense from here on — it is what the code did before R1.
 **Scope:** one retrieval defect in the sourcing ladder. Deliberately narrow — this is
 *not* `docs/plans/library-quality.md`, and neither plan fixes the other's problem.
@@ -269,7 +269,7 @@ concept can't hide the saturating rows and turn the run green for the wrong reas
 - `src/types/resource.ts` (the `precalculus` note in `TOPIC_RELATIONS`) — the starvation it
   describes is reframed as this bug, now fixed; the note's actual argument (keep the edge)
   is untouched.
-- `docs/plans/free-beta.md` § C2 — the C1 measurement block, plus a dependency on R1–R2 in
+- `docs/plans/archive/free-beta.md` § C2 — the C1 measurement block, plus a dependency on R1–R2 in
   the block table.
 - `docs/plans/library-quality.md` — a "not in this plan" section: this defect is
   retrieval-side, and the production `precalculus` d=0.25/relevance-0.90 case is the
