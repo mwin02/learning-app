@@ -10,14 +10,24 @@ This version has breaking changes — APIs, conventions, and file structure may 
 
 | Component | Where | Deploys how |
 | --- | --- | --- |
-| Next.js app | Cloud Run service `learning-app`, `us-west1`, `min-instances=0` | **automatic** on every merge to `main` (`deploy-main` Cloud Build trigger → `cloudbuild.yaml`) |
+| Next.js app | Cloud Run service `learning-app`, `us-west1`, `min-instances=0` | **automatic** on every merge to `main` **that touches code** (`deploy-main` Cloud Build trigger → `cloudbuild.yaml`; see the `ignoredFiles` note below) |
 | Course worker | GCE `e2-micro` on Container-Optimized OS, `us-central1-a` | **manual**: build → `add-metadata worker-image=…` → `instances reset` (`worker-deploy.md` §9) |
 | DB + auth | Supabase, `aws-1-us-west-1` | — |
 | Migrations | a step inside `cloudbuild.yaml`, before the deploy | with the app |
 
-Three consequences worth carrying:
+Five consequences worth carrying:
 
 - **The worker does not auto-deploy.** A merge that changes worker code changes nothing in production until someone runs `worker-deploy.md` §9. The app and the worker share `src/lib`, so this asymmetry is easy to forget.
+- **"Automatic on every merge" is not unconditional — the trigger has `ignoredFiles`.** A merge touching only `docs/**`, `**/*.md`, or `.claude/**` builds nothing and deploys nothing. Do not warn someone that a docs-only PR will deploy, and do not expect a `.claude/` change to reach production. The config is the authority, not this table:
+  ```bash
+  gcloud builds triggers describe deploy-main --project learning-app-prod-mzw \
+    --region us-west1 --format='yaml(includedFiles,ignoredFiles,filename)'
+  ```
+- **`gcloud builds list` defaults to global and this project's builds are regional.** Without `--region=us-west1` it returns an unrelated, stale-looking list with no `SHORT_SHA` — which reads exactly like "the trigger never fired" and has already sent one investigation down a blind alley. Always pass the region:
+  ```bash
+  gcloud builds list --project learning-app-prod-mzw --region us-west1 --limit 5 \
+    --format='value(id,status,createTime,substitutions.SHORT_SHA)'
+  ```
 - **`next.config.ts`'s `output: 'standalone'` is now load-bearing**, not a hedge — the `Dockerfile` copies `.next/standalone/`. Removing it breaks the image.
 - **Avoid provider-only primitives** for the same reason as before, now pointed at GCP: prefer things that would survive another move. Raise it in discussion before reaching for one.
 
