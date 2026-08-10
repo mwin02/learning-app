@@ -1,8 +1,10 @@
 # Resource reports + track regeneration — plan
 
-> **Status: shipped 2026-08-09.** R1–R7 landed as PRs #310–#317, followed by the review-fix
-> chain F1–F7 (#320–#326) and a new block R8. The whole chain merged in one sitting, migrations
-> applied, worker reset, and the feature was verified end-to-end against production the same day.
+**Status:** shipped 2026-08-09 · **Blocks:** R1–R8 (PRs #310–#317), F1–F7 (#320–#326)
+· **Block IDs:** `R`, `F` · **Started:** 2026-08-05
+
+> The whole chain merged in one sitting, migrations applied, worker reset, and the feature was
+> verified end-to-end against production the same day.
 >
 > **Parts 1 and 2 are the plan as written and are kept that way on purpose** — they record what
 > was intended, which is what stops being recoverable once the code moves on. **Part 3 is what
@@ -16,7 +18,7 @@ is how a learner collects the fix. They ship together because either alone is ha
 product — reporting a broken resource that stays in your course is frustrating, and
 regenerating a course whose defects were never fixed is a slot machine.
 
-Companion to `docs/library-quality-plan.md` (which fixes the *pipeline* that produces bad
+Companion to `docs/plans/library-quality.md` (which fixes the *pipeline* that produces bad
 rows) and the free-beta A-series (votes → trustScore → eviction). This plan adds the
 **learner-driven defect channel** and the **learner-driven repair action**.
 
@@ -70,7 +72,7 @@ now-deprecated resource — broken Tracks are triaged manually)." That invariant
 and this plan does not touch it. Regeneration builds a *new* Track and repoints the slot.
 
 **The repoint already works.** `maybeAssembleProgram`
-([src/lib/services/program.ts:192](../src/lib/services/program.ts)) sets
+([src/lib/services/program.ts:192](../../../src/lib/services/program.ts)) sets
 `ProgramPath.trackId` via `updateMany({ where: { programId, topic } })` once all sibling
 `CourseRequest`s are terminal — unconditionally, *before* the guard that only finalizes
 `Program.status` from a non-terminal state. So enqueuing a second `CourseRequest` with the
@@ -186,7 +188,7 @@ deliberate action, and a low cap is the abuse guard for a channel whose payload 
 `category === 'dead_link'`.
 
 **What**: reuse `checkLiveness` from
-[validators/liveness.ts](../src/lib/agents/validation/validators/liveness.ts) — it is already
+[validators/liveness.ts](../../../src/lib/agents/validation/validators/liveness.ts) — it is already
 the exact predicate, already timeout-bounded, already browser-UA'd, and already splits
 authoritative from heuristic. Branch on its verdict:
 
@@ -227,7 +229,7 @@ branches plus the already-deprecated and `generated` skips. Manually: report a k
 
 **Where**: `src/app/programs/_components/ReportDialog.tsx` (client) +
 `submit-report.ts`, surfaced next to `RatingButtons` in
-[NotebookResourcePane.tsx](../src/app/programs/_components/NotebookResourcePane.tsx) at its
+[NotebookResourcePane.tsx](../../../src/app/programs/_components/NotebookResourcePane.tsx) at its
 five existing placements.
 
 **What**: a small flag affordance opening a category picker (plain-language labels — "Link is

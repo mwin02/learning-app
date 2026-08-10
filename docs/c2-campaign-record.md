@@ -1,6 +1,6 @@
 # C2 — warm-path campaign record
 
-Per-topic outcomes for the free-beta warm campaign (`docs/free-beta-plan.md` § C2,
+Per-topic outcomes for the free-beta warm campaign (`docs/plans/free-beta.md` § C2,
 step 6). Written for the beta announcement's honesty: what the 12 warm Paths are
 actually made of, and where they are thin.
 
@@ -302,7 +302,7 @@ already documents the same shared-pool budget for Cloud Run and
 ## Final state — all 12 warm Paths
 
 **12 / 12 `spine_ready`. `primaryRelaxed` = 0 across every Path. 0 escalations.**
-No Path closed a hole with a hollow primary, which is the check `free-beta-plan.md`
+No Path closed a hole with a hollow primary, which is the check `free-beta.md`
 step 5 flags as necessary beyond `spine_ready`.
 
 | Topic | Spine | Attached | Median trust | Top sources |

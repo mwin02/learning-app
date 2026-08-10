@@ -1,6 +1,6 @@
 ---
 name: orchestrate-feature
-description: Orchestrate block-by-block implementation of a planned feature. Takes a plan doc path; spawns a block-implementer subagent per block, then a block-verifier and block-reviewer, and pauses at the manual verification gate before committing. Use after a planning conversation has produced docs/<feature>-plan.md.
+description: Orchestrate block-by-block implementation of a planned feature. Takes a plan doc path; spawns a block-implementer subagent per block, then a block-verifier and block-reviewer, and pauses at the manual verification gate before committing. Use after a planning conversation has produced docs/plans/<feature>.md.
 argument-hint: [plan-doc-path]
 disable-model-invocation: true
 ---
@@ -33,3 +33,12 @@ You direct three subagent types: `block-implementer` writes the code, `block-ver
 When all blocks are shipped, spawn a `block-reviewer` in `stack` mode with the PR numbers in stack order. Present its findings to the user alongside the feature summary: PRs opened, decisions made, anything deferred. Cross-block findings are fixed as follow-up commits on the affected block's branch, through the same implement → verify loop, after user confirmation.
 
 Merging the stack is a separate step — the user runs `/merge-stacked-prs` when ready, and `/code-review ultra` remains their final, user-triggered gate; do not attempt to launch it.
+
+## Harvest and archive — after the stack is merged
+
+The plan doc has one job left: give up whatever in it outlives the feature, then get out of the way. A shipped plan sitting in `docs/plans/` reads to the next agent exactly like a pending one.
+
+1. **Harvest.** Go through the plan and move each durable fact to the tier that owns it — a hard invariant with blast radius to `AGENTS.md`, a file-type convention to `.claude/rules/`, an operational procedure to the matching runbook, a milestone to `docs/ROADMAP.md`. Everything else stays in the plan.
+2. **Stamp the status header** with `shipped YYYY-MM-DD` and the PR numbers.
+3. **`git mv docs/plans/<feature>.md docs/plans/archive/`**, and move its row from Active to Archive in `docs/plans/README.md`. Leave the prefix registry entry — the IDs are in shipped PR titles.
+4. Propose all of it to the user as one commit; the verification gate applies here too.
