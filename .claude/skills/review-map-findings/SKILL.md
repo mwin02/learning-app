@@ -35,7 +35,7 @@ findings across all Paths, then pick one).
   `scripts/operator-curl.sh /api/playground/map-review -s -o /dev/null -w "%{http_code}"`
   → `200`. A `404` means the operator token is missing/wrong or its `User` row is not
   `role='admin'` (the admin route 404s rather than 401 by design) — stop and see
-  `docs/operator-tooling.md`. If it `500`s, the running service predates a schema/client
+  `operator-tooling.md`. If it `500`s, the running service predates a schema/client
   change — ask the user to redeploy (or restart the dev server, for a localhost base).
 - **Say which service you are deciding against, in your first message.** The script prints
   `[operator-curl] GET <base><path>` to stderr on every call, with a `⚠ REMOTE` marker off

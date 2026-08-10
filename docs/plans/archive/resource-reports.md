@@ -18,7 +18,7 @@ is how a learner collects the fix. They ship together because either alone is ha
 product — reporting a broken resource that stays in your course is frustrating, and
 regenerating a course whose defects were never fixed is a slot machine.
 
-Companion to `docs/plans/library-quality.md` (which fixes the *pipeline* that produces bad
+Companion to `library-quality.md` (which fixes the *pipeline* that produces bad
 rows) and the free-beta A-series (votes → trustScore → eviction). This plan adds the
 **learner-driven defect channel** and the **learner-driven repair action**.
 
@@ -543,7 +543,7 @@ course they were mid-way through, reachable by reload or back button. Both fixed
 redirects to the new track.
 
 **F7 — ops and hygiene.** No product code. Documented the merge → migrate → worker-reset ordering
-and both failure modes in `docs/worker-deploy.md` (every runtime effect that makes a rebuild
+and both failure modes in `worker-deploy.md` (every runtime effect that makes a rebuild
 correct is worker-side and ships only with a manual reset, while the button ships automatically).
 Put `npm run test:int` on the merge checklist, since F1's real regression guard is integration-only
 by construction. Scoped two verify scripts' deletes to their own fixtures — both were wiping report
@@ -673,7 +673,7 @@ independent PRs. Run the chain bottom-up in **one sitting** (`/merge-stacked-prs
 
 2. **Merge → migrations applied → worker reset, in that order.** `cloudbuild.yaml` applies
    migrations ahead of the app deploy on merge to `main`; the worker never auto-deploys.
-   Wait for the deploy build to go green, then run `docs/worker-deploy.md` §9. Deviating in
+   Wait for the deploy build to go green, then run `worker-deploy.md` §9. Deviating in
    either direction fails silently — the two failure modes are written out in that runbook's
    "Ordering when one change spans app, migrations and worker".
 

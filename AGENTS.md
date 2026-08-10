@@ -54,7 +54,7 @@ The transferable lesson is the second one: **any command that fails while holdin
 
 **The pattern:**
 
-- **Keep the secret inside one command, read from the file, never re-exported.** This is the form `.env.example` and `docs/operator-tooling.md` already prescribe, and it is leak-resistant because the value never becomes a shell word:
+- **Keep the secret inside one command, read from the file, never re-exported.** This is the form `.env.example` and `operator-tooling.md` already prescribe, and it is leak-resistant because the value never becomes a shell word:
   ```bash
   DATABASE_URL="$SUPABASE_POOLER_URL" npx tsx --env-file=.env.local scripts/<x>.ts
   ```

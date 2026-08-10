@@ -29,7 +29,7 @@ queued rows to pull (default 5 if empty).
   → `404` with a JSON `NOT_FOUND` body (fetch it without `-o /dev/null` to tell the two
   404s apart). A **plain-text** `404` means the operator token is missing/wrong or its
   `User` row is not `role='admin'` — the admin wrapper 404s rather than 401 by design;
-  stop and see `docs/operator-tooling.md`. The service also needs Vertex creds, since the
+  stop and see `operator-tooling.md`. The service also needs Vertex creds, since the
   API derives child concepts server-side.
 - **Say which service you are deciding against, in your first message.** The script prints
   `[operator-curl] POST <base><path>` to stderr on every call, with a `⚠ REMOTE` marker off

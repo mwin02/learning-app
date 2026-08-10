@@ -292,7 +292,7 @@ Migrations run as a step inside `cloudbuild.yaml`, ahead of the deploy, so "merg
 migrations" is automatic; what needs a human is holding the worker reset until that build
 is green. Between the merge and the reset the button is live and wrong, so keep the gap
 short and do not merge such a stack half-way (see the per-feature merge checklist —
-`docs/plans/archive/resource-reports.md` § "Merge checklist" for this one).
+`resource-reports.md` § "Merge checklist" for this one).
 
 ## 10. Operations
 

@@ -46,3 +46,15 @@ never committed.
 **Where does this fact go?** If it constrains code someone writes tomorrow, tier 1. If it
 is a sequence of commands someone runs against a live system, tier 2. If it explains a
 decision already made, tier 3. If a script wrote it, tier 4.
+
+## This file is the name resolver
+
+Docs are referenced **by filename, not by path** — `worker-deploy.md`, not
+`docs/worker-deploy.md` — so that moving a doc does not invalidate every mention of it
+across the codebase. The convention is stated in [CLAUDE.md](../CLAUDE.md); this page is
+where a bare name turns back into a location. Every tracked doc is listed above or in
+[plans/README.md](plans/README.md), and `git ls-files '*.md'` settles anything else.
+
+Filenames under `docs/` are unique, which is what makes this work. **Keep them unique** —
+a new doc must not reuse an existing basename. `README.md` is the one deliberate duplicate
+(this file and `plans/README.md`), which is why it is the one doc still referenced by path.

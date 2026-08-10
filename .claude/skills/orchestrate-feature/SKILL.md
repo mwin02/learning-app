@@ -38,7 +38,7 @@ Merging the stack is a separate step — the user runs `/merge-stacked-prs` when
 
 The plan doc has one job left: give up whatever in it outlives the feature, then get out of the way. A shipped plan sitting in `docs/plans/` reads to the next agent exactly like a pending one.
 
-1. **Harvest.** Go through the plan and move each durable fact to the tier that owns it — a hard invariant with blast radius to `AGENTS.md`, a file-type convention to `.claude/rules/`, an operational procedure to the matching runbook, a milestone to `docs/ROADMAP.md`. Everything else stays in the plan.
+1. **Harvest.** Go through the plan and move each durable fact to the tier that owns it — a hard invariant with blast radius to `AGENTS.md`, a file-type convention to `.claude/rules/`, an operational procedure to the matching runbook, a milestone to `ROADMAP.md`. Everything else stays in the plan.
 2. **Stamp the status header** with `shipped YYYY-MM-DD` and the PR numbers.
 3. **`git mv docs/plans/<feature>.md docs/plans/archive/`**, and move its row from Active to Archive in `docs/plans/README.md`. Leave the prefix registry entry — the IDs are in shipped PR titles.
 4. Propose all of it to the user as one commit; the verification gate applies here too.
