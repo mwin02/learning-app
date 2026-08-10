@@ -1,11 +1,12 @@
 # Library quality plan — pipeline fixes + library backfill
 
-**Status:** active — not started · **Blocks:** P1–P7 (pipeline), B1–B6 (backfill); no PRs yet
-· **Block IDs:** `P`, `B` (scoped to this plan) · **Started:** 2026-08-05
+**Status:** active — not started · **Blocks:** Q1–Q8; no PRs yet · **Block IDs:** `Q`
+· **Started:** 2026-08-05 · **Briefs retrofitted:** 2026-08-10
 
-> **Predates `/plan-feature`.** Its blocks carry no acceptance criteria and no LOC budgets.
-> Before running `/orchestrate-feature` against it, retrofit both — see
-> [../../.claude/skills/plan-feature/references/block-brief.md](../../.claude/skills/plan-feature/references/block-brief.md).
+> **`P` and `B` are not block IDs.** `P1`–`P7` are pipeline *defects* and `B1`–`B6` are
+> backfill *tasks* — the analysis this plan rests on. The implementable blocks are `Q1`–`Q8`,
+> and each brief below names the P/B items it discharges. An earlier status header called
+> P/B the block IDs; it was wrong.
 
 Companion to `docs/audits/library-sanity-review.md` (the audit that motivated this).
 
@@ -403,27 +404,417 @@ other writer has the same hole.
 
 ---
 
-## Suggested block breakdown
+# Blocks
 
-Per `CLAUDE.md`: one feature per conversation, blocks under 300 LOC, one branch per block,
-verification gate before commit. Schema-touching blocks must **stack** on the branch holding the
-previous unmerged migration, and every generated `migration.sql` must have its regenerated
-`DROP INDEX` lines for `Resource_embedding_idx` and `RemediationJob_active_per_path` deleted by
-hand (`AGENTS.md`).
+Eight blocks. Q1 and Q2 both carry migrations and therefore **stack**; Q3 onward branch off
+whichever migration branch precedes them until the chain merges. Every generated
+`migration.sql` must have its regenerated `DROP INDEX` lines for `Resource_embedding_idx` and
+`RemediationJob_active_per_path` deleted by hand — read `.claude/rules/prisma-migrations.md`
+before running `prisma migrate dev` (`AGENTS.md`).
 
-| block | scope | migration? |
-| --- | --- | --- |
-| Q1 | P1 — concept retry/bisect + `ConceptOrigin` + break vocab feedback loop | yes |
-| Q2 | P2 — `durationSource`, drop `.default(20)` **and `manual.ts`'s `DEFAULT_DURATION_MIN`**, prompt calibration, upsert validation gate | yes (stack on Q1) |
-| Q3 | B1 + B2 — concept repair driver + re-embed + centroid recompute | no |
-| Q4 | P3 — classify children at ingest instead of inheriting | no |
-| Q5 | B3 — whole-course parents by hand, then reclassify/quorum drivers | no |
-| Q6a | B4 spike — resolve a KA URL to its content id server-side. **Findings note, not shipped code**; gates Q6b. Exit: a documented server-side slug→id route, or a decision to take the browser-harvested map | no |
-| Q6b | B4 — `lib/sources/khan/` persisted-query client (pin `hash`, never send `pcv`, degrade to `unknown`), then the duration re-derivation driver + per-host adapters | no |
-| Q7 | P4 + P5 + B6 — pool-aware guardrail, on-ramp filing seam, invariant assertion | no |
-| Q8 | P6 + B5 — junk classifier at decomposition, deprecate + dedupe pass | no |
+Several blocks are **drivers**, not features: they run once against a database and their
+acceptance criteria are measured row counts, not rendered behaviour. Those criteria are
+written against the **dev DB** unless they say production, and `block-verifier` will mark
+production-only ones `untested` — which is correct, not a gap.
 
-P7 (vocabulary) stays a discussion item and is deliberately not scheduled.
+**P7 (vocabulary) is deliberately unscheduled** — it is open question 1, and it changes
+`TOPIC_RELATIONS` and the warm-set, so it is not a block until the user settles it.
+
+| block | discharges | migration | ~LOC |
+| --- | --- | --- | --- |
+| Q1 | P1 | yes | ~250 |
+| Q2 | P2 | yes (stacks on Q1) | ~280 |
+| Q3 | B1 + B2 | no | ~200 |
+| Q4 | P3 | no | ~180 |
+| Q5 | B3 | no | ~220 |
+| Q6a | B4 spike | no | ~0 (findings note) |
+| Q6b | B4 | no | ~290 |
+| Q7 | P4 + P5 + B6 | no | ~240 |
+| Q8 | P6 + B5 | no | ~260 |
+
+## Q1 — concept provenance, retry/bisect, and breaking the vocab loop (~250 LOC)
+
+Discharges **P1**.
+
+**Base branch:** `main`
+**Files owned:**
+- `prisma/schema.prisma` (+ migration — `ConceptOrigin` enum + column on `Resource`)
+- `src/lib/agents/decomposition/concepts.ts` (retry/bisect, `loadTopicVocab` exclusion)
+- `src/lib/agents/decomposition/doctoc.ts` (stamp at :253 **and** the unconditional :238 sub-container path)
+- `src/lib/agents/decomposition/manual.ts` (stamp at :64)
+- `src/lib/agents/decomposition/youtube.ts` (stamp at :114)
+- `src/lib/agents/decomposition/concepts.test.ts`
+
+**What it does.** Makes a failed concept derivation impossible to mistake for a successful
+one. Adds `ConceptOrigin` (`derived` | `inherited` | `fallback`) to `Resource`, mirroring the
+`TopicFilingOrigin` precedent. `deriveBatch` retries a failed batch once and then bisects it —
+a 25-item batch usually fails because one malformed item poisons the object parse, so
+splitting recovers the other 24. Whatever still fails writes the parent array **stamped
+`inherited`**, and the `[topic]` last resort is stamped `fallback`. `loadTopicVocab` stops
+grounding future derivations on non-`derived` concepts, which is what breaks the
+contamination feedback loop.
+
+**Out of scope.** Repairing the 306 existing rows — that is Q3, and it depends on this
+block's retry/bisect being in place. Topic classification (Q4).
+
+**Migration:** yes — new enum + non-null column with a default. Existing rows cannot be
+truthfully stamped by the migration; back-filling their real origin is Q3's job. Use a default
+that does not assert success. `DROP INDEX` rule above applies.
+
+**New deps:** none
+
+**Tests.** `concepts.test.ts` (unit, pure) — bisect arithmetic, origin selection per path,
+`loadTopicVocab` filtering. The four call sites are covered by asserting the stamp each one
+passes, not by re-testing derivation.
+
+**Acceptance criteria.**
+- [ ] A batch whose `generateObject` call throws is retried once, then split; with one
+      poisoned item in 25, the other 24 come back `derived`.
+- [ ] A derivation that fails after bisecting writes the parent array with
+      `conceptOrigin: 'inherited'` — never with `derived`.
+- [ ] The `doctoc.ts:238` sub-container path, where derivation is never attempted, stamps
+      `inherited` too.
+- [ ] The `[topic]` last-resort fallback stamps `fallback`, distinguishable from `inherited`.
+- [ ] `loadTopicVocab` returns no concepts from rows whose origin is `inherited` or
+      `fallback`.
+- [ ] A derivation failure emits a `logWarn`/`logError` line through `@/lib/log` — the
+      existing `console.log` is gone (CLAUDE.md logging rule).
+- [ ] All four call sites (`doctoc.ts:253`, `:238`, `manual.ts:64`, `youtube.ts:114`) pass an
+      explicit origin; none relies on the column default.
+
+## Q2 — duration provenance and calibration (~280 LOC)
+
+Discharges **P2**.
+
+**Base branch:** `Q1`'s branch (stacked — second migration)
+**Files owned:**
+- `prisma/schema.prisma` (+ migration — `durationSource` enum + nullable `durationMin`)
+- `src/lib/agents/tools/web-fallback.ts` (schema at :58, prompt guidance at :751)
+- `src/lib/agents/decomposition/doctoc.ts` (remove `.default(20)` at :79)
+- `src/lib/agents/decomposition/manual.ts` (delete `DEFAULT_DURATION_MIN` at :23, make `durationMin` optional on `ManualChildInput`, fix the header comment)
+- `src/lib/agents/decomposition/upsert-resource.ts` (the validation gate)
+- `src/lib/agents/track/allocate.ts` (null handling — see open question 2)
+- colocated tests for the gate and the null-duration path
+
+**What it does.** Stops encoding "we don't know" as a number that looks measured. Adds
+`durationSource` (`api` | `extracted` | `estimated` | `unknown`) and makes `durationMin`
+nullable. Removes both hardcoded fills — `doctoc.ts`'s `.default(20)` and `manual.ts`'s
+`DEFAULT_DURATION_MIN`, the library's single largest source of placeholder durations. Gives
+the extraction prompt per-type ranges, an instruction to read a duration off **link text or
+the parent TOC** (never "the page" — doc-TOC never fetches child pages), and explicit
+permission to return null, which per Cause B is the half that actually moves the number. Adds
+an upsert validation gate rejecting a `book` or multi-unit `course` under 30 minutes and any
+atomic leaf over `MAX_ATTACHABLE_DURATION_MIN`.
+
+**Out of scope.** Re-deriving the 1,177 existing placeholder rows (Q6b). Fetching child pages
+to measure them — explicitly deferred in P2 fix 3 as its own sizing exercise. Container/child
+duration reconciliation is a *write-path* rule here; the one-time repair of the 22 existing
+contradictions belongs to Q6b.
+
+**Migration:** yes — `durationMin` becomes nullable and `durationSource` is added. Nullable
+widening is safe; the risk is downstream non-null assumptions, which is why
+`track/allocate.ts` is in this block's files. `DROP INDEX` rule above applies.
+
+**New deps:** none
+
+**Tests.** Unit, pure: the validation gate's accept/reject table per `type`; the null-duration
+path through `allocate.ts`'s slice budget; prompt assembly containing the ranges and the null
+permission.
+
+**Acceptance criteria.**
+- [ ] `durationMin` is nullable in the schema and `durationSource` is non-null on every write
+      path.
+- [ ] Neither `doctoc.ts` nor `manual.ts` contains a hardcoded duration constant; a supplier
+      that provides no duration produces `null` + `unknown`, not `20`.
+- [ ] `manual.ts`'s header comment no longer advertises the default as intentional parity
+      with doc-TOC.
+- [ ] The upsert gate rejects a `book` at 20 minutes and an atomic leaf above
+      `MAX_ATTACHABLE_DURATION_MIN`; it accepts a `book` at 400.
+- [ ] The extraction prompt contains per-type ranges, the link-text/TOC instruction, and
+      explicit permission to return null.
+- [ ] `track/allocate.ts` handles a null `durationMin` per the resolution of open question 2
+      — no `NaN` reaches a slice budget, and the behaviour is asserted by a test.
+- [ ] `attach-candidates.ts` still passes a null-duration candidate through its
+      `durationFactor` and its `MAX_ATTACHABLE_DURATION_MIN` gate (this was already null-safe;
+      the criterion guards against a regression).
+
+## Q3 — repair contaminated concepts, re-embed, recompute centroids (~200 LOC)
+
+Discharges **B1 + B2**. Driver block.
+
+**Base branch:** `Q2`'s branch (needs Q1's retry/bisect in the code path)
+**Files owned:**
+- `scripts/repair-concepts.ts` (new)
+- `src/lib/curation/concept-repair.ts` (new — pure selection + stamping logic)
+- `src/lib/curation/concept-repair.test.ts` (new)
+
+**What it does.** Re-runs `deriveChildConcepts` for the ~306 children whose concept array
+exactly equals their parent's, with Q1's retry/bisect in place, and stamps `ConceptOrigin` on
+every row touched. Then re-embeds — `scripts/embed-resources.ts` already re-embeds where
+`embeddedAt < updatedAt`, so the repair's writes make the rows self-selecting — and recomputes
+`TopicCentroid`, which is a mean over exactly those vectors and is stale the moment the repair
+lands.
+
+**Out of scope.** The wider 554-row shared-array set: some sharing is legitimate (a genuine
+4-part series on one concept), so it needs spot-checking first. That is open question 3, and
+the script should support it behind a flag without running it.
+
+**Migration:** none
+**New deps:** none
+
+**Tests.** `concept-repair.test.ts` (unit, pure — the exact-match predicate, the
+contiguous-`orderInParent`-run detector, stamping). The driver run itself is verified by the
+acceptance criteria below against the dev DB.
+
+**Acceptance criteria.**
+- [ ] After the run, zero children carry a concept array exactly equal to their parent's
+      without an `inherited` stamp.
+- [ ] No contiguous 25-aligned `orderInParent` runs of identical concept arrays remain.
+- [ ] Every row the driver touched has a non-default `conceptOrigin`.
+- [ ] Every repaired row has `embeddedAt >= updatedAt` after the re-embed step.
+- [ ] `TopicCentroid` rows are recomputed after the re-embed, not before.
+- [ ] The driver is idempotent: a second run reports zero rows to repair.
+- [ ] The driver refuses to run against production without an explicit flag (the guard
+      pattern from `scripts/reset-content.ts`).
+
+## Q4 — classify decomposed children instead of inheriting (~180 LOC)
+
+Discharges **P3**.
+
+**Base branch:** `Q3`'s branch (ordering constraint: the classifier reads embeddings built over `conceptsTaught`, so Q1 + Q3 must precede it)
+**Files owned:**
+- `src/lib/agents/decomposition/upsert-resource.ts` (the filing call at child creation)
+- `src/lib/agents/tools/classify-topic.ts` (accepting the parent topic as a prior)
+- colocated tests
+
+**What it does.** Files a decomposed child on its own content at ingest, gated by the existing
+T2b guardrail, instead of inheriting the parent's topic. The parent's topic becomes a prior,
+not an answer. This is the fix for the pattern where every topic a reviewer called a dumping
+ground is inherited-filed and every classifier-filed topic came back clean.
+
+**Out of scope.** Reclassifying the 775 existing `inherited` memberships (Q5). Changing the
+guardrail's thin-shelf behaviour (Q7).
+
+**Migration:** none
+**New deps:** none
+
+**Tests.** Unit, pure — the prior is applied as a tiebreak and does not override a confident
+classification; the guardrail still abstains where it did before.
+
+**Acceptance criteria.**
+- [ ] A newly decomposed child whose content clearly belongs to a different topic than its
+      parent is filed on its own topic, with `origin` recorded as a classifier filing rather
+      than `inherited`.
+- [ ] A child the classifier cannot place confidently still gets a membership, marked so the
+      uncertainty is visible — it is not dropped.
+- [ ] The parent topic influences but never overrides a confident classification.
+- [ ] Newly created children no longer produce `origin: 'inherited'` rows on the happy path;
+      a decomposition run over a fixture container yields zero.
+- [ ] `assertMembershipInvariants` (`src/lib/curation/resource-topics.ts:331`) passes after a
+      decomposition run.
+
+## Q5 — reclassify the 775 inherited memberships (~220 LOC)
+
+Discharges **B3**. Driver block.
+
+**Base branch:** `Q4`'s branch
+**Files owned:**
+- `scripts/reclassify-topics.ts` (extend — it exists for exactly this backlog)
+- `scripts/refile-quorum-topics.ts` (extend — cohort mode)
+- `src/lib/curation/quorum-refile.ts` (if cohort handling needs pure logic)
+- colocated tests
+
+**What it does.** Works the inherited-membership backlog, whole-course parents first — their
+children reclassify onto the correct shelf for free. The eight cohorts are listed in B3 above
+(Lamar Differential Equations, Lamar Calculus III, MIT 18.781, Khan cryptography, and the
+rest). Several target shelves (`number-theory` 14, `graph-theory` 9,
+`differential-equations` 11) sit below `MIN_VOUCHABLE_POOL`, which is precisely the deadlock
+`refile-quorum-topics.ts` was written to break — so these route through it as a cohort, not
+row by row.
+
+**Out of scope.** Changing what `reclassify-topics.ts` fundamentally does. Two constraints
+from its header are load-bearing and must survive this block: it **never refiles**, it records
+doubt; moving primaries is `refile-quorum-topics.ts`'s job.
+
+**Migration:** none
+**New deps:** none
+
+**Tests.** Unit, pure — cohort grouping, the below-`MIN_VOUCHABLE_POOL` routing decision.
+
+**Acceptance criteria.**
+- [ ] `reclassify-topics.ts` still never moves a primary — a run leaves every
+      `ResourceTopic.isPrimary` row's topic unchanged.
+- [ ] The eight named cohorts are refiled onto their stated target shelves.
+- [ ] Cohorts whose target shelf is below `MIN_VOUCHABLE_POOL` go through the quorum path and
+      are not blocked by the thin-shelf deadlock.
+- [ ] The count of `origin: 'inherited'` memberships drops materially from 775, and the
+      remainder is reported rather than silently left.
+- [ ] `assertMembershipInvariants` passes across the whole table afterwards.
+- [ ] **Documented in the block's report:** the compose workers were stopped before the run
+      (`docker compose --profile workers stop worker`) and restarted with `--build` after.
+
+## Q6a — spike: resolve a Khan Academy URL to its content id server-side (~0 LOC)
+
+Discharges the **B4** blocker. **A findings note, not shipped code.** Gates Q6b.
+
+**Base branch:** `Q5`'s branch
+**Files owned:** `docs/plans/library-quality.md` (a findings section appended to B4) — no source files.
+
+**What it does.** Answers the one unsolved step in the Khan strategy: the persisted-query
+endpoint keys on an internal numeric content id, not the URL slug we store. Three avenues,
+cheapest first, documented in B4 above: find a path-keyed persisted operation by hooking
+`window.fetch`/`XMLHttpRequest.open` before page scripts; grep the `cdn.kastatic.org` bundles
+for embedded hashes; or accept a one-time browser-harvested `slug → id` map for the 879 rows.
+
+**Out of scope.** Writing the client. Touching the library. This block ships a decision.
+
+**Migration:** none
+**New deps:** none
+**Tests.** none — there is no code.
+
+**Acceptance criteria.**
+- [ ] The findings section names a working server-side slug→id route, **or** records that
+      none was found and recommends the harvested map (open question 5).
+- [ ] Whichever avenue succeeded is reproducible from the note by someone who was not in the
+      conversation — the exact request, or the exact capture procedure.
+- [ ] The `hash` parameter's stability and `pcv`'s irrelevance are re-confirmed against live
+      Khan Academy, or the note records that they have changed since 2026-08-05.
+- [ ] The user has answered open question 5 before Q6b starts.
+
+## Q6b — Khan client and the duration re-derivation drivers (~290 LOC)
+
+Discharges **B4**. Driver block. **Blocked on Q6a.**
+
+**Base branch:** `Q6a`'s branch (or `Q5`'s, if Q6a shipped no doc change)
+**Files owned:**
+- `src/lib/sources/khan/client.ts` (new — persisted-query client)
+- `src/lib/sources/khan/client.test.ts`, `client.int.test.ts` (new)
+- `scripts/rederive-durations.ts` (new — driver + per-host adapters)
+- `src/lib/curation/duration-estimate.ts` (new — pure per-host estimators)
+- `src/lib/curation/duration-estimate.test.ts` (new)
+
+**What it does.** Builds the LLM-free Khan client — pin `hash`, never send `pcv`, zod-parse
+the response — and the re-derivation driver behind it. Per-host: Khan videos take the exact
+`duration` seconds from the API; Khan articles take Perseus-body word count at ~120 wpm for
+math prose plus 2 minutes for worked examples; Lamar's 179 static HTML articles take
+deterministic reading time from word count; OCW's 94 take page/word count or media duration.
+Khan `/pi/` interactives expose no measurable signal at all and record `unknown`. Then
+container durations are recomputed from children, fixing the 22 arithmetic contradictions.
+
+**Out of scope.** The ~26 "everything else" rows — hand review, not a driver. The 43 KA
+Cryptography rows, 11 OCW 6.0002 lectures and 7 6.045J decks already corrected by hand on
+2026-08-05 must **not** be redone; the 16 `/pi/` interactives in that container are still 20
+and should be swept to `unknown`.
+
+**Migration:** none — Q2 added the columns.
+**New deps:** none
+
+**Tests.** `duration-estimate.test.ts` (unit, pure — word-count estimators per host, the
+container-sum reconciliation). `client.test.ts` (unit — zod parse, the degrade-to-`unknown`
+path on every failure shape). **One live integration test** against the real endpoint, so a
+Khan hash rotation fails a test rather than silently filling the library with unknowns.
+
+**Acceptance criteria.**
+- [ ] Any non-200, schema mismatch, or missing `duration` from Khan yields `unknown` — never
+      a number, and never a fallback to 20.
+- [ ] A known Khan video resolves to its exact duration (`one-time-pad` → 176 seconds).
+- [ ] The live integration test fails, loudly, if the pinned `hash` stops working.
+- [ ] The client sends `hash` and never sends `pcv`.
+- [ ] The 20-minute share of the library drops from 59% toward the ~5% expected by chance.
+- [ ] No `khanacademy.org` video row remains at exactly 20 with `durationSource != 'api'`.
+- [ ] No `book` under 30 minutes, and no container under half its children's summed duration,
+      remains.
+- [ ] Every row the driver touched carries a `durationSource`.
+- [ ] Khan `/pi/` interactive rows are `unknown`, not estimated.
+- [ ] The rows hand-corrected on 2026-08-05 are unchanged by the run.
+- [ ] **The `unknown` count is reported, not minimised.** A large honest unknown count is the
+      success condition for Q2, not a regression — a run that drove unknowns toward zero by
+      guessing has failed this block.
+
+## Q7 — pool-aware guardrail, on-ramp filing seam, invariant (~240 LOC)
+
+Discharges **P4 + P5 + B6**.
+
+**Base branch:** `Q6b`'s branch
+**Files owned:**
+- `src/lib/curation/topic-centroids.ts` (pool-size-aware abstention)
+- `src/lib/curation/topic-knn.ts` (the k-NN side of the same decision)
+- `src/lib/curation/resource-topics.ts` (the new invariant in `assertMembershipInvariants`)
+- the on-ramp creation path (route it through `setPrimaryTopic` at `resource-topics.ts:53`)
+- colocated tests
+
+**What it does.** Makes the filing guardrail abstain on a thin shelf rather than contest,
+which is the same failure `review-drain.ts:101` already reasons about ("the fix is a fallback,
+NOT a lower `MIN_CENTROID_MEMBERS`"). All 42 contested rows sit in the four thinnest topics and
+most are correctly filed — an 8-member shelf simply cannot outvote calculus's 479. Also routes
+generated on-ramp creation through the `setPrimaryTopic` seam like every other writer, and
+adds an invariant so a resource with a scalar `topic` and zero memberships is a detected error
+rather than an invisible one.
+
+**Out of scope.** Lowering `MIN_CENTROID_MEMBERS` — explicitly the wrong fix. P7's vocabulary
+question.
+
+**Migration:** none
+**New deps:** none
+
+**Tests.** Unit, pure — abstain-vs-contest across pool sizes either side of
+`MIN_CENTROID_MEMBERS`; the new invariant's detection.
+
+**Acceptance criteria.**
+- [ ] A resource filed against a shelf below `MIN_CENTROID_MEMBERS` abstains rather than
+      recording `contested`.
+- [ ] `MIN_CENTROID_MEMBERS` is unchanged at 20 (`topic-centroids.ts:35`).
+- [ ] The 41-of-42 contested primaries are not orphaned by the change — no resource loses its
+      primary membership.
+- [ ] A generated on-ramp created through the normal path has a `ResourceTopic` row; creating
+      one no longer bypasses `setPrimaryTopic`.
+- [ ] `assertMembershipInvariants` fails when given a resource with a scalar `topic` and zero
+      memberships, and the 7 known on-ramp holes are backfilled to zero.
+- [ ] A whole-table invariant run reports no other writer with the same hole.
+
+## Q8 — junk classifier, deprecation and dedupe (~260 LOC)
+
+Discharges **P6 + B5**.
+
+**Base branch:** `Q7`'s branch
+**Files owned:**
+- `src/lib/curation/non-teaching.ts` (new — the classifier)
+- `src/lib/curation/non-teaching.test.ts` (new)
+- `src/lib/agents/decomposition/upsert-resource.ts` (call it at decomposition)
+- `scripts/deprecate-furniture.ts`, `scripts/dedupe-resources.ts` (new)
+
+**What it does.** Stops container furniture entering as teachable leaves — `about-the-course`,
+`course-prerequisites`, Khan `Feedback`/`Checkpoint`/`what-s-next`, docs front-matter — with a
+cheap title/summary heuristic plus the existing junk-leaf signal (low absolute centroid
+similarity, which the schema notes "doubles as a decent junk-leaf detector"). Then two
+one-time passes: deprecate the P6 furniture list at `deprecationSeverity: soft`, and dedupe
+the known pairs (~40 Khan ap-calculus-ab/calculus-1 twins where the dup is always `(review)`,
+9 Lamar CalcII/CalcIII twins, and the rest listed in B5).
+
+**Out of scope.** Hard deprecation — these are quality downgrades, not dead links, and
+in-flight Tracks must be unaffected. Any dedupe pair not enumerated in B5.
+
+**Migration:** none
+**New deps:** none
+
+**Tests.** `non-teaching.test.ts` (unit, pure) — the heuristic over a fixture set of real
+furniture titles and real lesson titles, asserting no false positive on the lesson titles.
+False positives matter more than misses here: wrongly deprecating a real lesson removes it
+from every learner's retrieval.
+
+**Acceptance criteria.**
+- [ ] The classifier flags every title in the P6 furniture list.
+- [ ] It flags none of a fixture set of genuine lesson titles — zero false positives is the
+      bar for this block.
+- [ ] Furniture admitted during a fresh decomposition run is not created as an atomic
+      pickable leaf.
+- [ ] The deprecation pass writes `deprecationSeverity: 'soft'` only; no row becomes `hard`.
+- [ ] No built Track changes as a result of the deprecation pass (Tracks are immutable —
+      the invariant `pending-review.ts` states).
+- [ ] Each deduped pair leaves exactly one active row, and the survivor is the non-`(review)`
+      one for the Khan pairs.
+- [ ] Both drivers are idempotent and refuse to run against production without an explicit
+      flag.
 
 ## Open questions for you
 
@@ -438,7 +829,7 @@ P7 (vocabulary) stays a discussion item and is deliberately not scheduled.
 3. **Scope of B1** — repair only the 306 exact parent-array matches, or the full 554-row
    shared-array set? The extra 248 include legitimate sharing and need spot-checking.
 4. **Beta timing** — this is a lot of churn against a live free beta
-   (`docs/plans/free-beta.md`). Land Part 1 first and let Part 2 run gradually?
+   (`docs/plans/archive/free-beta.md`). Land Part 1 first and let Part 2 run gradually?
 5. **If Q6a finds no server-side slug→id route** — is a one-time browser-harvested id map an
    acceptable standing dependency, or should KA durations stay `unknown` until a reviewer
    touches them? 879 rows ride on this.

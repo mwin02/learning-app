@@ -1,10 +1,15 @@
 # Free-Beta Plan — ratings, GCP migration, observability, warm paths
 
-**Status:** active · **Blocks:** A1–A4, B1, C1, D1–D4, E1–E2 shipped; **C2 open** (the
-campaign itself — ops, no code) · **Block IDs:** `A`, `B`, `C`, `D`, `E` · **Started:** 2026-07-18
+**Status:** shipped 2026-08-04 · **Blocks:** A1–A4, B1, C1–C2, D1–D4, E1–E2
+· **Block IDs:** `A`, `B`, `C`, `D`, `E` · **Started:** 2026-07-18
+
+> C2, the last block, was an ops campaign rather than code: it ran against production from
+> 2026-08-01 and closed out 2026-08-04 with #301–#303. Its per-topic outcomes are a separate
+> record — [../../c2-campaign-record.md](../../c2-campaign-record.md) — because they describe
+> the library's actual state, not the plan's intent, and they outlive this doc.
 
 **Decided 2026-07-18.** The next milestone is a **free public beta**, displacing Stripe as
-NEXT UP (Stripe + audit Block 5 move to post-beta; see [ROADMAP](../ROADMAP.md)). This doc is
+NEXT UP (Stripe + audit Block 5 move to post-beta; see [ROADMAP](../../ROADMAP.md)). This doc is
 the source of truth for the beta work: every block below is meant to be workable by a
 **fresh conversation** with no other context — it records the design decisions already
 locked, the codebase facts the decisions rest on, and the ambiguities deliberately left
