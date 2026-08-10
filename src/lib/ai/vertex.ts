@@ -6,7 +6,7 @@ function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
     throw new Error(
-      `Missing required env var ${name}. See .env.example and docs/ROADMAP.md (Feature 1a).`,
+      `Missing required env var ${name}. See .env.example and ROADMAP.md (Feature 1a).`,
     );
   }
   return value;

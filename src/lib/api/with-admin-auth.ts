@@ -12,7 +12,7 @@
 //      goes through the SAME role lookup as (1) — the credential identifies,
 //      the DB authorizes. This is the only path that works against the deployed
 //      service, and it is what the curation skills use (operator-token.ts,
-//      docs/operator-tooling.md).
+//      operator-tooling.md).
 //   3. Dev bypass: NODE_ENV=development AND DEV_AUTH=1 (adminId null), so the
 //      local playground works without OAuth setup. Dead in production builds.
 //   4. Otherwise 404 plain text — NOT 401/403: unlike user routes, internal

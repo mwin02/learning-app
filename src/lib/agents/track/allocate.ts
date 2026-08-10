@@ -44,7 +44,7 @@
 export const TIME_WEIGHTS = ['low', 'normal', 'high', 'deep'] as const;
 export type TimeWeight = (typeof TIME_WEIGHTS)[number];
 
-// Budget-fill Block 1 (docs/track-budget-fill-plan.md): the coarse DEPTH TIER the
+// Budget-fill Block 1 (track-budget-fill-plan.md): the coarse DEPTH TIER the
 // builder computes from the learner's minute budget and hands the composer, so the
 // composer can size each lesson's mandatory complementary core to the budget WITHOUT
 // doing minute math (the LLM judges which resources complement; code does the

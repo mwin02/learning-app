@@ -5,7 +5,7 @@
 //
 // The DEFECT channel, next to rating/route.ts's taste channel: a vote's only lever
 // is deprecation, while a report names which defect so triage can act on the right
-// axis. Reports deliberately do not touch trustScore (docs/resource-reports-plan.md).
+// axis. Reports deliberately do not touch trustScore (resource-reports.md).
 //
 // Same shape as the rating route: real session required (a report needs an owner —
 // the dev bypass's null userId gets a clean 401), zod-parsed body, burst cap after

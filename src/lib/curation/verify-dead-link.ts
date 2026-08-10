@@ -50,7 +50,7 @@
 // Runs synchronously inside the report request. Rejected alternatives: voiding
 // the promise (unsound on Cloud Run with min-instances=0 — the instance can be
 // frozen the moment the response is written) and a queue hop (a whole job type
-// for one HTTP call). See docs/resource-reports-plan.md § R2.
+// for one HTTP call). See resource-reports.md § R2.
 
 import type { Prisma, ReportState } from '@prisma/client';
 import { prisma } from '@/lib/db';

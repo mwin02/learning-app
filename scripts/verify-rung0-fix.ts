@@ -1,4 +1,4 @@
-// Live verification for rung0-starvation R1+R2 (docs/rung0-starvation-plan.md, block R3).
+// Live verification for rung0-starvation R1+R2 (rung0-starvation.md, block R3).
 //
 //   npx tsx --env-file=.env.local scripts/verify-rung0-fix.ts [topic...]
 //   DATABASE_URL="$SUPABASE_POOLER_URL" npx tsx --env-file=.env.local scripts/verify-rung0-fix.ts precalculus

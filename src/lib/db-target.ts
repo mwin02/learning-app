@@ -5,7 +5,7 @@
 // `decomp-db.cjs`.
 //
 // Free-beta E1: the operator pattern is a LOCAL app against the PRODUCTION
-// database (docs/operator-tooling.md), so the same `curl localhost:3000/…` a
+// database (operator-tooling.md), so the same `curl localhost:3000/…` a
 // review skill runs edits either the throwaway Docker library or the live one,
 // with nothing in the command to tell them apart. One recognisable string,
 // formatted identically wherever it is printed, is what makes the target

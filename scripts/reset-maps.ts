@@ -1,7 +1,7 @@
 // Free-beta C1: map-layer reset — wipe the MAP/TRACK/PROGRAM layer while
 // PRESERVING the whole resource library. Existing Paths were authored under
 // several different pipeline versions and are inconsistent, so the beta plan
-// recreates them rather than patching them (docs/free-beta-plan.md): wipe the
+// recreates them rather than patching them (free-beta.md): wipe the
 // maps, keep the curated library, rebuild via scripts/warm-paths.ts.
 //
 //   npx tsx --env-file=.env.local scripts/reset-maps.ts          # dry run + snapshot

@@ -3,7 +3,7 @@
 // reason: each action carries different payload, and a curator or an autonomous
 // reviewer both get a precise, self-describing contract.
 //
-// The union IS the routing table from docs/resource-reports-plan.md § R4 —
+// The union IS the routing table from resource-reports.md § R4 —
 // deprecate/unlink/refile/edit/dismiss, each landing on machinery that already
 // exists. See report-triage.ts for what each one delegates to.
 

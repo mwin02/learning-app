@@ -521,7 +521,7 @@ export const PATH_BUILD_STALE_MS = 35 * 60 * 1000;
 // per-lesson loop scales with lesson count, so it issues more).
 //
 // From the app and the worker (tens of ms to Supabase) 5s is ample. It is the E1
-// "local app, remote DB" operator pattern that breaks it (docs/operator-tooling.md):
+// "local app, remote DB" operator pattern that breaks it (operator-tooling.md):
 // on a laptop several hundred ms from the database, ~11 trips is 4–8s and the
 // transaction expires mid-flight. Measured during the C2 warm campaign — a single
 // bare `path.update` took 342–856ms — where it failed `physics-mechanics`

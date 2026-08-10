@@ -1,5 +1,5 @@
 // Read-only calibration for the topic-filing guardrail proposed in
-// docs/topic-filing-plan.md (block T2). Makes no writes.
+// topic-filing.md (block T2). Makes no writes.
 //
 //   npx tsx --env-file=.env.local scripts/calibrate-topic-threshold.ts
 //
