@@ -29,6 +29,9 @@ export const manualChildSchema = z.object({
   title: z.string().trim().min(1).max(300),
   summary: z.string().trim().max(2000).optional(),
   type: z.enum(['article', 'video', 'course', 'interactive', 'docs', 'book']).optional(),
+  // Q2: optional in the wire contract, but the supplier is reading the rendered page
+  // — the one context where the real number is free — so omitting it costs the row a
+  // duration outright. There is no default any more: absent ⇒ null + `unknown`.
   durationMin: z.number().int().min(1).max(6000).optional(),
 });
 

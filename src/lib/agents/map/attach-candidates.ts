@@ -37,7 +37,7 @@ import { logError } from '@/lib/log';
 // re-cap) get 1 — no penalty, like trust-less rows. On-ramp concepts use the strict
 // long regime with the short end disabled (orientation should be short); every other
 // concept the soft default with the sub-5-min thinness penalty.
-function durationFactor(durationMin: number | undefined, isOnRamp: boolean): number {
+function durationFactor(durationMin: number | null | undefined, isOnRamp: boolean): number {
   if (durationMin == null) return 1;
   const r = isOnRamp ? MAP_DURATION_RANKING.onRamp : MAP_DURATION_RANKING.default;
   // Too long: decay past targetMin toward `floor` over spanMin.
@@ -65,7 +65,7 @@ function durationFactor(durationMin: number | undefined, isOnRamp: boolean): num
 // ordering) — so vote-driven trust changes re-rank persisted candidates the same
 // way they'd rank if freshly judged. Ordering only: admission and the primary
 // floor stay pure coverage gates.
-export function selectionScore(c: { coverageScore: number; trustScore?: number; durationMin?: number }, isOnRamp: boolean): number {
+export function selectionScore(c: { coverageScore: number; trustScore?: number; durationMin?: number | null }, isOnRamp: boolean): number {
   const blend =
     c.trustScore == null
       ? c.coverageScore
@@ -90,7 +90,7 @@ export type RankOpts = {
 // without re-litigating admission, so it can only ever drop the lowest-ranked EXCESS
 // beyond the cap and never empties a non-empty input. Pure; input order is not assumed;
 // output is selection-score-desc (== coverage-desc when no trust/duration is carried).
-export function capCandidates<T extends { role: ConceptResourceRole; coverageScore: number; trustScore?: number; durationMin?: number }>(
+export function capCandidates<T extends { role: ConceptResourceRole; coverageScore: number; trustScore?: number; durationMin?: number | null }>(
   candidates: T[],
   opts: RankOpts = {},
 ): T[] {
@@ -121,7 +121,7 @@ export function capCandidates<T extends { role: ConceptResourceRole; coverageSco
 // capCandidates. Pure + generic; tests without a DB. Output is selection-score-desc
 // (the floor is still a pure COVERAGE gate — trust/duration never admit a sub-floor
 // candidate; rows without a durationMin pass the ceiling, like trust-less rows).
-export function selectAttachable<T extends { role: ConceptResourceRole; coverageScore: number; trustScore?: number; durationMin?: number }>(
+export function selectAttachable<T extends { role: ConceptResourceRole; coverageScore: number; trustScore?: number; durationMin?: number | null }>(
   candidates: T[],
   opts: RankOpts = {},
 ): T[] {

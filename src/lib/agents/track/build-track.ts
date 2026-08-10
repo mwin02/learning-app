@@ -37,7 +37,12 @@ import {
   type ValidatedLesson,
 } from '@/lib/agents/track/validate-composition';
 import { lessonPrereqKeys, budgetMinutesFor } from '@/lib/agents/track/plan';
-import { allocate, depthTier, type AllocatorLesson } from '@/lib/agents/track/allocate';
+import {
+  allocate,
+  depthTier,
+  effectiveDurationMin,
+  type AllocatorLesson,
+} from '@/lib/agents/track/allocate';
 import { cleanupLessons } from '@/lib/agents/track/cleanup-lessons';
 import { thickenSpine } from '@/lib/agents/track/thicken-seam';
 import { sectionTrack } from '@/lib/agents/track/section-track';
@@ -216,14 +221,24 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
     // Join real durations + roles from the loaded candidates: the duration floor pass
     // below and the allocator both need them (durations to size slices, roles so a
     // replacement primary is a real `teaches`).
-    const durationById = new Map<string, number>();
+    const durationById = new Map<string, number | null>();
+    const typeById = new Map<string, string>();
     const roleById = new Map<string, ConceptResourceRole>();
     for (const cpt of concepts)
       for (const cand of cpt.candidates) {
         durationById.set(cand.resourceId, cand.durationMin);
+        typeById.set(cand.resourceId, cand.type);
         roleById.set(cand.resourceId, cand.role);
       }
-    const durOf = (id: string) => durationById.get(id) ?? 0;
+    const candOf = (id: string) => ({
+      resourceId: id,
+      durationMin: durationById.get(id) ?? null,
+      type: typeById.get(id) ?? null,
+    });
+    // Q2: an unknown duration costs its type median, not 0 — both here (the thin-primary
+    // floor, which would otherwise read every unmeasured row as a 0-minute Short) and in
+    // the allocator's slice budget.
+    const durOf = (id: string) => (durationById.has(id) ? effectiveDurationMin(candOf(id)) : 0);
 
     // --- 2g/2.5: primary duration floor ------------------------------------
     // The composer occasionally seats a too-thin resource (a ~1-min YouTube Short) as
@@ -248,8 +263,8 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
       isFrontier: l.isFrontier,
       masteryRelevant: l.masteryRelevant,
       timeWeight: l.timeWeight,
-      mandatory: l.mandatoryResourceIds.map((id) => ({ resourceId: id, durationMin: durOf(id) })),
-      optional: l.optionalResourceIds.map((id) => ({ resourceId: id, durationMin: durOf(id) })),
+      mandatory: l.mandatoryResourceIds.map(candOf),
+      optional: l.optionalResourceIds.map(candOf),
     }));
     const prereqKeys = lessonPrereqKeys(
       validatedLessons.map((l, i) => ({ key: keyOf(i), conceptSlugs: l.conceptSlugs })),

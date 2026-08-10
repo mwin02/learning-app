@@ -103,7 +103,11 @@ export async function decomposePlaylist(args: {
     title: it.title,
     type: 'video',
     difficulty,
-    durationMin: durations.get(it.videoId) ?? 1,
+    // Q2: the Data API measures these. A video the videos.list response didn't
+    // cover (deleted/private between calls) used to become a 1-minute row; it is
+    // now honestly unknown.
+    durationMin: durations.get(it.videoId) ?? null,
+    durationSource: durations.has(it.videoId) ? 'api' : 'unknown',
     summary: it.description.trim().slice(0, 300) || it.title,
     ...resolveConcepts({ derived: concepts.get(it.videoId), parentConcepts, topic }),
     orderInParent: it.position,

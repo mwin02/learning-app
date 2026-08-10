@@ -72,7 +72,7 @@ export type SearchResult = {
   type: string;
   tier: string;
   difficulty: string;
-  durationMin: number;
+  durationMin: number | null;
   summary: string;
   prerequisiteConcepts: string[];
   conceptsTaught: string[];

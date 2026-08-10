@@ -68,7 +68,9 @@ export type DocTocResult =
 
 type CandidateLink = { url: string; text: string };
 
-const ExtractionSchema = z.object({
+// Exported for the Q2 unit test: that `durationMin` has NO default is the whole point
+// of the fix, and a regression there is invisible except at ingestion time.
+export const ExtractionSchema = z.object({
   pageKind: z.enum(['single_lesson', 'lesson_sequence', 'reference_index']),
   sections: z
     .array(
@@ -76,7 +78,14 @@ const ExtractionSchema = z.object({
         url: z.string(),
         title: z.string().min(1),
         summary: z.string().default(''),
-        durationMin: z.number().int().min(1).max(6000).default(20),
+        // Q2: no default. This router never fetches the child page, so the only
+        // duration evidence in context is whatever the link text or the parent TOC
+        // states — and the old `.default(20)` turned "the model said nothing" into a
+        // measured-looking 20 on 59% of the library. Absent ⇒ null + `unknown`.
+        durationMin: z.number().int().min(1).max(6000).optional(),
+        // Whether `durationMin` was READ off the link text/TOC rather than guessed,
+        // which is the difference between `extracted` and `estimated` provenance.
+        durationStated: z.boolean().default(false),
         // True when this section is itself an index of further lessons (a
         // sub-course inside a path), so it's worth drilling into; false for a
         // terminal lesson page. Lets us recurse only into real sub-containers
@@ -235,6 +244,12 @@ export async function decomposeDocToc(args: {
 
   const children: ChildInput[] = valid.map((s, idx) => {
     const sub = subResults[idx];
+    // Q2: a section the model left without a duration stays without one. `extracted`
+    // only when the model says it read the number off the link text/TOC.
+    const duration =
+      s.durationMin == null
+        ? { durationMin: null, durationSource: 'unknown' as const }
+        : { durationMin: s.durationMin, durationSource: s.durationStated ? ('extracted' as const) : ('estimated' as const) };
     if (sub?.ok === true) {
       // Sub-index → a nested container child (unpickable; its leaves are pickable).
       // Derivation is never attempted here, so the parent's array is copied
@@ -244,7 +259,9 @@ export async function decomposeDocToc(args: {
         title: s.title,
         type: 'course',
         difficulty,
-        durationMin: s.durationMin,
+        // A container's own duration is reconciled against its children at upsert
+        // (containerDuration); the extractor's guess about an index page is not it.
+        ...duration,
         summary: s.summary || s.title,
         ...resolveConcepts({ derived: undefined, parentConcepts, topic }),
         orderInParent: idx,
@@ -257,7 +274,7 @@ export async function decomposeDocToc(args: {
       title: s.title,
       type: 'article',
       difficulty,
-      durationMin: s.durationMin,
+      ...duration,
       summary: s.summary || s.title,
       ...resolveConcepts({ derived: concepts.get(s.url), parentConcepts, topic }),
       orderInParent: idx,
@@ -270,7 +287,7 @@ export async function decomposeDocToc(args: {
 
 // ── LLM selection ────────────────────────────────────────────────────────────
 
-const EXTRACT_SYSTEM_PROMPT = `You analyze one web page from a documentation or learning site and classify how it is structured. You are given the page title, a snippet of its body text, and the list of links found on the page (each with its visible text).
+export const EXTRACT_SYSTEM_PROMPT = `You analyze one web page from a documentation or learning site and classify how it is structured. You are given the page title, a snippet of its body text, and the list of links found on the page (each with its visible text).
 
 Classify the page into exactly one pageKind:
 
@@ -287,7 +304,13 @@ Rules for sections (only when pageKind is "lesson_sequence"):
 - Choose ONLY from the provided links — copy their "url" verbatim. Never invent or modify a URL.
 - Include only the actual ordered lesson/chapter pages. Exclude nav, login, search, social, "about", external/unrelated links, and the page's own URL.
 - Put them in the order a learner should follow.
-- title: a concise lesson title (you may clean up the link text). summary: one short sentence on what the section covers. durationMin: rough minutes to read/work through the section.
+- title: a concise lesson title (you may clean up the link text). summary: one short sentence on what the section covers.
+
+Rules for durationMin (read these before answering — a confident wrong number is worse than no number):
+- You have NOT seen the section's own page. The only evidence available to you is the link text, the surrounding table of contents, and the page snippet.
+- If a duration is STATED there — "Lecture 3 (50 min)", "12:34", "~2 hours", "Week 4" — use it (converted to whole minutes) and set durationStated: true.
+- If no duration is stated anywhere, OMIT durationMin entirely and leave durationStated false. "Unknown" is a correct, expected answer and is preferred over a guess. Do not fill in a typical value to be helpful.
+- Only estimate (durationMin present, durationStated false) when the link text itself tells you the size — an explicit page/problem/exercise count, or a title that names the format ("Chapter 7", "Problem set 3"). Then use these typical ranges: article/lesson page 5-20; docs section 5-30; video 5-60; interactive exercise set 10-45; a whole course or module 120-1200; a book 300-3000.
 - isContainer: set true ONLY if the section is itself an index/outline of further lessons that should be drilled into (a sub-course or module inside a larger path — e.g. a "JavaScript" course listed inside a "Full Stack" path, which in turn lists its own lessons). Set false for a normal terminal lesson page that teaches its content directly. When unsure, set false (we keep it whole rather than over-drilling). Most sections in an ordinary tutorial are terminal lessons (false); isContainer is the exception, used for multi-level catalogs.
 - If it is a lesson_sequence but you cannot identify distinct lesson pages among the links, return an empty sections list.`;
 

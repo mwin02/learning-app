@@ -49,7 +49,7 @@ export type ComposerCandidate = {
   title: string;
   type: string;
   difficulty: string;
-  durationMin: number;
+  durationMin: number | null;
   // Phase 2g-5: true for the AI-authored on-ramp lesson (origin='generated'). A
   // deterministic post-composition pass promotes it to its lesson's primary so the
   // orientation content leads (build-track enforceGeneratedPrimary), rather than the
@@ -373,7 +373,7 @@ function buildPrompt(args: {
       title: string;
       type: string;
       difficulty: string;
-      durationMin: number;
+      durationMin: number | null;
       role: ConceptResourceRole;
     }[];
   }[];

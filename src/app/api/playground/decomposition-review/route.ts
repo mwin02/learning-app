@@ -147,7 +147,7 @@ export const POST = withAdminAuth(async (req) => {
             difficulty: resource.difficulty,
             summary: resource.summary,
             conceptsTaught: resource.conceptsTaught,
-            durationMin: resource.durationMin,
+            durationMin: resource.durationMin ?? undefined,
           },
           { force: input.force },
         );

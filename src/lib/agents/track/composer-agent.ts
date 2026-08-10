@@ -99,9 +99,9 @@ export async function composeTrackAgent(args: {
   // to {conceptSlug, resourceId}. The model only ever sees handles (never raw ids), and
   // an unknown handle resolves to nothing — one bad id can't fail a build.
   const byHandle = new Map<string, { conceptSlug: string; resourceId: string }>();
-  const handlesByConcept = new Map<string, { handle: string; title: string; type: string; difficulty: string; durationMin: number; role: string }[]>();
+  const handlesByConcept = new Map<string, { handle: string; title: string; type: string; difficulty: string; durationMin: number | null; role: string }[]>();
   // Flat view of every candidate (with its owning concept + coverage) for search_candidates.
-  type FlatCandidate = { handle: string; conceptSlug: string; conceptTitle: string; title: string; type: string; difficulty: string; durationMin: number; role: string; coverageScore: number; trustScore?: number };
+  type FlatCandidate = { handle: string; conceptSlug: string; conceptTitle: string; title: string; type: string; difficulty: string; durationMin: number | null; role: string; coverageScore: number; trustScore?: number };
   const allCandidates: FlatCandidate[] = [];
   let n = 0;
   for (const c of concepts) {

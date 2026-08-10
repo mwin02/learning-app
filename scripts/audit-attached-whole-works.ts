@@ -43,7 +43,7 @@ async function main() {
     slug: string;
     title: string;
     url: string;
-    durationMin: number;
+    durationMin: number | null;
     type: string;
     paths: string[];
     tracks: string[];
@@ -71,7 +71,7 @@ async function main() {
   }
 
   console.log(`Scanned ${rows.length} attached active resources; ${findings.length} whole-work suspect(s).\n`);
-  for (const f of findings.sort((a, b) => b.durationMin - a.durationMin)) {
+  for (const f of findings.sort((a, b) => (b.durationMin ?? 0) - (a.durationMin ?? 0))) {
     console.log(`- ${f.slug}`);
     console.log(`  title: ${f.title}`);
     console.log(`  url: ${f.url}`);
