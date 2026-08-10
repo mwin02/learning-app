@@ -1,4 +1,4 @@
-// Block 0 (docs/track-budget-fill-plan.md) — one-off data cleanup for container
+// Block 0 (track-budget-fill-plan.md) — one-off data cleanup for container
 // escapes: `atomic` resources over MAX_ATTACHABLE_DURATION_MIN that are attached
 // to concepts (the 2026-07-03 audit found two: the 1,800m MIT OCW convex-
 // optimization course and the 1,200m MML book, 3 ConceptResource links total).

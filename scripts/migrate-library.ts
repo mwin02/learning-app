@@ -7,7 +7,7 @@
 // The local library is the curated, backfilled, human-reviewed asset; Supabase
 // has the schema but no rows. This moves the four tables that constitute the
 // library and nothing else — the map/track/program layer is rebuilt by the warm
-// campaign (C2), not migrated (docs/free-beta-plan.md).
+// campaign (C2), not migrated (free-beta.md).
 //
 // COPIES: Source, TopicAlias, Resource, ResourceTopic.
 //   ResourceTopic is NOT in the plan's original table list (it postdates it, from

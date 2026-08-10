@@ -1,7 +1,7 @@
 // Topic filing T1 — backfill one primary ResourceTopic membership per existing Resource
 // from the legacy scalar `Resource.topic`.
 //
-// A driver, not an in-migration step (docs/topic-filing-plan.md, "Backfill"): 1,926 rows
+// A driver, not an in-migration step (topic-filing.md, "Backfill"): 1,926 rows
 // is fine either way, but the free-beta D2 Supabase cutover re-runs table lists and a
 // driver is re-runnable where a migration is not.
 //

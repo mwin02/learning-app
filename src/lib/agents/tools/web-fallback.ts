@@ -189,7 +189,7 @@ export async function sourceFromWeb({
   //     changed in R1 is the arithmetic behind that skip: the caller judges rung 0
   //     first and spends the budget on judged SURVIVORS, so raw hits that the judge
   //     throws away no longer suppress discovery (they used to, permanently — see
-  //     docs/rung0-starvation-plan.md).
+  //     rung0-starvation.md).
   //   rung 1 (iteration 1) — allowlisted fan-out: the YouTube Data API prong +
   //     a grounded prong hard-restricted to the curated source domains. Distinct
   //     queries against high-quality sources, so a concept usually fills here.

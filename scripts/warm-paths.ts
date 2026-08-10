@@ -27,7 +27,7 @@ import { remediatePath } from '../src/lib/agents/track/remediate-path';
 import { TOPIC_SLUGS } from '../src/types/resource';
 
 // The warm set: every curated topic except `go` (off-niche for the beta — stays
-// available on demand, just not pre-built). See docs/free-beta-plan.md § C2.
+// available on demand, just not pre-built). See free-beta.md § C2.
 const WARM_TOPICS: string[] = TOPIC_SLUGS.filter((t) => t !== 'go');
 
 // Remediation is web-sourcing + LLM-heavy per hole, so keep the default low: this

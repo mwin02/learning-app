@@ -21,7 +21,7 @@
 // Scored against the scalar `Resource.topic` mirror the same run reads 84.3%. And do not
 // compare either figure to the 2026-07-25 run (11 topics): agreement is not comparable
 // across vocabularies, and T4b's shelf splits depress purity mechanically. See As-built
-// T4e items 1-2 in docs/topic-filing-plan.md.
+// T4e items 1-2 in topic-filing.md.
 //
 // k-NN also handles multi-modal topics, which a single mean vector represents badly —
 // and most of our topics are multi-modal.

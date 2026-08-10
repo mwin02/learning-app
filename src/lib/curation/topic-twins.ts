@@ -1,6 +1,6 @@
 // Topic filing T1.5 — merge a drifted canonical into the slug it should have been.
 //
-// Two twins exist (docs/topic-filing-plan.md T4 §2, pulled forward to T1.5 so the
+// Two twins exist (topic-filing.md T4 §2, pulled forward to T1.5 so the
 // open-vocabulary classifier never runs against a polluted vocabulary):
 //   data-structures-and-algorithms → data-structures-algorithms  (a twin of a CURATED slug)
 //   probability                    → probability-and-statistics  (a twin of a LEARNED one)

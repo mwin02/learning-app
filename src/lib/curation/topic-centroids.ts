@@ -3,7 +3,7 @@
 // One row per topic holding the mean embedding of that topic's pool. It is the cheap
 // PRE-FILTER input for the T2b filing guardrail (margin = own-centroid similarity minus
 // the best other centroid); the expensive k-NN purity check only runs for rows the
-// margin leaves contested. See docs/topic-filing-plan.md § "Centroid table".
+// margin leaves contested. See topic-filing.md § "Centroid table".
 //
 // `TopicCentroid.centroid` is a required pgvector column Prisma can't model, so — like
 // `Resource.embedding` — every read and write is raw SQL and lives here.

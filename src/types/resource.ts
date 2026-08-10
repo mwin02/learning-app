@@ -98,7 +98,7 @@ export const TOPIC_RELATIONS: Record<string, readonly string[]> = {
   // relaxed primaries. That was read at the time as a locked cost tradeoff. It was not —
   // it was a defect: the rung counted RAW search hits rather than judged survivors, so
   // rows the judge threw away suppressed web discovery permanently. Fixed by
-  // rung0-starvation R1/R2 (docs/rung0-starvation-plan.md); the budget now comes from
+  // rung0-starvation R1/R2 (rung0-starvation.md); the budget now comes from
   // what attached, and a spine hole is guaranteed at least one web look. Either way it
   // was never an argument about this edge — the same starvation hit topics with no
   // relations at all.

@@ -17,7 +17,7 @@ function makeClient() {
   }
   // Announce the target once per process. The operator pattern for the review
   // skills is a LOCAL dev server pointed at the PRODUCTION database (free-beta
-  // E1, docs/operator-tooling.md): the `curl localhost:3000/…` those skills run
+  // E1, operator-tooling.md): the `curl localhost:3000/…` those skills run
   // is byte-identical either way, so this line is the only thing at the call
   // site that says which library is about to be edited. Emitted here because
   // this is the only place the app resolves DATABASE_URL.
