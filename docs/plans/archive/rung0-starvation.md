@@ -1,10 +1,13 @@
 # Rung-0 starvation — plan
 
-**Status:** **implemented 2026-08-01** (R0–R3). Proposed 2026-07-31; unblocks free-beta
-**C2** (`docs/free-beta-plan.md` § C2). The defect below is described in the past tense
-from here on — it is what the code did before R1.
+**Status:** shipped 2026-08-01 · **Blocks:** R0–R3, PRs #295–#300 · **Block IDs:** `R`
+(scoped to this plan; see the prefix registry in [../README.md](../README.md))
+· **Started:** 2026-07-31
+
+Unblocks free-beta **C2** (`docs/plans/free-beta.md` § C2). The defect below is described in
+the past tense from here on — it is what the code did before R1.
 **Scope:** one retrieval defect in the sourcing ladder. Deliberately narrow — this is
-*not* `docs/library-quality-plan.md`, and neither plan fixes the other's problem.
+*not* `docs/plans/library-quality.md`, and neither plan fixes the other's problem.
 
 ---
 
@@ -81,7 +84,7 @@ filed at relevance **0.80/0.90 by the classifier** — "Functions", "Evaluating 
 "Worked example: evaluating expressions with function notation". Well-filed, well-embedded,
 semantically close, and none of them teach transformations or compositions. That is a
 different population from the junk samples below (d≈0.4+, relevance 0.00), and it is why no
-ingestion-side fix reaches this defect: `library-quality-plan.md` P3/B3 would move neither
+ingestion-side fix reaches this defect: `library-quality.md` P3/B3 would move neither
 those rows nor those distances.
 
 Content samples — none of these teach the concept they were retrieved for:
@@ -101,11 +104,11 @@ Three facts worth carrying:
    without a single web search. Any framing that treats this as a big-borrowed-shelf
    problem (precalculus ← calculus) is wrong: 3 rows inside 0.48 is a low bar.
 2. **Exact duplicates consume the budget twice.** `polynomial-functions` spent 2 of its 3
-   slots on one resource. That is `library-quality-plan.md` B5's dedupe item with a
+   slots on one resource. That is `library-quality.md` B5's dedupe item with a
    measurable retrieval cost — but deduping does not fix this defect, it only widens the
    junk pool slightly.
 3. **Filing quality is not the lever.** Most saturating rows here are `origin: inherited`
-   or `relevance: 0.00` classifier filings, so `library-quality-plan.md` P3/B3 would
+   or `relevance: 0.00` classifier filings, so `library-quality.md` P3/B3 would
    change *which* junk rung 0 returns. It would still return 3 rows and still zero the web
    budget. The gate re-measure strengthened this: production `precalculus`'s surviving hole
    saturates on rows the classifier filed at **0.80/0.90** at d=0.251–0.300 — perfect
@@ -118,7 +121,7 @@ near-but-wrong neighbours is permanently unfillable, and nothing in the campaign
 it — not queue draining, not remediation, not `--force`. **C2 step 2 (adding sources) is
 futile while this stands**: a wider allowlist only feeds rungs 1–2, which never run.
 
-## Relationship to `library-quality-plan.md`
+## Relationship to `library-quality.md`
 
 Disjoint. P1–P7 are ingestion-side (fields written with no way to say "unknown"). This is
 retrieval-side. Neither plan's fixes touch the other's defect. This plan does **not**
@@ -266,16 +269,16 @@ concept can't hide the saturating rows and turn the run green for the wrong reas
 - `src/types/resource.ts` (the `precalculus` note in `TOPIC_RELATIONS`) — the starvation it
   describes is reframed as this bug, now fixed; the note's actual argument (keep the edge)
   is untouched.
-- `docs/free-beta-plan.md` § C2 — the C1 measurement block, plus a dependency on R1–R2 in
+- `docs/plans/free-beta.md` § C2 — the C1 measurement block, plus a dependency on R1–R2 in
   the block table.
-- `docs/library-quality-plan.md` — a "not in this plan" section: this defect is
+- `docs/plans/library-quality.md` — a "not in this plan" section: this defect is
   retrieval-side, and the production `precalculus` d=0.25/relevance-0.90 case is the
   evidence P3/B3 cannot reach it.
 - this file — status, and the gate re-measure of the evidence table.
 
 ## Explicitly out of scope
 
-- Any of `library-quality-plan.md` Q1–Q8.
+- Any of `library-quality.md` Q1–Q8.
 - Tuning `REJUDGE_ROUTE_MAX_DISTANCE` or `REMEDIATION_SOURCE_TARGET_COUNT`. Both are
   tempting and neither is the defect — a tighter ceiling would just move the threshold at
   which starvation begins.

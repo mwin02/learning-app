@@ -1,7 +1,10 @@
 # Free-Beta Plan — ratings, GCP migration, observability, warm paths
 
+**Status:** active · **Blocks:** A1–A4, B1, C1, D1–D4, E1–E2 shipped; **C2 open** (the
+campaign itself — ops, no code) · **Block IDs:** `A`, `B`, `C`, `D`, `E` · **Started:** 2026-07-18
+
 **Decided 2026-07-18.** The next milestone is a **free public beta**, displacing Stripe as
-NEXT UP (Stripe + audit Block 5 move to post-beta; see [ROADMAP](ROADMAP.md)). This doc is
+NEXT UP (Stripe + audit Block 5 move to post-beta; see [ROADMAP](../ROADMAP.md)). This doc is
 the source of truth for the beta work: every block below is meant to be workable by a
 **fresh conversation** with no other context — it records the design decisions already
 locked, the codebase facts the decisions rest on, and the ambiguities deliberately left
@@ -615,7 +618,7 @@ concurrency; the CourseRequest queue is for real learner requests. Verify agains
 ### C2 — the campaign itself (ops; no code)
 
 Runs **after D4** (cloud workers + Supabase library) **and after topic-filing T4**
-(`docs/topic-filing-plan.md`) — it is the shakedown run for both.
+(`docs/plans/archive/topic-filing.md`) — it is the shakedown run for both.
 
 > ⚠️ **Added dependency on topic-filing T4 (2026-07-25).** Measured on the dev DB while
 > verifying C1: **933 of 1,927 resources (~48%) are unreachable by the warm set.** The warm
@@ -646,7 +649,7 @@ Runs **after D4** (cloud workers + Supabase library) **and after topic-filing T4
 > **100% of spine holes were rung-0 saturated** — none had ever reached web discovery, and
 > thin shelves (`physics-mechanics`, a 10-row shelf) were as exposed as borrowed ones.
 >
-> **Fixed by `docs/rung0-starvation-plan.md` R1–R2** (shipped 2026-08-01): the web budget
+> **Fixed by `docs/plans/archive/rung0-starvation.md` R1–R2** (shipped 2026-08-01): the web budget
 > now derives from what actually attached, spine-hole callers are floored at one web look,
 > and judged-and-rejected rows are remembered so they can't re-consume the budget. C2 step
 > 2 (adding sources) is only worth doing on top of this — a wider allowlist feeds rungs

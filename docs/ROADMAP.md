@@ -10,7 +10,7 @@ The product loop is complete end-to-end: a stranger lands on the notebook home p
 
 ### ⭐ NEXT UP — Free public beta (ratings → GCP migration → observability → warm paths)
 
-**Decided 2026-07-18**, displacing Stripe: launch as a **free beta** first. Full block-by-block plan (locked decisions, codebase facts, open questions — written so each block is workable from a fresh conversation): **[docs/free-beta-plan.md](free-beta-plan.md)**.
+**Decided 2026-07-18**, displacing Stripe: launch as a **free beta** first. Full block-by-block plan (locked decisions, codebase facts, open questions — written so each block is workable from a fresh conversation): **[docs/plans/free-beta.md](plans/free-beta.md)**.
 
 **1. Feature A — resource ratings** (stacked chain; live before beta users arrive):
 
@@ -286,4 +286,4 @@ Native mobile, certificates, spaced repetition, multi-seat, VARK personalization
 - Whether to add Resend (email) for transactional emails — defer unless Stripe needs it; the "course ready" email also waits on this
 - ~~Whether to migrate hosting to Cloud Run before or after launch~~ — decided 2026-07-18: before (free-beta plan, Feature D)
 - **Composer-agent cutover** — flip `TRACK_COMPOSER_MODE` default to `'agent'` and delete `'single'` once the parity/observability gate proves out (2.5e-8). Audit 3.6: the mode is a compile-time const, so the parity A/B can't actually run in a deployment — make it env-overridable first, and fix the agent's two tool errors that reference nonexistent tools.
-- **When to move course workers to the cloud** — ~~trigger: real users waiting on builds~~ — decided 2026-07-18: scheduled as free-beta block D4 ([docs/free-beta-plan.md](free-beta-plan.md)), runbook in [docs/worker-deploy.md](worker-deploy.md).
+- **When to move course workers to the cloud** — ~~trigger: real users waiting on builds~~ — decided 2026-07-18: scheduled as free-beta block D4 ([docs/plans/free-beta.md](plans/free-beta.md)), runbook in [docs/worker-deploy.md](worker-deploy.md).

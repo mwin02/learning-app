@@ -1,5 +1,8 @@
 # Topic Filing Plan — multi-topic membership, open-vocabulary filing
 
+**Status:** shipped 2026-07-29 · **Blocks:** T1–T4e, PRs #259–#281 · **Block IDs:** `T`
+· **Started:** 2026-07-25
+
 **Drafted 2026-07-25; revised 2026-07-25 after two consolidated design reviews** (guardrail
 timing, container embedding, uncertainty carrier, collision guardrail, resequencing).
 Fixes a structural defect in resource ingestion: a discovered
@@ -25,34 +28,34 @@ Six verified mechanics compound into that outcome:
 
 1. **Topic is stamped once, at insert, and never revisited.** `persistDiscovered` picks
    `filedTopic` and passes it to `upsertResource(filedTopic, …)`
-   ([web-fallback.ts:405–430](../src/lib/agents/tools/web-fallback.ts)), which writes it on create
-   ([upsert-resource.ts:118](../src/lib/agents/decomposition/upsert-resource.ts),
-   [:156](../src/lib/agents/decomposition/upsert-resource.ts)); decomposition children inherit the
-   parent's ([:377](../src/lib/agents/decomposition/upsert-resource.ts),
-   [:411](../src/lib/agents/decomposition/upsert-resource.ts)). **No code path anywhere updates
+   ([web-fallback.ts:405–430](../../../src/lib/agents/tools/web-fallback.ts)), which writes it on create
+   ([upsert-resource.ts:118](../../../src/lib/agents/decomposition/upsert-resource.ts),
+   [:156](../../../src/lib/agents/decomposition/upsert-resource.ts)); decomposition children inherit the
+   parent's ([:377](../../../src/lib/agents/decomposition/upsert-resource.ts),
+   [:411](../../../src/lib/agents/decomposition/upsert-resource.ts)). **No code path anywhere updates
    `Resource.topic` after creation** — and the metadata-correction whitelist deliberately
-   excludes it ([resource-update-schema.ts](../src/lib/api/resource-update-schema.ts)).
+   excludes it ([resource-update-schema.ts](../../../src/lib/api/resource-update-schema.ts)).
 2. **The filing vocabulary is a closed, code-owned allowlist.** `classifyDiscoveryTopics`
    may only return a member of `relatedTopics(requestTopic)`; anything else is dropped and
-   falls back to the request topic ([classify-topic.ts:33–37](../src/lib/agents/tools/classify-topic.ts)).
-   `relatedTopics` = `{topic} ∪ TOPIC_RELATIONS` ([resource.ts:75–82](../src/types/resource.ts)),
-   and `TOPIC_RELATIONS` has **five** keys total ([resource.ts:41–70](../src/types/resource.ts)).
+   falls back to the request topic ([classify-topic.ts:33–37](../../../src/lib/agents/tools/classify-topic.ts)).
+   `relatedTopics` = `{topic} ∪ TOPIC_RELATIONS` ([resource.ts:75–82](../../../src/types/resource.ts)),
+   and `TOPIC_RELATIONS` has **five** keys total ([resource.ts:41–70](../../../src/types/resource.ts)).
 3. **For most topics the classifier never runs at all.** It is skipped when
-   `candidateTopics.length <= 1` ([web-fallback.ts:406](../src/lib/agents/tools/web-fallback.ts),
-   [classify-topic.ts:38](../src/lib/agents/tools/classify-topic.ts)). `discrete-mathematics` has no
+   `candidateTopics.length <= 1` ([web-fallback.ts:406](../../../src/lib/agents/tools/web-fallback.ts),
+   [classify-topic.ts:38](../../../src/lib/agents/tools/classify-topic.ts)). `discrete-mathematics` has no
    edges, so every discovery under it is stamped with zero classification.
 4. **New topics can only be born from a learner request.** The topic gate — the only thing
    that mints canonical slugs into `TopicAlias` — runs in the program plan pass
-   ([topic-gate.ts:1–20](../src/lib/agents/topic-gate.ts)). Discovery has no minting path, and a
+   ([topic-gate.ts:1–20](../../../src/lib/agents/topic-gate.ts)). Discovery has no minting path, and a
    freshly minted topic starts edgeless, so it cannot become a filing target without a code
    edit to `TOPIC_RELATIONS`.
 5. **The mislabel is permanent even once the right topic exists.** `upsertResource` dedupes
    on canonical URL and, on a cross-topic collision, logs `skip cross-topic URL collision`
    and returns `skipped` — it does not refile
-   ([upsert-resource.ts:76–93](../src/lib/agents/decomposition/upsert-resource.ts)).
+   ([upsert-resource.ts:76–93](../../../src/lib/agents/decomposition/upsert-resource.ts)).
 6. **Retrieval hard-filters on topic**, so a mis-filed row is reachable only from the topic
-   it was mis-filed under ([search-resources.ts:113](../src/lib/agents/tools/search-resources.ts),
-   [attach-candidates.ts:169](../src/lib/agents/map/attach-candidates.ts)).
+   it was mis-filed under ([search-resources.ts:113](../../../src/lib/agents/tools/search-resources.ts),
+   [attach-candidates.ts:169](../../../src/lib/agents/map/attach-candidates.ts)).
 
 ### Blast radius (measured 2026-07-25, dev DB)
 
@@ -105,9 +108,9 @@ the allowlist — and the correction has two halves:
 | Membership model | New `ResourceTopic` join table. `Resource.topic` **stays** as a denormalized mirror of the primary membership — non-breaking rollout, and the `@@index([topic, status, tier])` keeps working. |
 | Filing vocabulary | Full canonical vocabulary (`listCanonicals()` = `TOPIC_SLUGS ∪ TopicAlias.canonical`), **not** `relatedTopics(requestTopic)`. |
 | Filing guardrail | **k-NN label purity** over the resource's embedding (k=10), with a centroid-margin pre-filter — replacing the allowlist ceiling. Calibrated 2026-07-25; the originally-proposed absolute cosine threshold was **measured and rejected** (see T2). Self-widening: a topic gets easier to file into as its pool grows, with no deploy. |
-| Guardrail timing | The embedding is computed **pre-insert**, in `persistDiscovered`, so the guardrail runs at filing time. Its input (`title` + `summary` + `conceptsTaught`, [upsert-resource.ts:183–187](../src/lib/agents/decomposition/upsert-resource.ts)) is fully known before insert; without this, every fresh find hits the "no embedding yet" degradation row and the guardrail is dead code at its primary application point (embeds are post-commit, [:177–189](../src/lib/agents/decomposition/upsert-resource.ts)). The vector is passed into the transaction; the post-commit `safeEmbedResource` becomes a no-op for these rows. Changes `upsertResource`'s signature. |
-| Containers | **Containers get embedded too** — one extra call each. The motivating case *is* a container, and containers currently never enter `embedTasks` ([upsert-resource.ts:144–152](../src/lib/agents/decomposition/upsert-resource.ts)), so the guardrail was structurally blind to the exact defect class this plan exists for — and children inherit the container's topic, multiplying one mistake by 45. Safe: retrieval already excludes non-atomic rows via the default `decompositionStatus = 'atomic'` predicate ([search-resources.ts:126](../src/lib/agents/tools/search-resources.ts)), not by embedding presence. The container's guardrail verdict governs what its children inherit. |
-| Uncertainty | Park, never guess — carried on the **membership** (`ResourceTopic.contested`), **not** on `Resource.status`. Discovery rows are already born `pending_review` ([upsert-resource.ts:133](../src/lib/agents/decomposition/upsert-resource.ts), children `:162`) and `DEFAULT_STATUSES` includes `pending_review` ([search-resources.ts:87](../src/lib/agents/tools/search-resources.ts)), so a status flip adds no distinguishable signal and "parked" rows would stay retrievable anyway. Quality review and filing confidence are orthogonal axes. Contested **secondaries** are excluded from retrieval; a contested **primary** stays retrievable (never orphan a row). |
+| Guardrail timing | The embedding is computed **pre-insert**, in `persistDiscovered`, so the guardrail runs at filing time. Its input (`title` + `summary` + `conceptsTaught`, [upsert-resource.ts:183–187](../../../src/lib/agents/decomposition/upsert-resource.ts)) is fully known before insert; without this, every fresh find hits the "no embedding yet" degradation row and the guardrail is dead code at its primary application point (embeds are post-commit, [:177–189](../../../src/lib/agents/decomposition/upsert-resource.ts)). The vector is passed into the transaction; the post-commit `safeEmbedResource` becomes a no-op for these rows. Changes `upsertResource`'s signature. |
+| Containers | **Containers get embedded too** — one extra call each. The motivating case *is* a container, and containers currently never enter `embedTasks` ([upsert-resource.ts:144–152](../../../src/lib/agents/decomposition/upsert-resource.ts)), so the guardrail was structurally blind to the exact defect class this plan exists for — and children inherit the container's topic, multiplying one mistake by 45. Safe: retrieval already excludes non-atomic rows via the default `decompositionStatus = 'atomic'` predicate ([search-resources.ts:126](../../../src/lib/agents/tools/search-resources.ts)), not by embedding presence. The container's guardrail verdict governs what its children inherit. |
+| Uncertainty | Park, never guess — carried on the **membership** (`ResourceTopic.contested`), **not** on `Resource.status`. Discovery rows are already born `pending_review` ([upsert-resource.ts:133](../../../src/lib/agents/decomposition/upsert-resource.ts), children `:162`) and `DEFAULT_STATUSES` includes `pending_review` ([search-resources.ts:87](../../../src/lib/agents/tools/search-resources.ts)), so a status flip adds no distinguishable signal and "parked" rows would stay retrievable anyway. Quality review and filing confidence are orthogonal axes. Contested **secondaries** are excluded from retrieval; a contested **primary** stays retrievable (never orphan a row). |
 | New topics from discovery | Allowed, but only through the existing `runTopicGate` (tiers 1–2 short-circuit, tier 3 mints + persists the alias). A new topic with no Path is harmless — it waits in the library until a learner asks. |
 | URL collisions | A URL discovered under a second topic adds a membership **only after clearing the same k-NN guardrail**. A collision is the *searched* topic asserting membership — the exact signal "The modelling error" rejects — so it gets no free pass. Collision rows: `relevance` = k-NN purity (never the schema default 1.0, which would outrank guarded classifier rows under any future `minRelevance`), `isPrimary = false` always, and they count against the membership cap. |
 | `TOPIC_RELATIONS` | Survives, demoted to a **retrieval widening** hint — its original honest job. It is no longer a filing bound. |
@@ -182,7 +185,7 @@ enum TopicFilingOrigin {
 ```
 
 Precedent for the shape: `ResourceSourcedFor` is the same resource↔X join
-([schema.prisma:665](../prisma/schema.prisma)).
+([schema.prisma:665](../../../prisma/schema.prisma)).
 
 ### The mirror write seam
 
@@ -224,7 +227,7 @@ model (`Resource_embedding_idx`, `RemediationJob_active_per_path`). Check the ge
 
 This is the section to read before touching any query. **All topic-scoped retrieval funnels
 through one function** — `buildConditions` in
-[search-resources.ts:99–145](../src/lib/agents/tools/search-resources.ts) — which is what makes T1
+[search-resources.ts:99–145](../../../src/lib/agents/tools/search-resources.ts) — which is what makes T1
 tractable. Verified call sites:
 
 | Call site | Entry point | Topic scoping today | Scoping after T4's backfill |
@@ -283,7 +286,7 @@ qualify as `"Resource".id` to avoid ambiguity with `rt`.
 
 ### 2. All three query paths in `searchResources` inherit the fix for free
 
-`searchResources` ([:153–205](../src/lib/agents/tools/search-resources.ts)) has three paths, all built
+`searchResources` ([:153–205](../../../src/lib/agents/tools/search-resources.ts)) has three paths, all built
 from the same `where`:
 
 - **count + fast path** (`count <= SEARCH_RANK_THRESHOLD`) — returns wholesale, trust-ordered.
@@ -297,7 +300,7 @@ behaviour — more candidates is the point — but it shifts LLM/embedding cost.
 **Resolved** (was OPEN): leave `SEARCH_RANK_THRESHOLD` as-is; re-tune only after T4's
 backfill shows real membership fan-out.
 
-`searchNearbyResources` ([:228](../src/lib/agents/tools/search-resources.ts)) reuses `buildConditions`
+`searchNearbyResources` ([:228](../../../src/lib/agents/tools/search-resources.ts)) reuses `buildConditions`
 and keeps its hard `maxDistance` ceiling, so a weak membership still can't drag a far-off
 row in on topic alone — the distance gate remains the real admission control there.
 
@@ -334,12 +337,12 @@ change.
 ### 5. `Resource.topic` reads stay valid
 
 `COLS` selects `topic` and the playground picker returns `r.topic` to the UI
-([resource-search/route.ts:56](../src/app/api/playground/resource-search/route.ts)). Because the mirror
+([resource-search/route.ts:56](../../../src/app/api/playground/resource-search/route.ts)). Because the mirror
 is maintained, every existing read keeps working unchanged and means "primary topic".
 
 ### 6. `includeIds` and the status window are unaffected
 
-The allowlist escape hatch ([:132–139](../src/lib/agents/tools/search-resources.ts)) relaxes only the
+The allowlist escape hatch ([:132–139](../../../src/lib/agents/tools/search-resources.ts)) relaxes only the
 status window and is `AND`-ed with everything else — including the new `EXISTS`. A resource
 discovered this run still needs a membership to be retrievable, which T3 guarantees at
 insert.
@@ -381,29 +384,29 @@ the classifier never runs against the twin-polluted vocabulary.
 ### T2a — the guardrail's input must exist at filing time
 
 The margin pre-filter and the k-NN purity check both read the resource's embedding, but
-embeds run **post-commit** ([upsert-resource.ts:177–189](../src/lib/agents/decomposition/upsert-resource.ts))
+embeds run **post-commit** ([upsert-resource.ts:177–189](../../../src/lib/agents/decomposition/upsert-resource.ts))
 — so without this block, every fresh find at discovery time (the guardrail's primary
 application point) would hit the "no embedding" degradation row, and T2 would ship an open
 vocabulary with no guardrail. The fix, per the locked decision above:
 
 1. In `persistDiscovered`, compute the embedding from `title` + `summary` +
    `conceptsTaught` **before** calling `upsertResource` — the same input the post-commit
-   embed uses ([:183–187](../src/lib/agents/decomposition/upsert-resource.ts)).
+   embed uses ([:183–187](../../../src/lib/agents/decomposition/upsert-resource.ts)).
 2. Run the guardrail on that vector, then pass it into `upsertResource` (signature change)
    so the row is written with its embedding and the post-commit `safeEmbedResource` is a
    no-op for it.
 3. **Containers included** — add container parents to the embed set (amending the
-   atomic-only gate at [:144–152](../src/lib/agents/decomposition/upsert-resource.ts) and its
+   atomic-only gate at [:144–152](../../../src/lib/agents/decomposition/upsert-resource.ts) and its
    "wastes a call" comment: the embedding now buys filing evidence, not pickability).
    Retrieval stays container-free via `decompositionStatus`.
 
 ### Candidate set
 
 `classifyDiscoveryTopics` takes the full canonical vocabulary from `listCanonicals()`
-([topic-registry.ts:62–70](../src/lib/agents/topic-registry.ts)) instead of `relatedTopics(topic)`, and
+([topic-registry.ts:62–70](../../../src/lib/agents/topic-registry.ts)) instead of `relatedTopics(topic)`, and
 returns **ranked proposals with confidence** rather than one label. Delete the
-`candidates.length <= 1` early return ([classify-topic.ts:38–40](../src/lib/agents/tools/classify-topic.ts))
-and the caller-side skip ([web-fallback.ts:406](../src/lib/agents/tools/web-fallback.ts)) — those are
+`candidates.length <= 1` early return ([classify-topic.ts:38–40](../../../src/lib/agents/tools/classify-topic.ts))
+and the caller-side skip ([web-fallback.ts:406](../../../src/lib/agents/tools/web-fallback.ts)) — those are
 what make the classifier a no-op for 1,152 rows today.
 
 ### Calibration results (run 2026-07-27 — `scripts/calibrate-topic-threshold.ts`)
@@ -441,7 +444,7 @@ represents badly — which is most of them.
 best operating point (t=0.750) it parks **36.0% of correctly-filed rows** while still
 admitting 27.3% of wrong-topic claims — worse than the 2026-07-25 run on both sides. This
 confirms the prior warning recorded in
-[audit-topic-relations.ts](../scripts/audit-topic-relations.ts): a technical corpus clusters too
+[audit-topic-relations.ts](../../../scripts/audit-topic-relations.ts): a technical corpus clusters too
 tightly for an absolute cosine to threshold on. Per-topic means sit in a narrow 0.724–0.861
 band, so no per-topic threshold rescues it either.
 
@@ -503,7 +506,7 @@ model TopicCentroid {
 Mean of the topic's `active` resource embeddings. Refreshed by the existing embed backfill
 (`scripts/embed-resources.ts`) — the column is written and read only via raw SQL, exactly
 like `Resource.embedding` (see the schema note at
-[schema.prisma:66–75](../prisma/schema.prisma)).
+[schema.prisma:66–75](../../../prisma/schema.prisma)).
 
 **Cold start / degradation** — the design must not regress when evidence is missing:
 
@@ -512,7 +515,7 @@ like `Resource.embedding` (see the schema note at
 | `memberCount < MIN_CENTROID_MEMBERS` | No trustworthy centroid → skip the margin pre-filter, go straight to k-NN. |
 | Fewer than k embedded neighbours in the whole library | Accept the classifier's primary, membership `contested = true`. |
 | Resource has no embedding yet | **Rare after T2a** (pre-insert embedding makes discovery rows arrive embedded) — reachable only via legacy paths like the seed backfill, or if the embed call itself fails. Defer the guardrail; file under the request topic with `contested = true` for T4's reclassifier to revisit. |
-| Classifier errors / returns nothing | Fall back to the request topic, exactly as today ([classify-topic.ts:33–37](../src/lib/agents/tools/classify-topic.ts)). Never worse than current behaviour. |
+| Classifier errors / returns nothing | Fall back to the request topic, exactly as today ([classify-topic.ts:33–37](../../../src/lib/agents/tools/classify-topic.ts)). Never worse than current behaviour. |
 
 **Resolved** (was OPEN): `MIN_CENTROID_MEMBERS = 20`. The data doesn't pin it down (every
 sampled topic cleared 5), and the pre-filter only saves a k-NN query — being conservative
@@ -591,7 +594,7 @@ neighbours agreed), landing as `classifier` memberships.
    for it. The gate already coerces to a safe slug (`toCanonicalSlug`) and already grounds
    the model on the canonical list, so this reuses hardened code rather than adding a second
    minting path.
-2. **Collisions — through the same guardrail, no free pass.** [upsert-resource.ts:76–93](../src/lib/agents/decomposition/upsert-resource.ts):
+2. **Collisions — through the same guardrail, no free pass.** [upsert-resource.ts:76–93](../../../src/lib/agents/decomposition/upsert-resource.ts):
    on `existing.topic !== topic`, run the requested topic through the margin + k-NN
    guardrail against the existing row's embedding. Clearing it → add a `ResourceTopic` row:
    `origin: collision`, `relevance` = the measured k-NN purity (never the 1.0 default),
@@ -602,7 +605,7 @@ neighbours agreed), landing as `classifier` memberships.
    `persistDiscovered`'s counters (`skippedCount`, `reclassifiedCount`) report it honestly.
    Keep the existing log line — it becomes a useful signal rather than a dead end.
 3. **Children.** Decomposition children still inherit the parent's primary topic
-   ([:377](../src/lib/agents/decomposition/upsert-resource.ts), [:411](../src/lib/agents/decomposition/upsert-resource.ts)).
+   ([:377](../../../src/lib/agents/decomposition/upsert-resource.ts), [:411](../../../src/lib/agents/decomposition/upsert-resource.ts)).
    Per-child classification is out of scope — a container's children are by construction the
    same subject as the container. What makes this safe post-revision: containers are now
    embedded and guardrail-checked (T2a), so the primary the children inherit has been
@@ -771,7 +774,7 @@ Seven deviations, all load-bearing for T4b–T4e:
    unanimously, with `newTopic` null. `algebra` was never the answer: `precalculus` is a
    curated `TOPIC_SLUGS` entry with a Path and an **empty pool**, so k-NN could not vouch
    for it and pre-T2b the classifier was never asked. This also closes the open question
-   in [resource.ts](../src/types/resource.ts): the `precalculus`→`calculus` edge was
+   in [resource.ts](../../../src/types/resource.ts): the `precalculus`→`calculus` edge was
    compensating for exactly this mis-filing.
 3. **T4a writes ZERO uncontested secondaries** (58 written, all contested, all from the
    disagreement path). §5/T4d's stated precondition — "once the backfill has written
@@ -965,9 +968,9 @@ As-built T4a item 7 flagged. **T4e inherits it unchanged.**
 **§5 was not implemented, because its premise measured false.** The narrowing shipped, but
 through the *edge data* rather than the call sites: `relatedTopics` became **directed** and
 each direction was declared on measured evidence. All three call sites
-([attach-candidates.ts:169](../src/lib/agents/map/attach-candidates.ts),
-[resource-search/route.ts:40](../src/app/api/playground/resource-search/route.ts),
-[web-fallback.ts:251](../src/lib/agents/tools/web-fallback.ts)) still read
+([attach-candidates.ts:169](../../../src/lib/agents/map/attach-candidates.ts),
+[resource-search/route.ts:40](../../../src/app/api/playground/resource-search/route.ts),
+[web-fallback.ts:251](../../../src/lib/agents/tools/web-fallback.ts)) still read
 `relatedTopics(topic)` verbatim — **zero call-site diff**. Shipped
 `scripts/verify-topic-narrowing.ts` (live per-concept candidate re-search),
 `src/types/resource.test.ts`, and a pin in `scripts/reclassify-topics.ts`.
@@ -1007,7 +1010,7 @@ Three measurements inverted the plan, and they are load-bearing for T4e:
 
 Five further deviations:
 
-4. **The `precalculus`→`calculus` re-evaluation note in [resource.ts](../src/types/resource.ts)
+4. **The `precalculus`→`calculus` re-evaluation note in [resource.ts](../../../src/types/resource.ts)
    is answered: KEEP the edge.** It asked whether the edge merely compensated for
    mis-filing. It does both jobs, and the mis-filing half is *not* fixed — T4b's 47-row
    precalculus shelf came off `discrete-mathematics`, while the genuinely-precalculus
@@ -1198,7 +1201,7 @@ So the decision ran on **provenance** — what the container demonstrably is —
 operator judgement (`origin: review`, the T4c precedent). Corroboration that this is the
 system's own view: the program plan pass already ships a scoped-topic reconciler whose
 canonical *example* is `"calculus-for-machine-learning" is a scope of "calculus"`
-([plan.ts:246](../src/lib/agents/program/plan.ts)). That policy has governed new proposals
+([plan.ts:246](../../../src/lib/agents/program/plan.ts)). That policy has governed new proposals
 since F7; this applies the same verdict to the library that predates it.
 
 ### 2. The shelf was 5 containers, not 132 decisions
