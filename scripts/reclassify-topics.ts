@@ -19,6 +19,14 @@
 //   npx tsx --env-file=.env.local scripts/reclassify-topics.ts --topics=sql,python --limit=50
 //   npx tsx --env-file=.env.local scripts/reclassify-topics.ts --ids=abc,def   # targeted re-score
 //   npx tsx --env-file=.env.local scripts/reclassify-topics.ts --all --apply # incl. the ~774
+//   npx tsx --env-file=.env.local scripts/reclassify-topics.ts --inherited --apply
+//
+// `--inherited` is B3's population, and it is NOT the default backlog: the default asks
+// "which topics had no relations when their rows were filed", a claim about history that
+// misses inherited rows on well-related shelves (`sql`, `python-data-ml`, `machine-learning`
+// — 282 rows of the 781 live on 2026-08-11). Decomposition keeps minting them, so this is
+// the selector that drains what P3 measures, and it stays narrower than `--all`, which also
+// re-pays for the 1,471 rows a classifier has already vouched for.
 //
 // ⚠️ Stop the compose workers first (`docker compose --profile workers stop worker`) —
 // this rewrites memberships under topics a live sourcing run may be filing into.
@@ -26,6 +34,7 @@
 import { writeFile } from 'node:fs/promises';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../src/lib/db';
+import { requireTargetAck } from './target-guard';
 import { TOPIC_RELATIONS } from '../src/types/resource';
 import { listCanonicals } from '../src/lib/agents/topic-registry';
 import { classifyDiscoveryTopics } from '../src/lib/agents/tools/classify-topic';
@@ -92,6 +101,7 @@ async function defaultBacklogTopics(): Promise<string[]> {
 async function main() {
   const apply = process.argv.includes('--apply');
   const all = process.argv.includes('--all');
+  const inherited = process.argv.includes('--inherited');
   // Re-scored rows stop being `inherited`, so the default selector doubles as the resume
   // point: a run that dies at row 700 of 1,152 picks up where it left off instead of
   // re-paying for the first 700. `--force` re-scores rows that already have a verdict.
@@ -107,15 +117,23 @@ async function main() {
 
   // An empty list would make `Prisma.join` throw; `--all` and "no backlog left" are both
   // legitimately "no topic filter", handled as undefined.
-  const selected = explicit?.length ? explicit : all || ids?.length ? undefined : await defaultBacklogTopics();
+  const selected = explicit?.length
+    ? explicit
+    : all || inherited || ids?.length
+      ? undefined
+      : await defaultBacklogTopics();
   const topics = selected?.length ? selected : undefined;
-  if (!all && !topics && !ids?.length) {
+  if (!all && !inherited && !topics && !ids?.length) {
     console.log('no backlog topics found — nothing to do.\n');
     await assertMembershipInvariants();
     return;
   }
+  // Writes memberships across the whole library, so it takes the same target
+  // acknowledgement the other bulk curation drivers do.
+  requireTargetAck('reclassify-topics', apply, 'RECLASSIFY');
   console.log(`mode: ${apply ? 'APPLY' : 'dry-run'}`);
-  console.log(`topics: ${ids?.length ? `(ids: ${ids.length})` : topics ? topics.join(', ') : 'ALL'}`);
+  const scope = inherited ? 'ALL (every shelf holding an inherited primary)' : 'ALL';
+  console.log(`topics: ${ids?.length ? `(ids: ${ids.length})` : topics ? topics.join(', ') : scope}`);
   console.log(
     `selector: ${force || ids?.length ? 'every row' : 'rows whose primary is still `inherited`'}\n`,
   );
