@@ -1,7 +1,8 @@
 # Library quality plan — pipeline fixes + library backfill
 
-**Status:** active — in progress · **Blocks:** Q1–Q9; Q1 #335, Q2 #336 open · **Block IDs:** `Q`
-· **Started:** 2026-08-05 · **Briefs retrofitted:** 2026-08-10
+**Status:** active — in progress · **Blocks:** Q1–Q10; #335–#340 open, Q6b at its gate
+· **Block IDs:** `Q` · **Started:** 2026-08-05 · **Briefs retrofitted:** 2026-08-10
+· **Q9 added** 2026-08-10 (open question 7) · **Q10 added** 2026-08-12 (Q6b's residue)
 
 > **`P` and `B` are not block IDs.** `P1`–`P7` are pipeline *defects* and `B1`–`B6` are
 > backfill *tasks* — the analysis this plan rests on. The implementable blocks are `Q1`–`Q8`,
@@ -386,6 +387,16 @@ from exact player runtimes, 17 articles by word count), plus 11 OCW 6.0002 lectu
 6.045J decks. The 16 `/pi/` interactives in that container are still 20 and should be swept to
 `unknown`.
 
+> ⚠️ **This claim was not true of the dev DB, measured 2026-08-12 during Q6b.** Every row of
+> that named cohort was sitting at the placeholder 20 immediately before Q6b ran — including
+> this plan's own worked example, *"Frequency stability property short film at 2:09 stored as
+> 20 minutes"*, which Q6b then independently recomputed to 2 minutes from the YouTube API.
+> Either the corrections were made against **production** and the dev DB never had them, or
+> the dev DB was reset since. Two agents spent real effort hunting for rows that were not
+> there, so: **treat this paragraph as true of production only, and verify before relying on
+> it.** The protection that actually matters is structural, not a list — a hand-set duration
+> is not 20, so a `durationMin = 20` selector cannot see it. That holds on any database.
+
 Then **recompute container durations from children** (fixes the 22 arithmetic contradictions)
 and stamp `durationSource` on every row. Rows that resist recovery get `unknown` — an honest
 null beats a confident 20.
@@ -443,6 +454,7 @@ production-only ones `untested` — which is correct, not a gap.
 | Q7 | P4 + P5 + B6 | no | ~240 |
 | Q8 | P6 + B5 | no | ~260 |
 | Q9 | open question 7 | no | ~200 |
+| Q10 | the standing unknowns | no | ~250 |
 
 ## Q1 — concept provenance, retry/bisect, and breaking the vocab loop (~250 LOC)
 
@@ -955,6 +967,82 @@ model instead of one that shifts under it.
 - [ ] `assertMembershipInvariants` passes after a reviewer topic correction.
 - [ ] Approval is **not** blocked on `durationSource: 'unknown'` — a `/pi/` interactive with no
       measurable signal can still be approved.
+
+## Q10 — resolve the standing unknowns (~250 LOC)
+
+Added 2026-08-12, after Q6b measured what it could not reach. **Not part of the original
+eight, and not a defect in any block** — every block behaved as specified. The gap is that
+"record `unknown` honestly" was specified everywhere and "resolve the unknowns" was specified
+nowhere except Q9, which only sees the review queue.
+
+**Base branch:** `Q9`'s branch
+
+### The two populations, measured on the dev DB 2026-08-12 (post-Q6b)
+
+Q9 reaches `pending_review` rows. **452 of the 508 null-duration rows are `active`** — already
+approved, never returning to the queue — so Q9 reaches about 11% of the problem.
+
+**Population A — 452 active rows with no duration at all:**
+
+| host | type | rows | reachable? |
+| --- | --- | --- | --- |
+| khanacademy | video | **299** | **yes — title-normalisation misses against an index we already cache** |
+| khanacademy | article | 122 | no route (bot wall) |
+| khanacademy | interactive | 19 | no measurable signal at all |
+| ocw | book | 8 | probably — page count |
+| lamar | article | 3 | probably — word count |
+| other | book | 1 | hand review |
+
+The 299 are **not** in the same class as the 141 articles/interactives, and Q6b's out-of-scope
+list blurred them together. Those 141 are structurally unreachable; the 299 merely failed a
+string comparison.
+
+**Population B — 794 active rows carrying a number with `durationSource: 'unknown'`.** This is
+Q2's defect inverted: a value that *was* measured — sometimes by a human — presented as
+unmeasured. Two sources feed it: legacy pipeline durations that Q2's migration defaulted, and
+every reviewer correction, because `updateResource()`'s field whitelist
+(`src/lib/curation/update-resource.ts`) includes `durationMin` but **not** `durationSource`.
+Q9 fixes that write path going forward; it does nothing for the 794 already there.
+
+### What this block does
+
+1. **A second Khan matching pass for the 299, with a confirmation step** — settled by the user
+   2026-08-12. The stored URL slug also keys the cached index and would resolve most of them,
+   but Q6b measured it **~4% confidently wrong** (8 of 233 rows where both keys resolved
+   uniquely disagreed, e.g. `Introduction to matrices` 711s vs 269s — different videos). A key
+   that wrong cannot write unattended. Two safe ways to use it, and the block should implement
+   whichever is cheaper to review: **require title-key and slug-key agreement** (silent, safe,
+   recovers only the overlap), or **route slug-key-only matches through reviewer confirmation**
+   (recovers more, costs reviewer time). Reject fuzzy/edit-distance matching outright — it
+   manufactures exactly the confident-wrong values this plan exists to remove.
+2. **A provenance backfill for the 794.** Where a row's number can be attributed
+   (a YouTube-sourced video, a reviewer edit identifiable in the audit record), stamp it. Where
+   it cannot, **leave it `unknown` and report the count** — the same rule as everywhere else in
+   this plan. This pass must not invent provenance to make a number look better than it is.
+3. **The residual OCW/Lamar rows** (8 books, 3 articles) via the estimators Q6b already built.
+
+**Out of scope.** The 141 Khan articles and interactives — genuinely unreachable, and Q9's
+reviewer surface is their only path. Any fetch to `khanacademy.org` or `kastatic.org` (Q6a).
+Re-deriving anything Q6b already stamped with a real source.
+
+**Migration:** none
+**New deps:** none
+
+**Tests.** Unit, pure — the agreement predicate between the two keys, and the attribution rules
+for the provenance backfill including the "cannot attribute → stay unknown" path.
+
+**Acceptance criteria.**
+- [ ] No slug-key match is written unattended: either it agreed with the title key, or a
+      reviewer confirmed it.
+- [ ] Fuzzy or edit-distance title matching is **not** used.
+- [ ] The 299 Khan video misses are reported as recovered / still-unknown / awaiting
+      confirmation, with counts.
+- [ ] No row gains a `durationSource` the evidence does not support — an unattributable number
+      stays `unknown`, and that count is reported.
+- [ ] The 141 Khan article/interactive rows are untouched.
+- [ ] Idempotent, and refuses to run against production without an explicit flag.
+- [ ] The block's report states the remaining unknown count **and does not treat it as a
+      failure** — the standing rule from B4.
 
 ## Open questions for you
 
