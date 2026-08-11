@@ -71,6 +71,10 @@ export type ReclassifyVerdict =
   | 'disagree'
   // The classifier named a shelf that does not exist yet. NOT doubt about this row.
   | 'unvouchable-pool'
+  // Q7/P4: the neighbourhood points elsewhere, but the row's own shelf is too thin for
+  // that to mean anything (MIN_ADJUDICABLE_POOL). Re-scored, not flagged. Distinct from
+  // `agree` so a run's verdict tally says how much of its silence is abstention.
+  | 'abstain'
   // Fewer than k neighbours, or nothing proposed. Write nothing.
   | 'no-evidence';
 
@@ -226,6 +230,11 @@ function readVerdict(filing: FilingDecision, currentTopic: string): ReclassifyVe
       // that distinction in its fallback's `contested` flag, so reuse it rather than
       // re-deriving the plurality here.
       return filing.primary.contested ? 'disagree' : 'agree';
+    case 'thin-shelf':
+      // The guardrail abstained (Q7). Nothing contradicted the current label, so this
+      // re-scores the primary like an agreement but is reported as its own verdict — the
+      // difference is real: an `agree` row was checked, an `abstain` row could not be.
+      return 'abstain';
     case 'unvouchable-pool':
       return 'unvouchable-pool';
     // `minted` is unreachable: decideMintedFiling is never called on this path (T4b

@@ -11,12 +11,23 @@ export type TopicSlug =
   | 'machine-learning'
   | 'statistics'
   | 'physics-mechanics'
+  | 'database-systems'
   | 'go';
 
 // Curated topics. Membership here is what makes a topic first-class: the topic
 // gate fast-accepts it without an LLM call, and the planner/registry canonical
 // lists union it. The free-beta warm set (C1) is this list minus `go` —
 // off-niche, kept available on demand but not warmed.
+//
+// ⚠️ CURATED IS NOT THE SAME AS LIVE, and the gap is large: measured 2026-08-11 the
+// library holds 23 shelves while this list names 13, two of which (`go`, `javascript`)
+// hold zero rows. Minting works without this list (topic gate T3 → createTopicMinter), so
+// a shelf never needs promotion to exist or to be filed into — promotion is about the
+// LEARNER-facing half: an LLM-free gate answer, a canonical the planner unions, and a
+// warm path. Promote a shelf when a learner would plausibly type its name, never merely
+// because rows landed there. Q7 promoted `database-systems` on that test and deliberately
+// left the other eleven minted shelves alone; the standing question of what to do with
+// them (`probability-and-statistics` is the loudest at 206 primaries) is P7's, open.
 export const TOPIC_SLUGS: readonly TopicSlug[] = [
   'python',
   'python-data-ml',
@@ -30,6 +41,19 @@ export const TOPIC_SLUGS: readonly TopicSlug[] = [
   'machine-learning',
   'statistics',
   'physics-mechanics',
+  // Promoted 2026-08-11 (Q7). Minted during Q5's reclassification pass, where 15 rows —
+  // mostly normalization/transactions/indexing material sitting on the `sql` shelf —
+  // named it and cleared the mint quorum. `reinforcement-learning` (3) and `nosql` (1)
+  // came out of the same pass and were deliberately NOT promoted: both are far below
+  // MIN_VOUCHABLE_POOL, so promoting them would create curated shelves that cannot vouch
+  // for a filing — the exact pathology Q7's guardrail fix exists to stop. They promote
+  // themselves by reaching quorum.
+  // ⚠️ THE SHELF IS EMPTY OF LIVE MATERIAL. Measured when the 15 rows were filed: all 15
+  // are `status: deprecated` (soft — a reviewer's quality reject), so the shelf's POOL is
+  // 0 and candidate search cannot see any of it. Promotion here is the learner-facing
+  // call — the gate, the canonical lists, the warm set — and a warm run for this topic
+  // will web-source from nothing, like any cold topic. It is not backed by a library yet.
+  'database-systems',
   'go',
 ] as const;
 
@@ -147,6 +171,14 @@ export const TOPIC_RELATIONS: Record<string, readonly string[]> = {
   // machine-learning -> python-data-ml, javascript -> javascript-react (both were free).
   //   Dropped: neither has a Path, so neither direction has ever been exercised. Declare
   //   them if and when a learner asks and the measurement supports it.
+  // sql -> database-systems. The hypothesis when `database-systems` was promoted (Q7,
+  //   2026-08-11) was that a SQL learner benefits from normalization and crash recovery
+  //   while the reverse does not hold. MEASURED and NOT declared: with the edge in place,
+  //   0 of 126 candidate slots across the sql Path's 21 concepts change
+  //   (verify-topic-narrowing.ts --topic=sql --drop=database-systems). The edge is inert
+  //   because the whole 15-row shelf is `deprecated` — soft-rejected MIT OCW 6.830 reading
+  //   pages — and candidate search takes only active rows. Re-measure if that shelf ever
+  //   holds live material; the reasoning may well be right, but it has no evidence yet.
   // physics-mechanics stays EDGELESS. Calculus is the only plausible neighbor, but
   //   calculus-based mechanics and calculus proper are distinct resource ecosystems
   //   (MIT 8.01 vs 18.01) and the overlap is thin — same call, and same reasoning, as

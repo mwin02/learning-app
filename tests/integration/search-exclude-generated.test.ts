@@ -64,13 +64,14 @@ describeDb('searchResources — excludeGenerated', () => {
     expect(rows.some((r) => r.slug === `${MARK}generated`)).toBe(false);
   });
 
-  // The membership invariants are scoped to LIBRARY rows for the same reason this search
-  // filter exists: an on-ramp lesson belongs to one concept of one Path, never to a topic's
-  // shelf. generateOnRampResource writes Resource.topic without setPrimaryTopic, so every
-  // cold build leaves one membership-less row — measured 2026-07-28, 7 of them, which made
-  // assertMembershipInvariants throw and hard-blocked every curation driver. This is the
-  // regression guard for that scoping decision.
-  it('leaves a membership-less generated row out of the invariant counts', async () => {
+  // Q7/P5 REVERSED HALF OF THE OLD SCOPING RULE, and this is the regression guard for the
+  // new half. The three LIBRARY counts still exclude generated rows — an on-ramp lesson
+  // belongs to one concept of one Path, never to a topic's shelf, which is why this search
+  // filter exists. But a generated row carrying a scalar `Resource.topic` with NO
+  // membership behind it is now a detected error rather than an invisible one: that hole
+  // (8 rows, measured 2026-08-11) is the mirror rotting, and generateOnRampResource now
+  // writes the membership through setPrimaryTopic in the same transaction as the row.
+  it('counts a membership-less generated row as unfiledGenerated, not as a library hole', async () => {
     const before = await checkMembershipInvariants();
     const source = await prisma.source.findFirstOrThrow({ where: { slug: `${MARK}src` }, select: { id: true } });
     const bare = await prisma.resource.create({
@@ -92,7 +93,13 @@ describeDb('searchResources — excludeGenerated', () => {
       },
       select: { id: true, topics: { select: { id: true } } },
     });
-    expect(bare.topics).toHaveLength(0); // the shape generateOnRampResource produces
-    expect(await checkMembershipInvariants()).toEqual(before);
+    expect(bare.topics).toHaveLength(0); // the shape generateOnRampResource used to produce
+    const after = await checkMembershipInvariants();
+    expect(after).toEqual({
+      noMembership: before.noMembership,
+      badPrimaryCount: before.badPrimaryCount,
+      mirrorDrift: before.mirrorDrift,
+      unfiledGenerated: before.unfiledGenerated + 1,
+    });
   });
 });

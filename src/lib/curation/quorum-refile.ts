@@ -25,7 +25,7 @@
 // precondition (T4a wrote zero uncontested secondaries — see its As-built item 3).
 
 import type { MembershipWrite } from '@/lib/curation/reclassify';
-import { MIN_VOUCHABLE_POOL } from '@/lib/curation/topic-knn';
+import { MIN_VOUCHABLE_POOL, abstainsOnThinShelf } from '@/lib/curation/topic-knn';
 
 // One literal, not two. Below this a shelf cannot be vouched for, which is the entire
 // argument for the quorum — so the bar IS that constant, and re-tuning k in T4e moves
@@ -338,10 +338,24 @@ export type Settlement = {
 //
 // Takes the tally rather than the raw neighbour list so the caller's `purity`/`plurality`
 // stay the single source of both numbers.
+//
+// Q7 added `pools`, and it is the same abstention `decideFiling` makes: a shelf under
+// MIN_ADJUDICABLE_POOL loses a 10-neighbour plurality on size alone, so recording that as
+// doubt about the row is exactly P4's defect arriving through the refile path instead of
+// the discovery one. The paragraph above ("expect it to fail for the thin cohorts, and do
+// not tune it until it doesn't") is what this answers — by abstaining, not by moving a
+// threshold. ⚠️ A cohort that lands on a shelf still under MIN_VOUCHABLE_POOL is a
+// different case and stays contested: `neighbourCount === 0` and the plurality check both
+// still bind, and `abstainsOnThinShelf` is a band whose lower edge is MIN_VOUCHABLE_POOL —
+// a shelf under it keeps its receipt. That edge is not theoretical: the 15-row
+// `database-systems` cohort settled against a pool of ZERO (every row of it is
+// `deprecated`, so no row of it counts toward a pool), and without the lower edge all 15
+// came out vouched at relevance 0.00.
 export function decideSettlement(
   topic: string,
   measured: { purity: number; plurality: string | null },
   neighbourCount: number,
+  pools: Map<string, number>,
 ): Settlement {
   // Too few neighbours to read anything from — leave the doubt in place rather than
   // recording a 0.0 that would look measured.
@@ -350,7 +364,8 @@ export function decideSettlement(
     relevance: measured.purity,
     // Vouched exactly when the guardrail's own instrument says so: the topic holds the
     // plurality. A TIE is not a verdict (`plurality` returns null), which is precisely
-    // the case the contested flag exists for.
-    contested: measured.plurality !== topic,
+    // the case the contested flag exists for — unless the shelf is too thin to adjudicate,
+    // in which case the guardrail abstains and the row is left unflagged.
+    contested: measured.plurality !== topic && !abstainsOnThinShelf(topic, pools),
   };
 }

@@ -28,6 +28,7 @@ import { prisma } from '@/lib/db';
 import { getModel } from '@/lib/ai/models';
 import { safeEmbedResource } from '@/lib/ai/embeddings';
 import { computeTrustScore } from '@/lib/curation/trust-score';
+import { setPrimaryTopic } from '@/lib/curation/resource-topics';
 import type { SearchResult } from '@/lib/agents/tools/search-resources';
 import { logError } from '@/lib/log';
 
@@ -101,33 +102,46 @@ export async function generateOnRampResource(args: {
   const trustScore = computeTrustScore({ base: source.trustScore, signals: [] });
   const slug = `${topic}-${concept.slug}-onramp`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
 
+  // Q7/P5 — ONE transaction for the row and its membership. Until now this creator wrote
+  // `Resource.topic` and nothing else, and it is the only writer in the codebase that
+  // bypassed the `setPrimaryTopic` seam: 8 of 21 on-ramps ended up with a scalar topic and
+  // zero `ResourceTopic` rows, invisible to every topic-scoped query. Two statements would
+  // recreate that hole on a crash between them — and the url is @unique, so the reuse path
+  // at the top would then hand back the broken row forever.
   let created;
   try {
-    created = await prisma.resource.create({
-      data: {
-        slug,
-        topic,
-        title: lesson.title,
-        url,
-        type: 'article',
-        durationMin,
-        // Q2: measured off the content we authored — the one duration in the library
-        // that is arithmetic rather than a guess.
-        durationSource: 'extracted',
-        summary: lesson.summary,
-        content: lesson.content,
-        difficulty: 'beginner',
-        prerequisiteConcepts: [],
-        conceptsTaught: [concept.title],
-        origin: 'generated',
-        // Our own vetted (self-critiqued) content — active/pickable immediately, not
-        // queued for human review like an agent web find.
-        status: 'active',
-        decompositionStatus: 'atomic',
-        trustScore,
-        sourceId: source.id,
-      },
-      select: RESOURCE_SELECT,
+    created = await prisma.$transaction(async (tx) => {
+      const row = await tx.resource.create({
+        data: {
+          slug,
+          topic,
+          title: lesson.title,
+          url,
+          type: 'article',
+          durationMin,
+          // Q2: measured off the content we authored — the one duration in the library
+          // that is arithmetic rather than a guess.
+          durationSource: 'extracted',
+          summary: lesson.summary,
+          content: lesson.content,
+          difficulty: 'beginner',
+          prerequisiteConcepts: [],
+          conceptsTaught: [concept.title],
+          origin: 'generated',
+          // Our own vetted (self-critiqued) content — active/pickable immediately, not
+          // queued for human review like an agent web find.
+          status: 'active',
+          decompositionStatus: 'atomic',
+          trustScore,
+          sourceId: source.id,
+        },
+        select: RESOURCE_SELECT,
+      });
+      // `origin: discovery` is the honest label — this topic is the request topic and no
+      // classifier ran — and relevance 1.0 is true by construction rather than a
+      // placeholder: the lesson was AUTHORED for this topic.
+      await setPrimaryTopic(row.id, topic, { relevance: 1, origin: 'discovery', tx });
+      return row;
     });
   } catch (err) {
     // A concurrent generator may have inserted the same url first; reuse theirs.
