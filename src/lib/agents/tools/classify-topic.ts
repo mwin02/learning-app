@@ -26,6 +26,10 @@
 import { generateObject } from 'ai';
 import { z } from 'zod';
 import { getModel } from '@/lib/ai/models';
+import { recordUsage } from '@/lib/log';
+// The prior is adjudicated by the guardrail itself rather than by a local copy of its
+// rules — see decideFilingWithParentPrior for why that distinction is the whole design.
+import { decideFiling, type FilingDecision, type FilingInput } from '@/lib/curation/topic-knn';
 
 export type ClassifiableResource = {
   url: string;
@@ -117,6 +121,8 @@ export async function classifyDiscoveryTopics(
       ].join('\n'),
     });
 
+    recordUsage('topic-classifier', result.usage);
+
     for (const r of result.object.results) {
       const topics = [...new Set(r.topics)].filter((t) => allowed.has(t)).slice(0, MAX_PROPOSALS);
       // A `newTopic` that is already in the vocabulary is not a mint — the model just
@@ -135,6 +141,117 @@ export async function classifyDiscoveryTopics(
   }
 
   return map;
+}
+
+// PURE. Q4 (plan defect P3) — the parent container's topic as a PRIOR over a decomposed
+// child's own classification.
+//
+// Children used to inherit the parent's filing wholesale. The audit's correlation is as
+// close to perfect as that data gets: every topic a reviewer called a dumping ground is
+// inherited-filed, and every classifier-filed topic came back with zero topic defects. So
+// a child is now classified on its own content — but the parent is real evidence (a
+// lesson inside a calculus course usually IS calculus), and this is where that evidence
+// is spent.
+//
+// ⚠️ The prior is spent HERE, on the ranked list, and not as new prose in the prompt: a
+// prompt-level prior has no weight anyone can state and no ceiling anyone can test. The
+// parent topic IS still named to the model, through `classifyDiscoveryTopics`' existing
+// `fallback` parameter (the caller passes the parent's topic as the fallback, since for a
+// child that is the analogue of a discovery's request topic). That parameter is
+// interpolated into the prompt as "if a resource does not clearly fit any candidate,
+// return this one", and the system prompt's conservatism rule points at it. That is the
+// one place naming it is harmless — it engages only where the model is ALREADY unsure,
+// which is exactly the case the prior is for, and it leaves untouched the prompt rule
+// that where a resource was found carries no weight. That rule is what stops the
+// classifier reproducing the inheritance it replaces, so it has to keep meaning what it
+// says, and nothing here weakens it.
+//
+// ⚠️ THE PRIOR DOES NOT PREDICT THE GUARDRAIL, IT ASKS IT — TWICE.
+//
+// The reordering below moves `proposals[0]`, and `proposals[0]` is the slot the whole of
+// `decideFiling` pivots on. Two earlier versions of this code tried to decide *whether*
+// to reorder by re-deriving one of that function's branches inline (`is the head the
+// plurality winner?`), and each time the branches it did NOT mirror became a case where
+// the prior fired blind:
+//
+//   - mirroring nothing spent the classifier's evidence-confirmed head whenever the
+//     parent sat behind it as a hedge (P3, reached by a different road);
+//   - mirroring the accept branch still spent a THIN-SHELF head, which never reaches the
+//     plurality check at all: `MIN_VOUCHABLE_POOL` accepts it as contested first
+//     (topic-knn.ts, "a topic with too small a pool can't win a plurality, so the
+//     guardrail has no opinion rather than a negative one"). Promoting over it dragged a
+//     correctly-placed `graph-theory` / `rust` / `physics-mechanics` child back onto its
+//     parent's shelf — the thin-shelf starvation P4 documents and Q7 exists to fix.
+//
+// The pattern, not either instance, is the defect: any mirror of a decision procedure is
+// a copy that can drift from it, and `decideFiling` is calibrated code that will be
+// edited again (Q7 changes exactly these branches). So this runs the REAL function on
+// both orderings and keeps the primed one only when it is an upgrade under the rule
+// stated in `isUpgrade`. `decideFiling` is pure — no DB, no LLM, three small array
+// passes — so asking it twice costs nothing worth counting, and the invariant becomes
+// checkable rather than argued: THE PRIOR MAY NEVER CHANGE THE FILING EXCEPT TO IMPROVE
+// IT.
+//
+// `input.requestTopic` IS the parent topic (see fileChildren): for a decomposed child it
+// plays every role a discovery's request topic plays, prior included.
+export function decideFilingWithParentPrior(input: FilingInput): FilingDecision {
+  const unprimed = decideFiling(input);
+  const primed = decideFiling({
+    ...input,
+    proposals: promoteParentTopic(input.proposals, input.requestTopic),
+  });
+  return isUpgrade(unprimed, primed) ? primed : unprimed;
+}
+
+// The prior's whole weight: ONE reordering of what the classifier already proposed.
+//   - it never adds a topic, so a parent topic the classifier did not name cannot take
+//     the primary slot (it is still a trailing secondary candidate inside decideFiling,
+//     held to the same bar as any other);
+//   - it does nothing to a single-proposal answer. One topic is the classifier
+//     COMMITTING — the prompt reserves multiple topics for a resource that squarely
+//     belongs on several shelves and forbids hedging — so promoting the parent there
+//     would be the prior overriding a confident classification;
+//   - it promotes by at most one step, to the head. The rest keep their order and stay
+//     secondary candidates, so nothing the classifier said is lost.
+// Evidence is deliberately NOT consulted here. Whether the reordering is allowed to
+// STAND is `isUpgrade`'s question, and it is answered by the guardrail itself.
+export function promoteParentTopic(proposals: string[], parentTopic: string): string[] {
+  if (proposals.length < 2) return proposals;
+  if (proposals[0] === parentTopic) return proposals;
+  if (!proposals.includes(parentTopic)) return proposals;
+  return [parentTopic, ...proposals.filter((t) => t !== parentTopic)];
+}
+
+// The upgrade rule, stated once, in terms of `decideFiling`'s own verdicts rather than
+// its internals:
+//
+//   the primed ordering is kept ONLY when it turns a filing that found no evidence-backed
+//   home (`rejected` / `no-evidence` — the classifier's proposals all failed, so the row
+//   falls back to the request topic with the doubt recorded) into an ACCEPTED, vouched
+//   classifier filing (`classifier`: the neighbourhood holds a plurality for the promoted
+//   topic and its shelf is thick enough for k-NN to say so).
+//
+// Everything else keeps the unprimed decision, which is what makes the two symptoms above
+// unreachable BY CONSTRUCTION rather than by a matching branch:
+//   - `classifier` unprimed — the evidence confirms the classifier's own head. Never
+//     traded: an accepted filing is not a tie, so the prior has nothing to break.
+//   - `unvouchable-pool` unprimed — a real but thin shelf accepted-and-flagged. Also
+//     never traded: that flagged acceptance IS the self-widening mechanism that lets a
+//     thin shelf grow, and spending it to file the child on the parent's fat shelf is
+//     precisely how thin shelves starve.
+//   - `minted` never appears here (children do not mint; see fileChildren).
+//
+// Note what this makes the prior, honestly: because a `rejected` / `no-evidence` fallback
+// already files under the request topic, and the promoted head IS the request topic, an
+// upgrade never MOVES a child between shelves. What it changes is the record — a mute
+// `discovery` fallback becomes a `classifier` membership the guardrail actually vouched
+// for, and the classifier's rival proposals survive as secondaries instead of being
+// dropped. That is the whole of "a prior, not an answer": the parent's topic can win the
+// tie it was already going to win, but only on evidence, and never at another proposal's
+// expense.
+function isUpgrade(unprimed: FilingDecision, primed: FilingDecision): boolean {
+  if (primed.reason !== 'classifier') return false;
+  return unprimed.reason === 'rejected' || unprimed.reason === 'no-evidence';
 }
 
 const CLASSIFY_SYSTEM_PROMPT = `You file a freshly discovered learning resource under the topic slugs it belongs to, chosen from a fixed list of candidates.
