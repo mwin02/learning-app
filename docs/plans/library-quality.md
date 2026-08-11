@@ -859,8 +859,19 @@ topic relation, and promoting any of the other eleven unpromoted shelves. Promot
 - [ ] A whole-table invariant run reports no other writer with the same hole.
 - [ ] `database-systems` is in `TopicSlug` and `TOPIC_SLUGS`, and the topic gate fast-accepts
       it without an LLM call.
-- [ ] The 15 waiting rows are filed on `database-systems`, and the shelf clears
-      `MIN_VOUCHABLE_POOL`.
+- [ ] The 15 waiting rows are filed on `database-systems`. ~~and the shelf clears
+      `MIN_VOUCHABLE_POOL`~~ — **struck 2026-08-12, unmeetable.** All 15 are
+      `status: deprecated`, `deprecationSeverity: soft` (OCW 6.830 reading-list pages a
+      reviewer rejected on quality), so the shelf's **live pool is 0** and no refile can grow
+      it. The filing is still correct curation — better on `database-systems` than on `sql` —
+      but "15 rows clear quorum", the evidence that motivated the promotion, was wrong.
+      **The user kept the promotion anyway on 2026-08-12**, because the rationale was
+      learner-facing and independent of those rows: a tech upskiller would plausibly type
+      "database systems" and should meet a fast-accepting gate and a warm shelf. Two
+      consequences to carry: the free-beta warm set (`TOPIC_SLUGS` minus `go`) now contains a
+      topic whose library is empty, so its first warm run web-sources from scratch; and this
+      is why the `TOPIC_RELATIONS` measurement came back inert — an edge to an empty shelf
+      cannot move a retrieval slot.
 - [ ] Any `TOPIC_RELATIONS` edge added between `sql` and `database-systems` is **directed** and
       backed by a `scripts/verify-topic-narrowing.ts` measurement quoted in the block's report
       — or no edge is added and the report says the measurement did not support one.
@@ -1083,6 +1094,15 @@ for the provenance backfill including the "cannot attribute → stay unknown" pa
    latent, not broken. But it means **40% of a deliberate, human-authored curation decision is
    recorded in the database as doubt**, and it will stay that way until the vocabulary can say
    "subtopic of". Q7 re-scores these 130 rows; that is a measurement, not a fix.
+
+   **Q7's re-score, run 2026-08-12, settles the attribution: contested 52 → 44.** The
+   pool-aware guardrail cleared `graph-theory` 5→0 and `machine-learning` 3→0 — both shelves
+   now at pool 19, i.e. exactly the rows whose stamps were an artefact of thinness. Nothing
+   else moved: `multivariable-calculus` 24 (pool 65), `precalculus` 10 (60), `cryptography` 5
+   (39), `number-theory` 3 (24), `differential-equations` 2 (37). So P4 accounted for 8 of the
+   52 and **P7 accounts for the remaining 44**, on shelves thick enough to adjudicate. The
+   guardrail fix has now done everything a guardrail fix can do here; the residue is the
+   vocabulary question and nothing else will move it.
 2. **Duration honesty vs. availability** — making `durationMin` nullable is the correct model.
    `attach-candidates.ts` is already null-safe (its `durationFactor` returns 1 on null and the
    `MAX_ATTACHABLE_DURATION_MIN` gate at :131 passes null), so the real decision point is
