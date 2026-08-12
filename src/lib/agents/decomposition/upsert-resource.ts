@@ -32,6 +32,7 @@ import {
 import { listCanonicals } from '@/lib/agents/topic-registry';
 import { safeClassifyAndPersist } from '@/lib/curation/embeddability';
 import { computeTrustScore } from '@/lib/curation/trust-score';
+import { classifyNonTeaching } from '@/lib/curation/non-teaching';
 import { youtubeEngagementSignal } from '@/lib/curation/youtube-signal';
 import { normalizeResourceUrl } from './normalize-url';
 import { crediblePageTitle } from './page-title';
@@ -584,6 +585,26 @@ async function createChild(
   }
 
   const decompStatus: DecompositionStatus = child.decompositionStatus ?? 'atomic';
+  // Q8 (P6): a container's navigation and marketing pages come down the same child list
+  // as its lessons. The row is still CREATED — its URL must stay known, or the next
+  // decomposition re-admits it and the F8 dedup has nothing to collapse onto — but it
+  // enters already soft-deprecated, which is exactly what the one-time backfill does to
+  // the furniture already in the library. Pickable is `active AND atomic`, so this is what
+  // keeps it out of retrieval without lying about its shape (it IS an atomic page), and
+  // `soft` because this is a quality downgrade, not a dead link.
+  const furniture = classifyNonTeaching({
+    title: child.title,
+    summary: child.summary,
+    url,
+  });
+  if (furniture.nonTeaching) {
+    logWarn('upsert-resource.non_teaching_child', {
+      url,
+      title: child.title,
+      reason: furniture.reason,
+      parentId,
+    });
+  }
   const childSum = containerDuration(child.children ?? []);
   const slug = await uniqueSlug(tx, child.title, url, taken);
   const created = await tx.resource.create({
@@ -615,7 +636,8 @@ async function createChild(
       conceptsTaught: child.conceptsTaught,
       conceptOrigin: child.conceptOrigin,
       origin: 'agent',
-      status: childStatus,
+      status: furniture.nonTeaching ? 'deprecated' : childStatus,
+      ...(furniture.nonTeaching ? { deprecationSeverity: 'soft' as const } : {}),
       trustScore,
       sourceId,
       parentResourceId: parentId,
@@ -638,8 +660,11 @@ async function createChild(
 
   // Only atomic leaves are pickable, so only they are embedded post-commit. A child whose
   // vector was already written above still needs its embeddability probe, so it joins the
-  // list flagged rather than being skipped (same shape as the parent path).
-  if (decompStatus === 'atomic') {
+  // list flagged rather than being skipped (same shape as the parent path). Furniture is
+  // excluded on the same rule: this list IS the pickable-atomic set (see the EmbedTask
+  // comment), so a deprecated row on it would flow into `atomicIds` and back into
+  // retrieval's discovery allowlist — undoing the deprecation two lines after writing it.
+  if (decompStatus === 'atomic' && !furniture.nonTeaching) {
     embedTasks.push({
       id: created.id,
       url,
