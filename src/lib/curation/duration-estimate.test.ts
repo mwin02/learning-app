@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  attributeByRederivation,
   countWords,
   estimateLamarArticle,
   estimateOcwPage,
@@ -167,5 +168,32 @@ describe('container reconciliation', () => {
   it('repairs the arithmetic contradiction shape: 5m parent over 555m of children', () => {
     const children = Array.from({ length: 37 }, () => ({ durationMin: 15 }));
     expect(containerDuration(children).durationMin).toBe(555);
+  });
+});
+
+// Q10 — attribution by re-derivation. The failure mode being guarded is a row
+// gaining a provenance the evidence does not support, so every branch that is not
+// an exact independent match must return null and leave the row `unknown`.
+describe('attributeByRederivation', () => {
+  it('attributes a number the source reproduces exactly', () => {
+    expect(attributeByRederivation(12, 12)).toBe('api');
+  });
+
+  it('refuses a near miss — one minute off is a different measurement', () => {
+    expect(attributeByRederivation(12, 13)).toBeNull();
+  });
+
+  it('cannot attribute when the source has nothing to say', () => {
+    expect(attributeByRederivation(12, null)).toBeNull();
+  });
+
+  it('cannot attribute a row that carries no number', () => {
+    expect(attributeByRederivation(null, 12)).toBeNull();
+  });
+
+  // The population B shape: a placeholder 20 next to a 6-minute video. It stays
+  // unknown and gets counted, which is this pass succeeding, not failing.
+  it('leaves the placeholder 20 unattributed against a real duration', () => {
+    expect(attributeByRederivation(20, 6)).toBeNull();
   });
 });

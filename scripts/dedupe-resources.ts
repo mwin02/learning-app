@@ -119,6 +119,47 @@ async function khanSqlTalkthroughs(): Promise<PairRow[]> {
   `;
 }
 
+// Q10 / Population C: 14 rows, 7 pairs, the same page ingested twice five weeks apart
+// by two runs that disagreed about the path's case
+// (`…/classes/calci/defnofderivative.aspx` vs `…/Classes/CalcI/DefnOfDerivative.aspx`).
+//
+// ⚠️ HOST-RESTRICTED ON PURPOSE, AND THE RESTRICTION IS THE WHOLE RULE. URL paths are
+// case-sensitive per spec, which is why `normalizeResourceUrl` does not lowercase them
+// and must not start: a global `lower(url)` identity would collapse two different
+// YouTube videos (`watch?v=Abc…` vs `watch?v=abc…`) into one row. Lamar serves `.aspx`
+// off IIS, which IS case-insensitive, so on THAT host — and measured 2026-08-12, only
+// that host — the two spellings are one page. That is a per-host fact the normaliser
+// cannot know, which is exactly why it lands here instead.
+//
+// Survivor: the row that carries the placements, then the concept links, then the
+// memberships — a row inside a built Lesson must not be the one deprecated, or a
+// learner's lesson points at a resource pulled from the pool. `active` outranks
+// `pending_review` first, so the pair always leaves a LIVE row rather than a queued one.
+async function lamarCaseVariants(): Promise<PairRow[]> {
+  return prisma.$queryRaw<PairRow[]>`
+    WITH ranked AS (
+      SELECT r.id, r.url, r.title, lower(r.url) AS key,
+             row_number() OVER (
+               PARTITION BY lower(r.url)
+               ORDER BY (r.status::text = 'active') DESC,
+                        (SELECT COUNT(*) FROM "LessonResource" l WHERE l."resourceId" = r.id) DESC,
+                        (SELECT COUNT(*) FROM "ConceptResource" c WHERE c."resourceId" = r.id) DESC,
+                        (SELECT COUNT(*) FROM "ResourceTopic" t WHERE t."resourceId" = r.id) DESC,
+                        r."createdAt" ASC
+             ) AS rank
+      FROM "Resource" r
+      WHERE r.url LIKE '%tutorial.math.lamar.edu/%'
+        AND r.status::text = ANY(${LIVE})
+    )
+    SELECT keep.id AS "survivorId", drop_.id AS "loserId", keep.title AS title,
+           keep.url AS "survivorUrl", drop_.url AS "loserUrl",
+           'case-variant of the same IIS path' AS detail
+    FROM ranked keep JOIN ranked drop_ ON drop_.key = keep.key AND drop_.rank > 1
+    WHERE keep.rank = 1 AND keep.url <> drop_.url
+    ORDER BY keep.title
+  `;
+}
+
 // The three one-off pairs B5 names individually. Written as URLs rather than as a rule
 // because there is no rule — each survivor was chosen by looking at the two rows:
 //
@@ -188,6 +229,7 @@ async function collectPairs(): Promise<Pair[]> {
     ['khan-course-twin', khanCourseTwins],
     ['lamar-3d-twin', lamarTwins],
     ['khan-sql-talkthrough', khanSqlTalkthroughs],
+    ['lamar-case-variant', lamarCaseVariants],
     ['b5-one-off', explicitPairs],
   ];
   const pairs: Pair[] = [];
