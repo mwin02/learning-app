@@ -8,7 +8,7 @@
 //
 //   deprecate_hard/soft → applyPendingReview (reject + severity)
 //   unlink              → targeted ConceptResource delete + recomputeReadiness
-//   refile              → setPrimaryTopic (the one write seam for a primary topic)
+//   refile              → refileToTopic (→ setPrimaryTopic, the one write seam)
 //   edit                → updateResource (whitelisted fields, surfaces embeddingStale)
 //   dismiss             → report state only
 //
@@ -26,8 +26,7 @@ import type {
 } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { applyPendingReview } from '@/lib/curation/pending-review';
-import { setPrimaryTopic } from '@/lib/curation/resource-topics';
-import { listCanonicals, normalizeTopic, toCanonicalSlug } from '@/lib/agents/topic-registry';
+import { refileToTopic } from '@/lib/curation/refile-topic';
 import { updateResource, type ResourceUpdateFields } from '@/lib/curation/update-resource';
 import { recomputeReadiness } from '@/lib/agents/map/recompute-readiness';
 import { markBankStale } from '@/lib/agents/content/mark-bank-stale';
@@ -437,34 +436,15 @@ async function alreadyDeprecated(
   return { outcome: `already deprecated (${severity}) — nothing to do${note}` };
 }
 
-// The refile axis. `Resource.topic` is matched EXACTLY by the library (sourcing,
-// `relatedTopics`, retrieval), so an operator's free text is the one input on this
-// path that can mint a twin slug — "Linear Algebra" would file a row nothing
-// searching `linear-algebra` can ever see, and then close the report as fixed.
-// Every other caller of setPrimaryTopic derives its target from the registry or a
-// filing decision; this one canonicalizes first and refuses a slug the registry
-// (curated ∪ learned) has never seen, rather than inventing vocabulary from a
-// text box (F3b).
+// The refile axis. The canonicalize-and-check logic (F3b) moved to
+// refile-topic.ts at Q9, when the pending-review queue became the second reviewer
+// surface that can refile a row; this is the adapter into a report's outcome
+// vocabulary.
 async function refile(resourceId: string, input: string): Promise<Delegated> {
-  const topic = toCanonicalSlug(normalizeTopic(input));
-  if (!topic) return { refused: `"${input}" has no usable slug` };
-
-  const [resource, known] = await Promise.all([
-    prisma.resource.findUnique({ where: { id: resourceId }, select: { topic: true } }),
-    listCanonicals(),
-  ]);
-  if (!resource) return { refused: 'resource no longer exists' };
-  // The UI prefills the current topic, so one click on Refile would otherwise
-  // rewrite nothing but `origin` and close the report as refiled (F3d).
-  if (resource.topic === topic) {
-    return { refused: `already filed under "${topic}" — pick a different topic` };
-  }
-  if (!known.includes(topic)) {
-    return { refused: `"${topic}" is not a known topic — refile onto an existing one` };
-  }
-
-  await setPrimaryTopic(resourceId, topic, { origin: 'review' });
-  return { outcome: `refiled to topic "${topic}"` };
+  const result = await refileToTopic(resourceId, input);
+  return result.kind === 'refiled'
+    ? { outcome: `refiled to topic "${result.topic}"` }
+    : { refused: result.reason };
 }
 
 // The `wrong_lesson_fit` axis: drop this resource from the concepts THIS lesson

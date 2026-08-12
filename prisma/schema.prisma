@@ -334,6 +334,12 @@ enum DurationSource {
   extracted // stated by the artifact itself — link text, a TOC, or our own content
   estimated // a model's guess, calibrated by type but not measured
   unknown // nobody measured or estimated it; durationMin is null on new writes
+  // Q9: a human reviewer measured it against the rendered page — the only context
+  // where the true number is free. Deliberately NOT `extracted`: that means "a
+  // scraper read it off the page", and collapsing the two would recreate the
+  // indistinguishability this enum exists to remove. It is also the highest
+  // authority here — no automated pass may overwrite a `reviewer` row.
+  reviewer
 }
 
 enum Origin {
