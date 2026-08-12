@@ -1031,6 +1031,32 @@ Q9 fixes that write path going forward; it does nothing for the 794 already ther
    it cannot, **leave it `unknown` and report the count** — the same rule as everywhere else in
    this plan. This pass must not invent provenance to make a number look better than it is.
 3. **The residual OCW/Lamar rows** (8 books, 3 articles) via the estimators Q6b already built.
+4. **The 7 case-variant URL duplicate pairs** — added 2026-08-12 from Q8's verification.
+
+### Population C — case-variant URL duplicates (added 2026-08-12)
+
+14 rows, 7 pairs, all `active`, **all on `tutorial.math.lamar.edu`** and nowhere else. The
+shape says what happened:
+
+```
+…/classes/calci/defnofderivative.aspx   active  2026-06-27
+…/Classes/CalcI/DefnOfDerivative.aspx   active  2026-07-18
+```
+
+Two ingestion runs five weeks apart, one lowercasing the path and one preserving it.
+
+**`normalizeResourceUrl` is not buggy here, and lowercasing the path would be the wrong fix.**
+`normalize-url.ts`'s header states the choice deliberately — URL paths are case-sensitive per
+spec, so a global lowercase would collapse genuinely distinct pages on any host that serves
+them. The same header already assigns this case to its proper owner: *"Near-duplicates with
+genuinely different URLs are the maintenance-report's job, not this."* Lamar serves `.aspx`
+off IIS, which **is** case-insensitive, so on that host the pair is one page — but that is a
+per-host fact the normaliser cannot know.
+
+So the real gap is that the maintenance report is not surfacing them. Q10 should dedupe these
+7 pairs (survivor = whichever row carries the memberships and concept links, as Q8's dedupe
+did) and decide whether near-duplicate detection belongs in the maintenance report or in a
+standing check. **Do not lowercase the path in `normalizeResourceUrl`.**
 
 **Out of scope.** The 141 Khan articles and interactives — genuinely unreachable, and Q9's
 reviewer surface is their only path. Any fetch to `khanacademy.org` or `kastatic.org` (Q6a).
@@ -1054,6 +1080,8 @@ for the provenance backfill including the "cannot attribute → stay unknown" pa
 - [ ] Idempotent, and refuses to run against production without an explicit flag.
 - [ ] The block's report states the remaining unknown count **and does not treat it as a
       failure** — the standing rule from B4.
+- [ ] The 7 case-variant URL pairs leave one active row each, and `normalizeResourceUrl` still
+      does **not** lowercase the path.
 
 ## Open questions for you
 
