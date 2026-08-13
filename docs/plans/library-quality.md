@@ -313,58 +313,68 @@ URLs. Three hosts carry 98%:
 
 | host | rows | recovery strategy |
 | --- | --- | --- |
-| khanacademy.org | 879 (704 video, 139 article, 35 interactive) | ⚠️ **strategy replaced — see below.** Original plan (extract the embedded YouTube id, then batch the YouTube Data API) cannot work: the extraction step is exactly the HTML fetch P2's Cause A rules out. |
-| tutorial.math.lamar.edu | 179 | Static HTML articles → deterministic reading-time from word count. No LLM. |
-| ocw.mit.edu | 94 | Lecture notes/PDFs → page or word count; lecture videos → media duration. |
+| khanacademy.org | 879 (704 video, 139 article, 36 interactive) | ⚠️ **strategy replaced twice — see the Q6a findings below.** Videos resolve through the **official YouTube Data API** against Khan's own channel. Articles and interactives are not recoverable and record `unknown`. |
+| tutorial.math.lamar.edu | 179 | Static HTML articles → deterministic reading-time from word count. No LLM. **Access re-verified 2026-08-11** (see Q6a findings). |
+| ocw.mit.edu | 94 | Lecture notes/PDFs → page or word count; lecture videos → media duration. **Access re-verified 2026-08-11.** |
 | everything else | ~26 | Hand-review. |
 
-### The Khan Academy 879 — replacement strategy
+### The Khan Academy 879 — Q6a findings, 2026-08-11 (supersedes the persisted-query strategy)
 
-The youtube id **is** on a KA page, but only after the bot challenge is solved and the SPA has
-rendered; it is absent from every server-side response. A different route works instead: KA's
-**persisted-query GraphQL endpoint answers the bot UA directly, bypassing the challenge that
-walls HTML.** Verified 2026-08-05:
+**The persisted-query route is withdrawn, and not because it stopped working.** Its stated
+rationale was that the GraphQL endpoint "answers the bot UA directly, bypassing the challenge
+that walls HTML", and its fallback avenue was harvesting 879 ids through a real browser
+precisely because non-browser clients are blocked. Both are circumvention of a bot-detection
+system, so they are off the table regardless of whether they function.
+
+**The finding that settles it:** `khanacademy.org/robots.txt` **itself returns the Client
+Challenge** — HTTP 200, `<title>Client Challenge</title>`, no robots directives. The one file
+whose purpose is to tell an automated client what it may do is unreadable by an automated
+client. There is no permission to rely on here, and no way to obtain one by request.
+
+**The replacement needs none of Khan's own infrastructure.** Khan Academy publishes its videos
+on its own YouTube channel, and this repo already holds a `YOUTUBE_API_KEY` and a
+`youtube/v3` client (`src/lib/agents/decomposition/youtube.ts`). Measured 2026-08-11:
 
 ```
-GET /api/internal/graphql/ContentForLearnableContent
-    ?hash=2300666574&lang=en&app=khanacademy&variables={"id":"716378217","kind":"Video"}
-→ 200, 9,893 bytes, "duration": 176, "youtubeId": "FlIG3TvQCBQ"
+channels?part=contentDetails&forHandle=khanacademy
+→ channelId       UC4a-Gbdw7vOaccHmFo40b9g
+  uploadsPlaylist UU4a-Gbdw7vOaccHmFo40b9g
+  videoCount      9310
+
+playlistItems?part=snippet&playlistId=UU4a-…&maxResults=50   → 1 quota unit per 50 videos
+videos?part=contentDetails&id=<50 ids>                        → 1 quota unit per 50 videos
+→ { "id": "0NjBjpGQpUQ", "duration": "PT12M26S" }
 ```
 
-`duration` is in **seconds and exact** — 176 for `one-time-pad`, matching the browser-measured
-2:56 precisely. Parameter brittleness is the opposite of what it looks like:
+**Whole-channel cost is ~200 quota units** (187 pages + ~16 duration batches) against a
+10,000/day default. Durations are exact, ISO-8601. The API is official and sanctioned, so
+there is no `hash` to pin, no deploy version to track, and no rotation to catch — **plan open
+questions 5 and 6 both dissolve** rather than being answered.
 
-| param | required? | behaviour |
-| --- | --- | --- |
-| `hash` | **yes** | per-operation, stable; omit → `400 No hash= specified` |
-| `pcv` | no | deploy version; omitted → still 200, and a stale one → still 200 |
-| `fastly_cacheable` | no | cache hint only |
+**What this route does and does not reach.** It covers the **755 KA video rows** (704 of them
+at the placeholder 20) — the bulk of the problem. It reaches **neither the 139 articles nor
+the 36 interactives**, which are not on YouTube and whose page text is behind the same wall.
+Those record `unknown` and wait for a reviewer, which is what **Q9** exists for. Sweeping 175
+rows to an honest `unknown` is the correct outcome here, not a shortfall — see B4's closing
+note that the unknown count is reported, not minimised.
 
-`pcv` was seen rotating mid-session (`87344f52…` → `d5e1f475…`) while `hash` held constant
-across both. So: **pin `hash`, never send `pcv`.**
+**The residual risk is matching, not access.** YouTube titles carry breadcrumbs
+(`"One-time pad | Journey into cryptography | Computer Science | Khan Academy"`) where we
+store the lesson title. Normalising on the segment before the first `|` is the obvious rule,
+but **an ambiguous or missing match must record `unknown`, never a guess** — the same
+degradation contract the withdrawn client had.
 
-**The one unsolved step is slug → content id.** The query keys on an internal numeric id
-(`716378217`), not the URL slug we store; in a browser that id arrives inside the
-challenge-solved HTML. This decides the shape of the whole block, so Q6a below is a **spike**,
-not an implementation — three avenues, cheapest first:
+### Lamar and OCW access, re-verified 2026-08-11
 
-1. **Find a path-keyed persisted operation.** One almost certainly exists (initial page load
-   resolves path → content). Capture it as the above was captured: hook `window.fetch` +
-   `XMLHttpRequest.open`, drive an SPA navigation, read back operation name + `hash`. The
-   SPA-nav capture surfaced `ContentForLearnableContent`, `MappedStandardsForContent`,
-   `feedbackQuery`, `getLastSecond`, `getOfficialClarifications`, `discussionAvatar` — the path
-   resolver was *not* among them because it runs during initial load, so this needs a hook
-   installed before page scripts (an `about:blank` iframe shim, or CDP-level capture).
-2. **Grep the `cdn.kastatic.org` bundles** — fetchable server-side, and persisted hashes are
-   usually embedded in them.
-3. **One-time browser-harvested `slug → id` map** for the 879 rows, stored; the client then
-   serves all future reads.
+The Khan finding made the plan's "both scrape fine" claim worth re-testing. Both hold:
 
-Whatever the source of ids, the client itself is small and LLM-free: zod-parse the response,
-and treat any non-200 / schema mismatch / missing `duration` as **`unknown`, never as a
-number** — a KA deploy that rotates hashes must degrade to unknown, not back to 20. Keep one
-live integration test so rotation fails a test instead of silently filling the library with
-unknowns.
+| host | robots.txt | our rows | live fetch with the crawler UA |
+| --- | --- | --- | --- |
+| `tutorial.math.lamar.edu` | readable; `Disallow:` covers **only** `/pdf/…` trees | all 215 are `/Classes/` HTML, zero under `/pdf/` | `200`, 106 KB |
+| `ocw.mit.edu` | readable; `User-Agent: *` / `Allow: /` + sitemap | 94 | `200`, 50 KB |
+
+So Khan is the only host in this plan that refuses automated clients, and the per-host
+estimators for Lamar and OCW rest on verified ground rather than assumption.
 
 **Articles and interactives have no API duration.** Articles: Perseus-body word count at
 ~120 wpm for math prose, +2 min for worked examples, `durationSource: 'extracted'`.
@@ -655,83 +665,102 @@ doubt; moving primaries is `refile-quorum-topics.ts`'s job.
 - [ ] **Documented in the block's report:** the compose workers were stopped before the run
       (`docker compose --profile workers stop worker`) and restarted with `--build` after.
 
-## Q6a — spike: resolve a Khan Academy URL to its content id server-side (~0 LOC)
+## Q6a — spike: how to obtain Khan Academy durations (~0 LOC) — **DONE 2026-08-11**
 
-Discharges the **B4** blocker. **A findings note, not shipped code.** Gates Q6b.
+Discharges the **B4** blocker. **A findings note, not shipped code.** Gated Q6b.
 
 **Base branch:** `Q5`'s branch
-**Files owned:** `docs/plans/library-quality.md` (a findings section appended to B4) — no source files.
+**Files owned:** `docs/plans/library-quality.md` (the findings section in B4) — no source files.
 
-**What it does.** Answers the one unsolved step in the Khan strategy: the persisted-query
-endpoint keys on an internal numeric content id, not the URL slug we store. Three avenues,
-cheapest first, documented in B4 above: find a path-keyed persisted operation by hooking
-`window.fetch`/`XMLHttpRequest.open` before page scripts; grep the `cdn.kastatic.org` bundles
-for embedded hashes; or accept a one-time browser-harvested `slug → id` map for the 879 rows.
+**What it did.** The spike's original question — "resolve a Khan URL to its internal content
+id server-side" — turned out to be the wrong question. `robots.txt` is itself behind Khan's
+bot wall, so the persisted-query route and its browser-harvest fallback are both
+bot-detection circumvention and were withdrawn on that basis, not on feasibility. The
+replacement uses the **official YouTube Data API** against Khan's own channel and touches none
+of Khan's infrastructure. Full findings, measured numbers and the Lamar/OCW re-verification
+are in the B4 section above.
 
-**Out of scope.** Writing the client. Touching the library. This block ships a decision.
+**Out of scope.** Writing the client. Touching the library. This block shipped a decision.
 
 **Migration:** none
 **New deps:** none
 **Tests.** none — there is no code.
 
 **Acceptance criteria.**
-- [ ] The findings section names a working server-side slug→id route, **or** records that
-      none was found and recommends the harvested map (open question 5).
-- [ ] Whichever avenue succeeded is reproducible from the note by someone who was not in the
-      conversation — the exact request, or the exact capture procedure.
-- [ ] The `hash` parameter's stability and `pcv`'s irrelevance are re-confirmed against live
-      Khan Academy, or the note records that they have changed since 2026-08-05.
-- [ ] The user has answered open question 5 before Q6b starts.
+- [x] The findings section names a working route — the YouTube Data API against channel
+      `UC4a-Gbdw7vOaccHmFo40b9g` — **or** records that none was found. *(A route was found,
+      and it is not the one the plan anticipated.)*
+- [x] The route is reproducible from the note by someone who was not in the conversation —
+      the exact endpoints, the channel and uploads-playlist ids, and the measured quota cost
+      are all recorded.
+- [x] ~~The `hash` parameter's stability and `pcv`'s irrelevance are re-confirmed~~ —
+      **moot.** The chosen route has no `hash` and no `pcv`.
+- [x] The user has answered open question 5 before Q6b starts — **dissolved rather than
+      answered**: no harvested id map is needed. Settled 2026-08-11 along with question 6.
 
-## Q6b — Khan client and the duration re-derivation drivers (~290 LOC)
+## Q6b — Khan YouTube matcher and the duration re-derivation drivers (~290 LOC)
 
-Discharges **B4**. Driver block. **Blocked on Q6a.**
+Discharges **B4**. Driver block. **Rewritten 2026-08-11 on Q6a's findings** — the Khan
+persisted-query client is gone; see the B4 findings section for why.
 
-**Base branch:** `Q6a`'s branch (or `Q5`'s, if Q6a shipped no doc change)
+**Base branch:** `Q6a`'s branch
 **Files owned:**
-- `src/lib/sources/khan/client.ts` (new — persisted-query client)
-- `src/lib/sources/khan/client.test.ts`, `client.int.test.ts` (new)
+- `src/lib/sources/khan/youtube-index.ts` (new — build and query the channel index)
+- `src/lib/sources/khan/youtube-index.test.ts`, `youtube-index.int.test.ts` (new)
 - `scripts/rederive-durations.ts` (new — driver + per-host adapters)
 - `src/lib/curation/duration-estimate.ts` (new — pure per-host estimators)
 - `src/lib/curation/duration-estimate.test.ts` (new)
 
-**What it does.** Builds the LLM-free Khan client — pin `hash`, never send `pcv`, zod-parse
-the response — and the re-derivation driver behind it. Per-host: Khan videos take the exact
-`duration` seconds from the API; Khan articles take Perseus-body word count at ~120 wpm for
-math prose plus 2 minutes for worked examples; Lamar's 179 static HTML articles take
-deterministic reading time from word count; OCW's 94 take page/word count or media duration.
-Khan `/pi/` interactives expose no measurable signal at all and record `unknown`. Then
-container durations are recomputed from children, fixing the 22 arithmetic contradictions.
+**What it does.** Enumerates Khan Academy's YouTube uploads playlist
+(`UU4a-Gbdw7vOaccHmFo40b9g`, ~9,310 videos, ~200 quota units for the whole channel) through
+the **official** Data API, builds a normalised `title → {videoId, durationSeconds}` index, and
+matches our 755 KA video rows against it. Reuse the existing `youtube/v3` client and
+`YOUTUBE_API_KEY` rather than adding a second one. Then the other hosts: Lamar's 179 static
+HTML articles take deterministic reading time from word count, OCW's 94 take page/word count
+or media duration — **both hosts' access re-verified 2026-08-11**, see B4. Finally container
+durations are recomputed from children, fixing the 22 arithmetic contradictions.
 
-**Out of scope.** The ~26 "everything else" rows — hand review, not a driver. The 43 KA
-Cryptography rows, 11 OCW 6.0002 lectures and 7 6.045J decks already corrected by hand on
-2026-08-05 must **not** be redone; the 16 `/pi/` interactives in that container are still 20
-and should be swept to `unknown`.
+**Title matching is the risk surface, and it degrades one way.** YouTube titles carry
+breadcrumbs (`"One-time pad | Journey into cryptography | … | Khan Academy"`); the segment
+before the first `|` is the lesson title. **An ambiguous match, a missing match, or a
+duplicate title must record `unknown` — never a guess, never 20.**
+
+**Out of scope.** **Khan articles (139) and interactives (36) — no route reaches them.** They
+are not on YouTube and their page text is behind the bot wall, so they record `unknown` and
+wait for a reviewer (Q9). This is the intended outcome, not a shortfall. Also out: the ~26
+"everything else" rows (hand review), and the 43 KA Cryptography rows, 11 OCW 6.0002 lectures
+and 7 6.045J decks already corrected by hand on 2026-08-05, which must **not** be redone.
+**Anything that touches `khanacademy.org` directly** — the whole point of Q6a's finding.
 
 **Migration:** none — Q2 added the columns.
 **New deps:** none
 
 **Tests.** `duration-estimate.test.ts` (unit, pure — word-count estimators per host, the
-container-sum reconciliation). `client.test.ts` (unit — zod parse, the degrade-to-`unknown`
-path on every failure shape). **One live integration test** against the real endpoint, so a
-Khan hash rotation fails a test rather than silently filling the library with unknowns.
+container-sum reconciliation, ISO-8601 duration parsing). `youtube-index.test.ts` (unit —
+title normalisation, and the degrade-to-`unknown` path on every ambiguity shape: no match,
+multiple matches, empty index). **One live integration test** against the real Data API, so a
+channel rename or a quota failure fails a test rather than silently filling the library with
+unknowns.
 
 **Acceptance criteria.**
-- [ ] Any non-200, schema mismatch, or missing `duration` from Khan yields `unknown` — never
-      a number, and never a fallback to 20.
-- [ ] A known Khan video resolves to its exact duration (`one-time-pad` → 176 seconds).
-- [ ] The live integration test fails, loudly, if the pinned `hash` stops working.
-- [ ] The client sends `hash` and never sends `pcv`.
+- [ ] No request is made to any `khanacademy.org` or `kastatic.org` host by this block's code.
+- [ ] Any non-200, quota error, missing match, ambiguous match or duplicate title yields
+      `unknown` — never a number, and never a fallback to 20.
+- [ ] A known Khan video resolves to its exact duration from the Data API.
+- [ ] The live integration test fails, loudly, if the channel or uploads playlist stops
+      resolving.
 - [ ] The 20-minute share of the library drops from 59% toward the ~5% expected by chance.
-- [ ] No `khanacademy.org` video row remains at exactly 20 with `durationSource != 'api'`.
+- [ ] No `khanacademy.org` **video** row remains at exactly 20 with `durationSource != 'api'`.
+- [ ] Khan **article and interactive** rows are `unknown`, not estimated — no route reaches
+      them and guessing is the failure mode this plan exists to remove.
 - [ ] No `book` under 30 minutes, and no container under half its children's summed duration,
       remains.
 - [ ] Every row the driver touched carries a `durationSource`.
-- [ ] Khan `/pi/` interactive rows are `unknown`, not estimated.
 - [ ] The rows hand-corrected on 2026-08-05 are unchanged by the run.
 - [ ] **The `unknown` count is reported, not minimised.** A large honest unknown count is the
       success condition for Q2, not a regression — a run that drove unknowns toward zero by
-      guessing has failed this block.
+      guessing has failed this block. With articles and interactives now structurally
+      unreachable, expect **at least 175** and do not treat that as a defect.
 
 ## Q7 — pool-aware guardrail, on-ramp filing seam, invariant (~240 LOC)
 
@@ -976,12 +1005,16 @@ model instead of one that shifts under it.
    shared-array set? The extra 248 include legitimate sharing and need spot-checking.
 4. **Beta timing** — this is a lot of churn against a live free beta
    (`free-beta.md`). Land Part 1 first and let Part 2 run gradually?
-5. **If Q6a finds no server-side slug→id route** — is a one-time browser-harvested id map an
-   acceptable standing dependency, or should KA durations stay `unknown` until a reviewer
-   touches them? 879 rows ride on this.
-6. **Is pinning KA's `hash` in our source acceptable operationally?** It is a KA build
-   artifact. The client degrades to `unknown` on rotation and the live test catches it, but
-   someone has to re-capture. The alternative — no KA durations at all — is worse.
+5. ~~**If Q6a finds no server-side slug→id route** — is a one-time browser-harvested id map an
+   acceptable standing dependency?~~ **DISSOLVED 2026-08-11.** No id map is needed: the
+   official YouTube Data API reaches the 755 video rows without touching Khan at all. The
+   harvest was also the avenue Q6a ruled out on bot-detection grounds, so the question had no
+   acceptable "yes" branch. The 175 articles and interactives it also covered do stay
+   `unknown` until a reviewer touches them — that half is now settled policy, not an open
+   question, and Q9 is the surface for it.
+6. ~~**Is pinning KA's `hash` in our source acceptable operationally?**~~ **DISSOLVED
+   2026-08-11.** There is no `hash`. The Data API is versioned and sanctioned, so there is
+   nothing to re-capture and no rotation to catch.
 7. ~~**Should `/review-pending-resources` block approval on `durationSource: 'unknown'`?**~~
    **RESOLVED 2026-08-10: no — surface it and let the reviewer fix it.** The queue is the final
    gate and the reviewer has the page open, so it is where an unknown gets resolved, not where
