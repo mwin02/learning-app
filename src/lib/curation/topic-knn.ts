@@ -41,6 +41,7 @@
 
 import { prisma } from '@/lib/db';
 import type { TopicFilingOrigin } from '@prisma/client';
+import { MIN_CENTROID_MEMBERS } from '@/lib/curation/topic-centroids';
 
 // k from the calibration run. Re-verified 2026-07-27 (T4e) and kept at 10.
 export const KNN_K = 10;
@@ -78,6 +79,46 @@ export const MAX_MEMBERSHIPS = 3;
 // retrievable, so the topic's pool can begin to grow while review keeps the receipts.
 export const MIN_VOUCHABLE_POOL = KNN_K;
 
+// Topic filing Q7 (plan defect P4) — the bar above which a NEGATIVE k-NN verdict about a
+// shelf is worth recording.
+//
+// MIN_VOUCHABLE_POOL answers "can k-NN ever vouch FOR this topic?" and 10 is the honest
+// floor for that question: below k members a topic cannot hold a plurality of k
+// neighbours at all. But clearing that floor does not make the instrument's DISAGREEMENT
+// informative, and P4 is the measurement: all 42 contested rows in the library sat on the
+// four thinnest shelves (algebra 9, physics-mechanics 9, graph-theory 19, rust 12 by pool)
+// and spot-checking found most of them correctly filed. An 11-member shelf loses a
+// 10-neighbour plurality to calculus's 389 whatever the row is about, so "the neighbours
+// disagree" measures the shelf's size, not the filing.
+//
+// Deliberately THE SAME NUMBER as MIN_CENTROID_MEMBERS rather than a new constant, and
+// deliberately not a re-tuning of either: both answer the one question "is this shelf big
+// enough for its own statistic to mean anything?", the centroid side has carried that
+// number since the 2026-07-25 calibration, and two independent thresholds for one question
+// would drift apart. ⚠️ Q7 explicitly does NOT lower MIN_CENTROID_MEMBERS — the fix for a
+// thin shelf is abstention, not a weaker instrument (review-drain.ts:101 makes the same
+// call for the review queue's sort key).
+export const MIN_ADJUDICABLE_POOL = MIN_CENTROID_MEMBERS;
+
+// Whether a k-NN verdict AGAINST `topic` should be dropped rather than recorded as doubt.
+// Exported because the same question is asked at settlement time (quorum-refile).
+//
+// ⚠️ IT IS A BAND, NOT A FLOOR, and the lower edge is the load-bearing half. Below
+// MIN_VOUCHABLE_POOL a shelf is one NOTHING has vouched for — a fresh mint, or a cohort
+// that has not landed yet — and there the contested flag is a receipt, not a verdict: it
+// is what routes the shelf to review and lets it be promoted (T3, and T4b's quorum
+// refile). Abstaining there would hand a brand-new shelf a library full of rows that look
+// adjudicated at relevance 0.00, which is strictly worse than the doubt it replaced.
+// Measured while building this: refiling the 15 `database-systems` rows with a floor
+// instead of a band settled all 15 as vouched against a pool of zero.
+//
+// So the abstention is only for the MIDDLE band — a shelf real enough for k-NN to have an
+// opinion, too small for that opinion to be about the row.
+export function abstainsOnThinShelf(topic: string, pools: Map<string, number>): boolean {
+  const pool = pools.get(topic) ?? 0;
+  return pool >= MIN_VOUCHABLE_POOL && pool < MIN_ADJUDICABLE_POOL;
+}
+
 export type FilingMembership = {
   topic: string;
   relevance: number;
@@ -92,7 +133,10 @@ export type FilingDecision = {
   secondaries: FilingMembership[];
   // Why the primary is what it is — carried into the discovery log so a filing run is
   // auditable without re-deriving it.
-  reason: 'classifier' | 'unvouchable-pool' | 'rejected' | 'no-evidence' | 'minted';
+  // `thin-shelf` (Q7) is an ABSTENTION, not a verdict: same filing as `rejected` — the
+  // request topic keeps the row — but with no doubt recorded, because the shelf is too
+  // thin for the disagreement to be about this row. See MIN_ADJUDICABLE_POOL.
+  reason: 'classifier' | 'unvouchable-pool' | 'rejected' | 'thin-shelf' | 'no-evidence' | 'minted';
 };
 
 export type FilingInput = {
@@ -173,6 +217,14 @@ export function decideFiling(input: FilingInput): FilingDecision {
 
   // A topic with too small a pool can't win a plurality, so the guardrail has no opinion
   // rather than a negative one — accept, flagged, and let the pool grow.
+  //
+  // ⚠️ Q7 deliberately does NOT abstain here, even though the shelf is thinner than
+  // MIN_ADJUDICABLE_POOL by construction. The flag means two different things in the two
+  // branches: below it records "nothing has vouched for this shelf yet", which is the
+  // receipt T3's minting and T4b's quorum refile rely on to get a new shelf reviewed and
+  // promoted — dropping it would make a brand-new topic's rows look adjudicated. The
+  // abstention below is for the other case: an ESTABLISHED-enough shelf being outvoted
+  // purely on size.
   if ((pools.get(proposed) ?? 0) < MIN_VOUCHABLE_POOL) {
     return {
       primary: {
@@ -191,7 +243,14 @@ export function decideFiling(input: FilingInput): FilingDecision {
     // The evidence disagrees with the classifier. Fall back to the request topic — do
     // NOT auto-file under `winner` (detection works, correction does not). The doubt is
     // recorded unless the request topic is itself what the neighbours say.
-    return fallback('rejected', winner !== requestTopic);
+    const disagrees = winner !== requestTopic;
+    // Q7/P4 — ABSTAIN instead of contesting when the shelf the row lands on is too thin
+    // for the disagreement to be about the row (MIN_ADJUDICABLE_POOL). The filing is
+    // identical either way (the request topic keeps the row, at its measured purity), so
+    // this never orphans anything; what changes is that a thin shelf stops manufacturing
+    // review-queue rows out of its own size.
+    if (disagrees && abstainsOnThinShelf(requestTopic, pools)) return fallback('thin-shelf', false);
+    return fallback('rejected', disagrees);
   }
 
   // Accepted. Secondaries are the REMAINING proposals that independently hold a share of
@@ -297,6 +356,10 @@ export function decideMintedFiling(input: FilingInput, minted: string): FilingDe
 //
 // Returns null when the claim fails — including when the existing row has no embedding
 // (no neighbours → `no-evidence`), which is the caller's degradation path too.
+//
+// Q7's `thin-shelf` abstention lands in that same null: abstaining means the guardrail
+// has NO opinion, and a collision needs a positive one before the searched topic gets a
+// membership. Behaviour is unchanged from when that case returned `rejected`.
 export function decideCollision(
   topic: string,
   neighbourTopics: string[],

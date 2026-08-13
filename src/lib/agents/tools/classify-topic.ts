@@ -240,6 +240,12 @@ export function promoteParentTopic(proposals: string[], parentTopic: string): st
 //     thin shelf grow, and spending it to file the child on the parent's fat shelf is
 //     precisely how thin shelves starve.
 //   - `minted` never appears here (children do not mint; see fileChildren).
+//   - `thin-shelf` unprimed (Q7's abstention) — not in the allowlist, and it costs
+//     nothing, which is provable rather than hopeful: that reason is reached only when the
+//     neighbourhood plurality is some topic OTHER than the request topic, and an upgrade
+//     needs the primed run to come back `classifier`, i.e. the promoted head — which IS
+//     the request topic — holding that same plurality. The two cannot both be true, so
+//     every abstention would have failed `isUpgrade` under the old `rejected` reason too.
 //
 // Note what this makes the prior, honestly: because a `rejected` / `no-evidence` fallback
 // already files under the request topic, and the promoted head IS the request topic, an

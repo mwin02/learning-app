@@ -10,6 +10,8 @@ import {
   MAX_MEMBERSHIPS,
   MIN_SECONDARY_PURITY,
   MIN_VOUCHABLE_POOL,
+  MIN_ADJUDICABLE_POOL,
+  abstainsOnThinShelf,
 } from './topic-knn';
 
 // topic-knn imports the prisma client for its query helpers, which validates
@@ -210,6 +212,80 @@ describe('decideFiling — the proposal is rejected', () => {
     });
     expect(d.reason).toBe('rejected');
     expect(d.primary).toMatchObject({ topic: 'calculus', contested: true });
+  });
+});
+
+describe('decideFiling — thin-shelf abstention (Q7/P4)', () => {
+  // A shelf under MIN_ADJUDICABLE_POOL loses a 10-neighbour plurality to a shelf ten
+  // times its size whatever the row is about, so its loss is not evidence about the row.
+  // P4 measured the consequence: all 42 contested rows in the library sat on the four
+  // thinnest shelves, and spot-checking found most of them correctly filed.
+  const thin = new Map([...POOLS, ['rust', MIN_ADJUDICABLE_POOL - 1]]);
+
+  it('abstains instead of contesting when the fallback shelf is too thin to adjudicate', () => {
+    const d = decideFiling({
+      proposals: ['linear-algebra'],
+      requestTopic: 'rust',
+      neighbourTopics: neighbours({ calculus: 7, 'linear-algebra': 3 }),
+      pools: thin,
+    });
+    expect(d.reason).toBe('thin-shelf');
+    // The FILING is identical to the rejected branch — the row keeps its primary at its
+    // measured purity, so abstaining never orphans anything.
+    expect(d.primary).toMatchObject({ topic: 'rust', origin: 'discovery', contested: false });
+    expect(d.secondaries).toEqual([]);
+  });
+
+  it('contests the same disagreement once the shelf clears the bar', () => {
+    const d = decideFiling({
+      proposals: ['linear-algebra'],
+      requestTopic: 'rust',
+      neighbourTopics: neighbours({ calculus: 7, 'linear-algebra': 3 }),
+      pools: new Map([...POOLS, ['rust', MIN_ADJUDICABLE_POOL]]),
+    });
+    expect(d.reason).toBe('rejected');
+    expect(d.primary).toMatchObject({ topic: 'rust', contested: true });
+  });
+
+  it('does not abstain when there was no disagreement to abstain from', () => {
+    // The neighbours back the thin shelf itself. Nothing to record either way, and the
+    // verdict stays `rejected` so nothing downstream sees a spurious abstention.
+    const d = decideFiling({
+      proposals: ['linear-algebra'],
+      requestTopic: 'rust',
+      neighbourTopics: neighbours({ rust: 7, 'linear-algebra': 3 }),
+      pools: thin,
+    });
+    expect(d.reason).toBe('rejected');
+    expect(d.primary).toMatchObject({ topic: 'rust', contested: false });
+  });
+
+  it('leaves the unvouchable-pool branch contested — that flag is a receipt, not a verdict', () => {
+    // A shelf with no pool at all is how a NEW topic starts; its contested flag is what
+    // routes it to review. Q7 abstains on outvoted shelves, never on unvouched ones.
+    const d = decideFiling({
+      proposals: ['rust'],
+      requestTopic: 'sql',
+      neighbourTopics: neighbours({ calculus: 7, sql: 3 }),
+      pools: new Map([...POOLS, ['rust', MIN_VOUCHABLE_POOL - 1]]),
+    });
+    expect(d.reason).toBe('unvouchable-pool');
+    expect(d.primary).toMatchObject({ topic: 'rust', contested: true });
+  });
+
+  it('does NOT abstain for a shelf below MIN_VOUCHABLE_POOL — that flag is a receipt', () => {
+    // The band's lower edge. A shelf nothing has vouched for keeps its doubt, so a fresh
+    // mint reaches review instead of arriving pre-vouched at relevance 0.00.
+    expect(abstainsOnThinShelf('rust', new Map([['rust', MIN_VOUCHABLE_POOL - 1]]))).toBe(false);
+    expect(abstainsOnThinShelf('rust', new Map())).toBe(false);
+    expect(abstainsOnThinShelf('rust', new Map([['rust', MIN_VOUCHABLE_POOL]]))).toBe(true);
+    expect(abstainsOnThinShelf('rust', new Map([['rust', MIN_ADJUDICABLE_POOL]]))).toBe(false);
+  });
+
+  it('keeps a collision declined when the guardrail abstains', () => {
+    // Abstention means NO opinion, and a collision needs a positive one before the
+    // searched topic gets a membership — same null the rejected branch returned.
+    expect(decideCollision('rust', neighbours({ calculus: 7, rust: 3 }), thin)).toBeNull();
   });
 });
 

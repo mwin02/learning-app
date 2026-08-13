@@ -312,12 +312,16 @@ async function main() {
   if (!apply) {
     console.log('settle phase skipped: nothing moved in a dry run.\n');
   } else if (moved.length > 0) {
+    // Read AFTER phase 1, so the refiled shelf is measured at the size the move gave it —
+    // Q7's abstention asks whether that shelf is thick enough to adjudicate its own rows.
+    const settlePools = await topicPools();
     settled = await mapPool(moved, async (m) => {
       const neighbourTopics = await knnNeighbourTopicsOf(m.id);
       const s = decideSettlement(
         m.to,
         { purity: purity(neighbourTopics, m.to), plurality: plurality(neighbourTopics) },
         neighbourTopics.length,
+        settlePools,
       );
       await settleMembership(m.id, m.to, s);
       return { ...m, ...s };

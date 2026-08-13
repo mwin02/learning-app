@@ -283,20 +283,27 @@ export type MembershipInvariants = {
   noMembership: number; // resources retrieval can no longer reach at all
   badPrimaryCount: number; // resources with zero or several primaries
   mirrorDrift: number; // Resource.topic disagreeing with its primary membership
+  unfiledGenerated: number; // generated rows with a scalar topic and NO membership (P5)
 };
 
-// ⚠️ SCOPE: LIBRARY ROWS ONLY — `origin = 'generated'` is excluded from all three counts.
-// An on-ramp lesson (generateOnRampResource) is authored FOR one concept of one Path, is
-// injected directly into that build, and is kept out of every ordinary candidate search by
-// `excludeGenerated` (search-resources.ts). It is deliberately not cross-usable material,
-// so "unreachable by topic search" is its intended state, not a violation — and it is the
-// one creator that writes `Resource.topic` without going through `setPrimaryTopic`.
-// Measured 2026-07-28: an 8-path E2E run left 7 such rows, which turned this assert into a
-// hard block on every curation driver (reclassify, quorum refile, twin merge, the review
-// drain's --apply) for a condition none of them can fix. Excluding them here states the
-// rule the design already relies on; the alternative — minting a self-membership per
-// on-ramp row — would put non-library rows in the filing vocabulary's population counts
-// (topicPools, k-NN neighbourhoods) purely to satisfy a checker.
+// ⚠️ SCOPE: LIBRARY ROWS ONLY — `origin = 'generated'` is excluded from the first three
+// counts. An on-ramp lesson (generateOnRampResource) is authored FOR one concept of one
+// Path, is injected directly into that build, and is kept out of every ordinary candidate
+// search by `excludeGenerated` (search-resources.ts). It is deliberately not cross-usable
+// material, so "unreachable by ordinary topic search" is its intended state, not a
+// violation. Measured 2026-07-28: an 8-path E2E run left 7 such rows, which turned this
+// assert into a hard block on every curation driver (reclassify, quorum refile, twin merge,
+// the review drain's --apply) for a condition none of them could fix.
+//
+// ⚠️ Q7/P5 REVERSED HALF OF THAT — see `unfiledGenerated` below. The old note argued a
+// self-membership "would put non-library rows in the filing vocabulary's population counts
+// (topicPools, k-NN neighbourhoods)". It does not: every population query in the filing
+// path filters `origin <> 'generated'` itself (topicPools, knnNeighbourTopics,
+// knnNeighbourTopicsOf, refreshTopicCentroids), so a generated membership is invisible to
+// the instrument. What the missing row DID cost was the mirror invariant — a scalar
+// `Resource.topic` with nothing behind it, written by the one creator that bypassed
+// `setPrimaryTopic`. That bypass is now closed at the source, and this counts the hole so
+// a future one is detected rather than invisible.
 const LIBRARY_ROWS = Prisma.sql`r.origin::text <> 'generated'`;
 
 export async function checkMembershipInvariants(): Promise<MembershipInvariants> {
@@ -325,7 +332,15 @@ export async function checkMembershipInvariants(): Promise<MembershipInvariants>
     WHERE ${LIBRARY_ROWS}
       AND rt.topic <> r.topic
   `;
-  return { noMembership, badPrimaryCount, mirrorDrift };
+  // The population the three counts above exclude, checked for the one property it does
+  // owe: a resource carrying a topic must have the membership that topic mirrors.
+  const [{ c: unfiledGenerated }] = await prisma.$queryRaw<Count[]>`
+    SELECT count(*)::int AS c FROM "Resource" r
+    WHERE NOT (${LIBRARY_ROWS})
+      AND r.topic <> ''
+      AND NOT EXISTS (SELECT 1 FROM "ResourceTopic" rt WHERE rt."resourceId" = r.id)
+  `;
+  return { noMembership, badPrimaryCount, mirrorDrift, unfiledGenerated };
 }
 
 export async function assertMembershipInvariants(): Promise<MembershipInvariants> {
@@ -333,9 +348,15 @@ export async function assertMembershipInvariants(): Promise<MembershipInvariants
   console.log(
     `resources with no membership: ${counts.noMembership}\n` +
       `resources whose primary count <> 1: ${counts.badPrimaryCount}\n` +
-      `mirror drift (Resource.topic <> primary membership): ${counts.mirrorDrift}`,
+      `mirror drift (Resource.topic <> primary membership): ${counts.mirrorDrift}\n` +
+      `generated rows with a topic and no membership: ${counts.unfiledGenerated}`,
   );
-  if (counts.noMembership || counts.badPrimaryCount || counts.mirrorDrift) {
+  if (
+    counts.noMembership ||
+    counts.badPrimaryCount ||
+    counts.mirrorDrift ||
+    counts.unfiledGenerated
+  ) {
     throw new Error('ResourceTopic membership invariants violated — see counts above');
   }
   return counts;

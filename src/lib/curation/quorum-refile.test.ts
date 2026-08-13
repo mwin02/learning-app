@@ -145,37 +145,70 @@ describe('decideRefile', () => {
 });
 
 describe('decideSettlement', () => {
+  // Q7: the settlement asks the same pool question `decideFiling` asks — is the shelf
+  // thick enough for losing a plurality to mean anything about the row?
+  const POOLS = new Map([
+    ['statistics', 251],
+    ['linear-algebra', 243],
+    ['multivariable-calculus', 67],
+    ['eigenvalues-and-eigenvectors', 14],
+    ['database-systems', 0],
+  ]);
+
   it('vouches when the refiled topic now holds the plurality', () => {
     // The block's central claim: after the cohort moves, the shelf clears the bar it
     // could not clear before.
     expect(
-      decideSettlement('statistics', { purity: 0.7, plurality: 'statistics' }, 10),
+      decideSettlement('statistics', { purity: 0.7, plurality: 'statistics' }, 10, POOLS),
     ).toEqual({ relevance: 0.7, contested: false });
   });
 
   it('keeps the doubt when some other topic still holds the neighbourhood', () => {
-    // The expected outcome for the thin cohorts: a 14-row topic embedded inside a 200-row
-    // adjacent one cannot hold a plurality in a 10-neighbour window (As-built T4a item 7).
+    expect(
+      decideSettlement(
+        'multivariable-calculus',
+        { purity: 0.3, plurality: 'calculus' },
+        10,
+        POOLS,
+      ),
+    ).toEqual({ relevance: 0.3, contested: true });
+  });
+
+  it('ABSTAINS instead of contesting when the refiled shelf is too thin to adjudicate', () => {
+    // Q7/P4. A 14-row topic embedded inside a 243-row adjacent one cannot hold a
+    // plurality in a 10-neighbour window (As-built T4a item 7) — that is a fact about
+    // the shelf, not about this row, so the measured purity is recorded and no doubt is.
     expect(
       decideSettlement(
         'eigenvalues-and-eigenvectors',
         { purity: 0.3, plurality: 'linear-algebra' },
         10,
+        POOLS,
       ),
-    ).toEqual({ relevance: 0.3, contested: true });
+    ).toEqual({ relevance: 0.3, contested: false });
   });
 
-  it('treats a TIE as unsettled, not as a win', () => {
-    expect(decideSettlement('statistics', { purity: 0.5, plurality: null }, 10)).toMatchObject({
-      contested: true,
-    });
+  it('keeps the doubt on a shelf with NO pool — abstention has a lower edge too', () => {
+    // Q7's band, lower edge. Measured while building it: the 15-row `database-systems`
+    // cohort is entirely `deprecated`, so nothing in it counts toward a pool, and a
+    // floor-shaped rule settled all 15 as vouched against a pool of zero.
+    expect(
+      decideSettlement('database-systems', { purity: 0, plurality: 'sql' }, 10, POOLS),
+    ).toEqual({ relevance: 0, contested: true });
+  });
+
+  it('treats a TIE on an adjudicable shelf as unsettled, not as a win', () => {
+    expect(
+      decideSettlement('statistics', { purity: 0.5, plurality: null }, 10, POOLS),
+    ).toMatchObject({ contested: true });
   });
 
   it('leaves the doubt in place when there are no neighbours to read', () => {
-    expect(decideSettlement('statistics', { purity: 0, plurality: null }, 0)).toEqual({
-      relevance: 0,
-      contested: true,
-    });
+    // Ahead of the pool question: nothing was measured at all, so there is nothing to
+    // abstain from — even on a thin shelf.
+    expect(
+      decideSettlement('eigenvalues-and-eigenvectors', { purity: 0, plurality: null }, 0, POOLS),
+    ).toEqual({ relevance: 0, contested: true });
   });
 });
 

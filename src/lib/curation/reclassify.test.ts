@@ -25,6 +25,8 @@ const POOLS = new Map([
   ['calculus', 380],
   ['python', 60],
   ['thin-topic', 3],
+  // Q7's abstention band: vouchable (>= MIN_VOUCHABLE_POOL) but not adjudicable.
+  ['thin-shelf', 15],
 ]);
 
 // k neighbours, `hits` of them labelled `topic`, the rest labelled `filler`.
@@ -158,6 +160,46 @@ describe('decideReclassification — disagreement never refiles', () => {
       const d = decideReclassification(input(over));
       expect(d.primary?.topic ?? 'linear-algebra').toBe('linear-algebra');
     }
+  });
+});
+
+describe('decideReclassification — thin-shelf abstention (Q7/P4)', () => {
+  // The row sits on a shelf too thin for k-NN to adjudicate, and the neighbourhood is
+  // held by a big adjacent one. Pre-Q7 that was recorded as doubt about the row; it is
+  // really a fact about the shelf, which is why P4 found most such rows correctly filed.
+  const thin = input({
+    currentTopic: 'thin-shelf',
+    proposals: ['probability-and-statistics'],
+    neighbourTopics: neighbours('calculus', 10),
+    existingTopics: ['thin-shelf'],
+  });
+
+  it('re-scores the primary without flagging it', () => {
+    const d = decideReclassification(thin);
+    expect(d.verdict).toBe('abstain');
+    expect(d.primary).toMatchObject({ topic: 'thin-shelf', contested: false, relevance: 0 });
+  });
+
+  it('still FLAGS a row on a shelf below MIN_VOUCHABLE_POOL — nothing vouches for it', () => {
+    // The band's lower edge, from the reclassifier's side: an unvouched shelf keeps its
+    // receipt so review can promote or empty it.
+    const unvouched = decideReclassification(input({
+      currentTopic: 'thin-topic',
+      proposals: ['probability-and-statistics'],
+      neighbourTopics: neighbours('calculus', 10),
+      existingTopics: ['thin-topic'],
+    }));
+    expect(unvouched.verdict).toBe('disagree');
+    expect(unvouched.primary).toMatchObject({ contested: true });
+  });
+
+  it('records no contested secondary — an abstention proposes nothing', () => {
+    expect(decideReclassification(thin).secondaries).toEqual([]);
+  });
+
+  it('still reports the neighbourhood for review', () => {
+    // The reviewer loses nothing: the evidence topic is a diagnostic, not a membership.
+    expect(decideReclassification(thin)).toMatchObject({ evidenceTopic: 'calculus' });
   });
 });
 
