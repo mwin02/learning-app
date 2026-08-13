@@ -498,7 +498,9 @@ async function persistDiscovered(
   // relatedTopics(topic) — and the caller-side skip that made this a no-op for topics
   // with no edges (60% of the library) is gone with it. The classifier only PROPOSES;
   // decideFiling tests each proposal against the resource's embedding neighbourhood
-  // below. Decomposed children inherit the parent's filing via createChild.
+  // below. Q4: decomposed children are no longer stamped with the parent's filing —
+  // upsertResource classifies each child on its own content through this same guardrail,
+  // with the parent's topic as the prior and the fallback.
   // T3: the classifier may also name a subject the vocabulary LACKS (`newTopic`), which
   // the topic gate turns into a canonical below. That is the only way a discovery can
   // widen the vocabulary — pre-T3 a new canonical could only be born from a learner

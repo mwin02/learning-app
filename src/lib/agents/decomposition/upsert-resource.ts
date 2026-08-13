@@ -8,16 +8,28 @@
 // single transaction. Embeddings are written after commit (they reference the
 // freshly-created ids), and only for pickable atomic leaves.
 //
-// Children inherit topic / sourceId / trustScore / language from the parent;
-// only the parent's source is resolved. Child concepts are already per-child
-// (derived + canonicalized by the router, decision A) by the time they reach
-// here.
+// Children inherit sourceId / trustScore / language from the parent; only the
+// parent's source is resolved. Child concepts are already per-child (derived +
+// canonicalized by the router, decision A) by the time they reach here. Their
+// TOPIC is not inherited — Q4 files each child on its own content through the
+// same guardrail the parent went through (see fileChildren below).
 
 import { prisma } from '@/lib/db';
 import { log, logWarn } from '@/lib/log';
 import { safeEmbedBatch, safeEmbedResource, storeEmbedding } from '@/lib/ai/embeddings';
 import { setPrimaryTopic, addCollisionMembership } from '@/lib/curation/resource-topics';
-import { MAX_MEMBERSHIPS, type FilingDecision } from '@/lib/curation/topic-knn';
+import {
+  knnNeighbourTopics,
+  topicPools,
+  MAX_MEMBERSHIPS,
+  type FilingDecision,
+} from '@/lib/curation/topic-knn';
+import {
+  classifyDiscoveryTopics,
+  decideFilingWithParentPrior,
+  type TopicProposal,
+} from '@/lib/agents/tools/classify-topic';
+import { listCanonicals } from '@/lib/agents/topic-registry';
 import { safeClassifyAndPersist } from '@/lib/curation/embeddability';
 import { computeTrustScore } from '@/lib/curation/trust-score';
 import { youtubeEngagementSignal } from '@/lib/curation/youtube-signal';
@@ -194,6 +206,17 @@ export async function upsertResource(
           url,
         );
 
+  const decision = filing ?? defaultFiling(topic);
+  // Q4: classify the children on their own content before the transaction opens (network
+  // calls; and the guardrail's evidence must predate the first insert). Gated on `filing`
+  // for the same reason every other evidence step here is: it is what marks an
+  // evidence-gathering caller, and the seed/verify paths that supply none keep today's
+  // cost and today's semantics.
+  const childFilings =
+    filing && decomposition.children.length > 0
+      ? await fileChildren(decomposition.children, decision.primary.topic)
+      : new Map<string, ChildFiling>();
+
   try {
     await prisma.$transaction(async (tx) => {
       const parentSlug = await uniqueSlug(tx, resource.title, url, taken);
@@ -228,7 +251,6 @@ export async function upsertResource(
       // with no membership is unreachable no matter what Resource.topic says — the
       // memberships ARE the filing, and they are written in the same transaction as the
       // row so that can never come apart.
-      const decision = filing ?? defaultFiling(topic);
       await writeMemberships(tx, parent.id, decision);
 
       // T2a: the parent is embedded whatever its decompositionStatus, container
@@ -262,6 +284,7 @@ export async function upsertResource(
         await createChild(tx, {
           topic: decision.primary.topic,
           filing: decision,
+          childFilings,
           parentId: parent.id,
           sourceId: source.id,
           trustScore: sourceTrust,
@@ -380,6 +403,16 @@ export async function decomposeExisting(
   const appliedTitle = correctedVec ? correctedTitle : null;
   const title = appliedTitle ?? existing.title;
 
+  // Q4: same per-child filing the discovery path does. This path carries no FilingDecision
+  // to inherit — pre-Q4 its children were stamped with the parent's topic as a plain
+  // `discovery` membership — so it is the path that produced most of the library's
+  // unclassified children (seed backfill, and every re-decomposition out of the review
+  // queue). The parent's topic is still the prior and still the fallback.
+  const childFilings =
+    decomposition.children.length > 0
+      ? await fileChildren(decomposition.children, existing.topic)
+      : new Map<string, ChildFiling>();
+
   await prisma.$transaction(async (tx) => {
     await tx.resource.update({
       where: { id: resourceId },
@@ -412,6 +445,7 @@ export async function decomposeExisting(
     for (const child of decomposition.children) {
       childrenCreated += await createChild(tx, {
         topic: existing.topic,
+        childFilings,
         parentId: resourceId,
         sourceId: existing.sourceId,
         trustScore: existing.trustScore,
@@ -508,14 +542,16 @@ async function createChild(
   tx: TxClient,
   args: {
     topic: string;
-    // T2b: the parent's filing, inherited whole. A container's children are by
-    // construction the same subject as the container, and post-T2a the container itself
-    // was embedded and guardrail-checked — so the evidence backing this membership was
-    // tested at the granularity where the motivating mis-filing actually occurred.
-    // Per-child classification stays out of scope. Absent for decomposeExisting, whose
-    // parent's filing predates T2b; children then inherit the parent's topic as a plain
-    // `discovery` membership, which is still what makes them retrievable at all.
+    // The parent's filing. Q4 demoted it to the LAST resort: it is used only for a child
+    // `fileChildren` produced no entry for at all. The pre-Q4 argument for inheriting it
+    // — "a container's children are by construction the same subject as the container" —
+    // is what P3 measured and disproved: it was true often enough to sound right and
+    // wrong often enough that every dumping-ground shelf in the audit was built out of
+    // it, 45 leaves at a time.
     filing?: FilingDecision;
+    // Q4: each child's own filing (+ its vector), keyed by raw url. Covers the whole
+    // subtree, so recursion just passes it down.
+    childFilings?: Map<string, ChildFiling>;
     parentId: string;
     sourceId: string;
     trustScore: number;
@@ -531,6 +567,9 @@ async function createChild(
   },
 ): Promise<number> {
   const { topic, parentId, sourceId, trustScore, childStatus, child, taken, embedTasks } = args;
+  const own = args.childFilings?.get(child.url);
+  const childFiling = own?.filing ?? args.filing ?? defaultFiling(topic);
+  const childTopic = childFiling.primary.topic;
 
   // F8: same canonical-URL dedup as the parent path (see upsertResource) — except
   // that anchor children keep their fragment (that IS the child's identity).
@@ -550,7 +589,9 @@ async function createChild(
   const created = await tx.resource.create({
     data: {
       slug,
-      topic,
+      // The mirror `writeMemberships` is about to write anyway (setPrimaryTopic owns it);
+      // stated here so the row is never momentarily filed somewhere it does not belong.
+      topic: childTopic,
       title: child.title,
       url,
       type: child.type as ResourceType,
@@ -585,12 +626,19 @@ async function createChild(
   });
 
   // T2b: children are the pickable leaves, so a missing membership costs MORE here than
-  // on the container — it makes the whole decomposition unretrievable. Secondaries are
-  // inherited too: they were tested against the container's embedding, which is the
-  // subject the children share.
-  await writeMemberships(tx, created.id, args.filing ?? defaultFiling(topic));
+  // on the container — it makes the whole decomposition unretrievable. Q4: the
+  // memberships are now this child's own, measured against this child's own embedding.
+  await writeMemberships(tx, created.id, childFiling);
 
-  // Only atomic leaves are pickable, so only they are embedded.
+  // ⚠️ AFTER the membership write, for the reason spelled out on the parent's
+  // storeEmbedding call: setPrimaryTopic writes Resource.topic through the Prisma client
+  // and bumps @updatedAt, while storeEmbedding stamps GREATEST("updatedAt", now()) — so
+  // embedding first would leave a freshly-created row looking stale to embedMissing().
+  if (own?.vector) await storeEmbedding(created.id, own.vector, tx);
+
+  // Only atomic leaves are pickable, so only they are embedded post-commit. A child whose
+  // vector was already written above still needs its embeddability probe, so it joins the
+  // list flagged rather than being skipped (same shape as the parent path).
   if (decompStatus === 'atomic') {
     embedTasks.push({
       id: created.id,
@@ -598,6 +646,7 @@ async function createChild(
       title: child.title,
       summary: child.summary,
       conceptsTaught: child.conceptsTaught,
+      embedded: Boolean(own?.vector),
     });
   }
 
@@ -606,6 +655,7 @@ async function createChild(
     count += await createChild(tx, {
       topic,
       filing: args.filing,
+      childFilings: args.childFilings,
       parentId: created.id,
       sourceId,
       trustScore,
@@ -617,6 +667,122 @@ async function createChild(
     });
   }
   return count;
+}
+
+// ── per-child topic filing (Q4 / plan defect P3) ─────────────────────────────
+//
+// What a decomposed child is filed under, and the vector that evidence was measured
+// against — keyed by the child's RAW url (what `createChild` still holds before F8
+// normalization, and what the classifier and the embedder were keyed on).
+type ChildFiling = { filing: FilingDecision; vector: number[] | null };
+
+// One classifier call per chunk of children. Two reasons this is chunked rather than one
+// call per container: `topicClassifier`'s output budget is spent on thinking first and
+// the results array scales with the batch (the canonicalizer's 8k lesson), and a
+// container may legitimately hold DECOMPOSITION_MAX_AUTO_CHILDREN=50 leaves per node
+// plus nested descendants. A truncated response is not a loud failure here — it is a
+// silent map miss, which degrades each affected child straight back to the parent's
+// topic, i.e. back to the exact defect this block removes, and it would do so worst on
+// the biggest containers (the motivating 45-leaf Khan unit).
+const CLASSIFY_CHUNK = 25;
+
+// Q4: file a container's whole child subtree on each child's OWN content, gated by the
+// unchanged T2b guardrail, instead of copying the parent's filing down the tree.
+//
+// The parent's topic plays the role a discovery's REQUEST TOPIC plays for a top-level
+// find, and it plays it in all three places that expects: the classifier's `fallback`
+// (what the model returns when nothing fits — see applyParentPrior's header for why
+// naming it there is safe), `decideFiling`'s `requestTopic` (the degradation target), and
+// the prior itself. Those three must be the same topic or a child's degradation path
+// stops agreeing with its filing path.
+//
+// Every step runs BEFORE the insert transaction opens: these are LLM and embedding
+// network calls, and `decideFiling`'s evidence must be a SNAPSHOT taken before the first
+// child lands. Filing them one at a time inside the transaction would let each inserted
+// child become a neighbour of the ones after it — a 45-leaf container would bootstrap
+// its own evidence and manufacture the very consensus the guardrail is supposed to test
+// (measured on the discovery batch path 2026-07-25).
+//
+// The vectors are returned, not discarded: the children are about to be embedded
+// post-commit anyway, so writing the same vector inside the transaction costs nothing
+// extra and lands the row already embedded (the parent's T2a argument, one level down).
+//
+// Degrades exactly like the parent path. A classifier failure is an empty proposal list,
+// an embed failure is a null vector and an empty neighbourhood; both reach `decideFiling`
+// as `no-evidence`, which files the child under the parent's topic — contested, so the
+// uncertainty is visible and T4's reclassifier revisits it — rather than dropping it.
+// A child is never left without a membership, which post-T1 would make it unretrievable.
+async function fileChildren(
+  children: ChildInput[],
+  parentTopic: string,
+): Promise<Map<string, ChildFiling>> {
+  const nodes = flattenChildren(children);
+  const byUrl = new Map<string, ChildFiling>();
+  if (nodes.length === 0) return byUrl;
+
+  const vocabulary = await listCanonicals();
+  const [proposalsByUrl, vectors] = await Promise.all([
+    classifyChunked(nodes, vocabulary, parentTopic),
+    safeEmbedBatch(
+      nodes.map((n) => ({
+        title: n.title,
+        summary: n.summary,
+        conceptsTaught: n.conceptsTaught,
+      })),
+    ),
+  ]);
+
+  const pools = await topicPools();
+  let offParent = 0;
+  for (const [i, node] of nodes.entries()) {
+    const vector = vectors[i] ?? null;
+    // Sequential rather than Promise.all: a large container would otherwise fire 50+
+    // concurrent pgvector queries at a pooled client, and each one is a single indexed
+    // lookup.
+    const neighbourTopics = vector ? await knnNeighbourTopics(vector) : [];
+    const filing = decideFilingWithParentPrior({
+      proposals: proposalsByUrl.get(node.url)?.topics ?? [],
+      requestTopic: parentTopic,
+      neighbourTopics,
+      pools,
+    });
+    if (filing.primary.topic !== parentTopic) offParent += 1;
+    byUrl.set(node.url, { filing, vector });
+  }
+
+  log('upsert-resource.children-filed', {
+    parentTopic,
+    children: nodes.length,
+    offParent,
+    contested: [...byUrl.values()].filter((c) => c.filing.primary.contested).length,
+  });
+  return byUrl;
+}
+
+async function classifyChunked(
+  nodes: ChildInput[],
+  vocabulary: string[],
+  parentTopic: string,
+): Promise<Map<string, TopicProposal>> {
+  const merged = new Map<string, TopicProposal>();
+  for (let i = 0; i < nodes.length; i += CLASSIFY_CHUNK) {
+    const chunk = nodes.slice(i, i + CLASSIFY_CHUNK).map((n) => ({
+      url: n.url,
+      title: n.title,
+      summary: n.summary,
+      conceptsTaught: n.conceptsTaught,
+    }));
+    const proposals = await classifyDiscoveryTopics(chunk, vocabulary, parentTopic);
+    for (const [url, proposal] of proposals) merged.set(url, proposal);
+  }
+  return merged;
+}
+
+// The whole subtree, depth-first — a doc-TOC container can nest containers, and a nested
+// container is filed on its own content too: it is the row every leaf under it would
+// otherwise have inherited from.
+function flattenChildren(children: ChildInput[]): ChildInput[] {
+  return children.flatMap((c) => [c, ...flattenChildren(c.children ?? [])]);
 }
 
 // ── topic filing (T2b) ───────────────────────────────────────────────────────
