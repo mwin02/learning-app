@@ -265,6 +265,35 @@ reclaim. Check the queue is idle first (§12's queue-depth gauge), or accept the
 delay. For a graceful swap, SSH in and `docker stop course-worker` (the container
 has a 30s stop timeout; the worker releases its claim in ~1s) before resetting.
 
+⚠️ **The OLD container comes back first, and serves the queue for minutes.** Step 3
+does not swap the image at boot: `docker run --restart=always` means the Docker
+daemon restarts the *existing* container as soon as it starts, while the startup
+script is still authenticating and pulling. The swap happens only when the script
+reaches its `docker rm -f` + `docker run`. Measured 2026-08-13 on the Q1–Q11 deploy:
+old container back at 02:56:02, new one at 03:00:48 — **4m45s running the previous
+build**, on a warm layer cache.
+
+Nothing in the logs says so. The old container keeps emitting `course-worker.queue-depth`
+at its normal cadence, so the gauge looks like an uninterrupted healthy worker, and
+`instances describe` reports the NEW tag in `worker-image` from the moment step 2 runs
+— metadata is the instruction, not the state. The tell is `workerId`: it is
+`os.hostname():pid`, and a container's hostname is its own id, so a genuine swap
+changes it. Same id after a reset = same container = old image.
+
+**Verify the swap; do not infer it from polling resuming**, and treat that window as
+live if the deploy is ordering-sensitive (a migration just landed, §"Ordering" below):
+
+```bash
+gcloud compute ssh $INSTANCE --zone $ZONE --project $PROJECT_ID \
+  --command 'docker inspect course-worker --format "{{.Config.Image}} {{.Config.Hostname}} started={{.State.StartedAt}}"'
+```
+
+Expect the tag you just pushed. If it still reads the old one, check whether the
+startup script is mid-pull (`sudo journalctl -u google-startup-scripts | tail`) before
+intervening — an e2-micro extracts layers slowly and the boot is often simply not
+finished. The graceful path above (`docker stop` before the reset) does not avoid
+this: the container still exists, so `--restart=always` still brings it back.
+
 Rollback is the same three steps with the previous tag.
 
 ### Ordering when one change spans app, migrations and worker
