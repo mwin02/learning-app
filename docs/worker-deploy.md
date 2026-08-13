@@ -39,20 +39,22 @@ more DB-chatty than Vertex-chatty. The app service is there for the same reason.
 **`REGION` is not `GOOGLE_VERTEX_LOCATION`**: that one says where the models are
 served and stays `us-central1`.
 
-> ⚠️ **The worker is currently in `us-central1-a`, and that is a workaround, not a
-> decision.** On 2026-07-31 `e2-micro` capacity was exhausted in **all three**
-> `us-west1` zones (`resource_availability`, confirmed not quota — E2_CPUS limit
-> 100, usage 0). `us-central1` is also Always Free, so the cost is identical bar
-> ~$0.01/mo of cross-region image pulls; the trade is purely leaving the database's
-> region, and the latency cost is **unmeasured**.
+> ✅ **The worker is in `us-west1-a` as of 2026-08-13**, back in the database's
+> region. It spent 2026-07-31 → 08-13 in `us-central1-a` because `e2-micro`
+> capacity was exhausted in **all three** `us-west1` zones that day
+> (`resource_availability`, confirmed not quota — E2_CPUS limit 100, usage 0). The
+> move back was a §6 create in `us-west1-a` that succeeded first try, then a delete
+> of the old instance: the VM is stateless, so it cost ten minutes and no data
+> movement. Egress IP changed `104.197.62.19` → **`136.66.100.126`**; nothing is
+> keyed to it today, and Supabase network restrictions are the thing that would
+> change that.
 >
-> **Move it back to `us-west1` when capacity returns.** Retry the §6 create in a
-> `us-west1` zone; if it succeeds, verify (§11) and delete the `us-central1`
-> instance. The VM is stateless — all state is in Supabase — so this is a
-> ten-minute swap with no data movement. The one thing that would make it
-> expensive is anything keyed to the worker's **egress IP** (currently
-> `104.197.62.19`), e.g. Supabase network restrictions; there is nothing today.
-> Do not read the current region as precedent for placing new components.
+> ⚠️ **Zone capacity is not a property of the zone — it is a property of the day.**
+> `us-central1-a` refused to start this same `e2-micro` on 2026-08-13 with
+> `ZONE_RESOURCE_POOL_EXHAUSTED`, two weeks after `us-west1` had refused to create
+> one. Both were transient. The operational consequence is in §10: a **stopped**
+> `e2-micro` is not guaranteed to start again, so "pause the worker" is not the
+> cheap reversible act it looks like.
 
 The Cloud Run worker-pool path is preserved in §13 as the scale-up route, for
 when queue depth genuinely needs more than one worker.
@@ -70,11 +72,11 @@ when queue depth genuinely needs more than one worker.
 ```bash
 export PROJECT_ID=learning-app-prod-mzw
 export REGION=us-west1
-# The VM's zone — NOT the image's region. The instance is in us-central1-a (the
-# capacity workaround in §0) while the Artifact Registry repo stays us-west1, so
-# `gcloud compute` calls take ZONE and `gcloud artifacts` calls take REGION. Change
-# this back to a us-west1 zone if and when the VM is moved per §0.
-export ZONE=us-central1-a
+# The VM's zone — NOT the image's region. They agree again since the 2026-08-13 move
+# (§0), but they are still separate variables: `gcloud compute` calls take ZONE and
+# `gcloud artifacts` calls take REGION, and a future capacity move can split them
+# apart again without either being wrong.
+export ZONE=us-west1-a
 export VERTEX_LOCATION=us-central1
 export REPO=learning-app
 export IMAGE=$REGION-docker.pkg.dev/$PROJECT_ID/$REPO/course-worker
@@ -328,7 +330,7 @@ short and do not merge such a stack half-way (see the per-feature merge checklis
 | Task | Command |
 | --- | --- |
 | Tail worker logs | `gcloud compute ssh $INSTANCE --zone $ZONE -- docker logs -f course-worker` |
-| Pause the worker | `gcloud compute instances stop $INSTANCE --zone $ZONE` |
+| Pause the worker | `gcloud compute instances stop $INSTANCE --zone $ZONE` — ⚠️ may not restart, see below |
 | Resume | `gcloud compute instances start $INSTANCE --zone $ZONE` (startup script re-runs, re-pulls) |
 | Graceful container restart | `gcloud compute ssh $INSTANCE --zone $ZONE -- docker restart -t 30 course-worker` |
 | Deploy / roll back | §9 |
@@ -337,6 +339,33 @@ short and do not merge such a stack half-way (see the per-feature merge checklis
 
 Stopping the VM stops the instance charge but **not** the disk charge; the 30 GB
 is inside the free tier either way.
+
+### ⚠️ Stopping the worker is a one-way door when the zone is full
+
+**A stopped `e2-micro` has no reservation. `start` is a fresh capacity request, and
+it can be refused.** On 2026-08-13 the worker was stopped for a batch of library
+drivers (the right call — they re-measure k-NN neighbourhoods a live worker moves
+under them) and then would not come back:
+
+```
+ERROR: ZONE_RESOURCE_POOL_EXHAUSTED   (us-central1-a, e2-micro)
+```
+
+Four attempts over several minutes, all refused. Production had no worker until a
+new VM was created in another zone. The recovery is cheap **because the VM is
+stateless** — §6 create in a zone with capacity, §11 verify, delete the old
+instance — but it is a create, not a restart, and it changes the external IP.
+
+So before stopping the worker for any window longer than a moment:
+
+- Prefer **stopping the container, not the VM**: `docker stop -t 30 course-worker`
+  over SSH releases any claim in ~1s and leaves the instance (and its capacity)
+  held. `docker start course-worker` brings it back with no scheduler involved.
+  This is the right tool for "hold the queue while I run something".
+- Reserve `instances stop` for cases where you want the instance charge to end and
+  can tolerate recreating it.
+- If `start` fails, do not retry indefinitely — go to §6 in a different zone. Check
+  `us-west1` first: it is the database's region and where the VM belongs (§0).
 
 ## 11. Verification gate
 
@@ -356,6 +385,12 @@ is inside the free tier either way.
    the worker must resume polling with no manual step.
 
 ### Verified in production (2026-07-31, `course-worker` in `us-central1-a`)
+
+> Results below were measured on the `us-central1-a` instance, which no longer
+> exists (§0). They carried over to the `us-west1-a` VM created 2026-08-13 —
+> same image, same startup script, same machine type — and steps 1, 2 and 5 were
+> re-confirmed there on creation. Steps 3 and 4 were not re-run: both need a
+> claim in flight, and the queue was empty.
 
 | # | Result |
 | --- | --- |
