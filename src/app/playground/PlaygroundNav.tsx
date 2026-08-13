@@ -10,6 +10,7 @@ const TABS = [
   { href: '/playground/dashboard', label: 'Dashboard' },
   { href: '/playground/decomposition-review', label: 'Decomposition review' },
   { href: '/playground/pending-review', label: 'Pending review' },
+  { href: '/playground/duration-confirm', label: 'Confirm durations' },
   { href: '/playground/reports', label: 'Reports' },
   { href: '/playground/failed-builds', label: 'Failed builds' },
   { href: '/playground/broken-tracks', label: 'Broken tracks' },

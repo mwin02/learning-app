@@ -123,3 +123,31 @@ export function isoDurationToSeconds(iso: string): number | null {
 export function secondsToMinutes(seconds: number): number {
   return Math.max(1, Math.round(seconds / 60));
 }
+
+// ── Q10: attribution by re-derivation ────────────────────────────────────────
+
+// The rule for the 786 rows that carry a number stamped `unknown`. `Resource` has
+// no per-field audit trail and the `ResourceReport.resolution` trail reaches ZERO
+// of them (measured 2026-08-12), so these rows are unattributable by construction
+// — not merely inconvenient to attribute. The only honest exception is a number a
+// source can be asked to produce again: re-measure it independently, and stamp the
+// provenance ONLY if the stored number is exactly what the source says today.
+//
+// Exactly, not approximately. A tolerance would let a hand-set 22 borrow the
+// provenance of a 21-minute video, which is the manufactured confidence this whole
+// plan exists to remove — and "close to a measurement" is a shape argument, the
+// species of reasoning the brief forbids outright.
+//
+// It is applied only where a match is evidence rather than coincidence: the legacy
+// YouTube path wrote precisely this number from precisely this API call
+// (`decomposition/youtube.ts`), so equality means the row came from there. It is
+// deliberately NOT applied to word-count estimators, which were written for Q6b
+// and never ran on a legacy row — an equality there would be a collision, not a
+// trail.
+export function attributeByRederivation(
+  storedMin: number | null,
+  rederivedMin: number | null,
+): 'api' | null {
+  if (storedMin == null || rederivedMin == null) return null;
+  return storedMin === rederivedMin ? 'api' : null;
+}
