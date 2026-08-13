@@ -127,6 +127,10 @@ export async function generateOnRampResource(args: {
           difficulty: 'beginner',
           prerequisiteConcepts: [],
           conceptsTaught: [concept.title],
+          // Q1 follow-up: same reason as the durationSource above — the tag is the concept
+          // this lesson was authored for, not a parent's array inherited by a failed
+          // derivation. The default `inherited` would be a false claim.
+          conceptOrigin: 'derived',
           origin: 'generated',
           // Our own vetted (self-critiqued) content — active/pickable immediately, not
           // queued for human review like an agent web find.

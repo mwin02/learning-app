@@ -233,6 +233,12 @@ export async function upsertResource(
           difficulty: resource.difficulty as Difficulty,
           prerequisiteConcepts: resource.prerequisiteConcepts,
           conceptsTaught: resource.conceptsTaught,
+          // Q1 follow-up: a root is outside the inheritance path P1 broke — its array came
+          // from its own sourcing-time extraction, so `derived` is the true stamp. Taking
+          // the column default (`inherited`) instead would drop every new discovery root
+          // out of `loadTopicVocab`'s grounding vocabulary permanently, re-incurring
+          // incrementally the exact loss Q3's backfill repaired for 629 existing roots.
+          conceptOrigin: 'derived',
           // Phase 2.5h: raw engagement signals (null for non-YouTube), so trustScore
           // is recomputable when stats grow stale or our own votes land.
           viewCount: resource.youtube?.viewCount ?? null,
