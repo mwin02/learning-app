@@ -1,6 +1,6 @@
 # Library quality plan — pipeline fixes + library backfill
 
-**Status:** active — not started · **Blocks:** Q1–Q8; no PRs yet · **Block IDs:** `Q`
+**Status:** active — in progress · **Blocks:** Q1–Q9; Q1 #335, Q2 #336 open · **Block IDs:** `Q`
 · **Started:** 2026-08-05 · **Briefs retrofitted:** 2026-08-10
 
 > **`P` and `B` are not block IDs.** `P1`–`P7` are pipeline *defects* and `B1`–`B6` are
@@ -406,7 +406,8 @@ other writer has the same hole.
 
 # Blocks
 
-Eight blocks. Q1 and Q2 both carry migrations and therefore **stack**; Q3 onward branch off
+Nine blocks — the original eight, plus **Q9**, added 2026-08-10 when open question 7 was
+resolved. Q1 and Q2 both carry migrations and therefore **stack**; Q3 onward branch off
 whichever migration branch precedes them until the chain merges. Every generated
 `migration.sql` must have its regenerated `DROP INDEX` lines for `Resource_embedding_idx` and
 `RemediationJob_active_per_path` deleted by hand — read `.claude/rules/prisma-migrations.md`
@@ -431,6 +432,7 @@ production-only ones `untested` — which is correct, not a gap.
 | Q6b | B4 | no | ~290 |
 | Q7 | P4 + P5 + B6 | no | ~240 |
 | Q8 | P6 + B5 | no | ~260 |
+| Q9 | open question 7 | no | ~200 |
 
 ## Q1 — concept provenance, retry/bisect, and breaking the vocab loop (~250 LOC)
 
@@ -816,6 +818,58 @@ from every learner's retrieval.
 - [ ] Both drivers are idempotent and refuse to run against production without an explicit
       flag.
 
+## Q9 — the review queue as the provenance gate (~200 LOC)
+
+Resolves **open question 7**, in the direction the user settled 2026-08-10: the queue does
+**not** block approval on `durationSource: 'unknown'` — it makes the unknown visible and gives
+the reviewer the authority to resolve it. Added after Q2 shipped, not part of the original
+eight.
+
+**Base branch:** `Q8`'s branch
+
+**The reasoning.** `/review-pending-resources` is the final gate, and a reviewer working it has
+the rendered page open — the one context where the true duration and the true topic are free.
+`resource-update-schema.ts`'s own header already states this rationale for `durationMin`
+("the reviewer already has the page open, so it corrects the guess against observed reality").
+Once a resource passes the gate, its properties should be as close to verified as we can make
+them. Blocking on `unknown` would instead make every unmeasurable `/pi/` interactive a
+permanent queue resident.
+
+**What it does.**
+1. Surface provenance in the queue: `durationSource` and the row's topic-filing origin
+   (`ResourceTopic.origin` + `relevance`), so a reviewer can see which fields are unverified
+   rather than guessing which numbers to trust.
+2. A reviewer-supplied duration stamps a **reviewer-authoritative** `durationSource` — today a
+   hand-measured value would be written and still read `unknown`, which is the same
+   indistinguishability defect Q2 exists to remove. Decide whether that is `extracted` or a new
+   enum member; a new member is the honest answer if we want to tell a reviewer's measurement
+   apart from a scraper's.
+3. The same for topic. Note `topic` is **deliberately outside** `resourceUpdateSchema`'s
+   whitelist — the header explains why — so this is a filing-aware seam through
+   `setPrimaryTopic`, not a field added to the metadata-edit whitelist.
+
+**Out of scope.** Blocking approval on any provenance value. Re-deriving anything in bulk
+(Q6b). Changing what the queue approves.
+
+**Why after Q7, not after Q2.** Topic-filing origins change twice underneath this block —
+Q4 files decomposed children on their own content, Q7 makes a thin shelf abstain rather than
+contest. Building the reviewer's topic seam last means writing it against the final origin
+model instead of one that shifts under it.
+
+**Migration:** only if a new `DurationSource` member is chosen in (2).
+**New deps:** none
+
+**Acceptance criteria.**
+- [ ] The pending-review queue displays `durationSource` and the topic-filing origin for every
+      row a reviewer sees.
+- [ ] A reviewer-corrected duration is persisted with a source that is distinguishable from
+      both `unknown` and a scraper-derived value.
+- [ ] A reviewer can correct a row's topic, and the correction routes through `setPrimaryTopic`
+      rather than writing `Resource.topic` directly.
+- [ ] `assertMembershipInvariants` passes after a reviewer topic correction.
+- [ ] Approval is **not** blocked on `durationSource: 'unknown'` — a `/pi/` interactive with no
+      measurable signal can still be approved.
+
 ## Open questions for you
 
 1. **P7** — merge `statistics` into `probability-and-statistics`, or formalize parent/child
@@ -836,6 +890,7 @@ from every learner's retrieval.
 6. **Is pinning KA's `hash` in our source acceptable operationally?** It is a KA build
    artifact. The client degrades to `unknown` on rotation and the live test catches it, but
    someone has to re-capture. The alternative — no KA durations at all — is worse.
-7. **Should `/review-pending-resources` block approval on `durationSource: 'unknown'`?** The
-   queue is arguably exactly where unknowns should get resolved, but that makes every
-   unmeasurable interactive a permanent queue resident.
+7. ~~**Should `/review-pending-resources` block approval on `durationSource: 'unknown'`?**~~
+   **RESOLVED 2026-08-10: no — surface it and let the reviewer fix it.** The queue is the final
+   gate and the reviewer has the page open, so it is where an unknown gets resolved, not where
+   it gets stuck. Same for topic. Scheduled as **Q9**.

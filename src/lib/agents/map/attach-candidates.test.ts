@@ -30,7 +30,7 @@ type Cand = {
   role: ConceptResourceRole;
   coverageScore: number;
   trustScore?: number;
-  durationMin?: number;
+  durationMin?: number | null;
 };
 const teach = (resourceId: string, coverageScore: number, extra: Partial<Cand> = {}): Cand => ({
   resourceId,
@@ -197,6 +197,14 @@ describe('attachable duration ceiling (Block 0 — admission drop in selectAttac
   it('passes rows without a durationMin (like trust-less rows)', () => {
     const out = selectAttachable([teach('nodur', 0.8)]);
     expect(ids(out)).toEqual(['nodur']);
+  });
+  // Q2 made durationMin nullable in the DB, so an unmeasured row now arrives as an
+  // explicit null rather than an absent field. Both must behave identically.
+  it('passes a NULL durationMin through the ceiling gate and the durationFactor', () => {
+    expect(ids(selectAttachable([teach('nulldur', 0.8, { durationMin: null })]))).toEqual(['nulldur']);
+    expect(selectionScore({ coverageScore: 0.8, durationMin: null }, false)).toBe(
+      selectionScore({ coverageScore: 0.8 }, false),
+    );
   });
   it('capCandidates does NOT drop over-ceiling rows (re-cap never re-litigates admission)', () => {
     const out = capCandidates([teach('monster', 0.95, { durationMin: over })]);

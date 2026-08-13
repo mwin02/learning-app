@@ -36,7 +36,7 @@ export type JudgedCandidate = {
   // selectAttachable can apply the scope-aware duration penalty (an over-long resource
   // is over-broad for a single concept). Optional and order-only: paths that hydrate
   // from persisted ConceptResource rows omit it and get no duration penalty.
-  durationMin?: number;
+  durationMin?: number | null;
 };
 
 const VerdictSchema = z.object({

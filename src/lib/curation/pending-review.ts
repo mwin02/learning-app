@@ -41,7 +41,7 @@ export type PendingReviewChild = {
   url: string;
   status: ResourceStatus;
   decompositionStatus: DecompositionStatus;
-  durationMin: number;
+  durationMin: number | null;
   orderInParent: number | null;
 };
 

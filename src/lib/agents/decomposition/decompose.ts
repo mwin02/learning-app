@@ -13,7 +13,7 @@
 // until its router lands in 2.5b-2/-3. Children carry per-child concepts; their
 // derivation + canonicalization (decision A) lands with the first real router.
 
-import type { ConceptOrigin, DecompositionStatus } from '@prisma/client';
+import type { ConceptOrigin, DecompositionStatus, DurationSource } from '@prisma/client';
 import { classify } from './router';
 import { decomposePlaylist } from './youtube';
 import { decomposeDocToc } from './doctoc';
@@ -56,7 +56,10 @@ export type ChildInput = {
   title: string;
   type: string;
   difficulty: string;
-  durationMin: number;
+  // Q2: null when nobody measured or estimated it. Routers no longer substitute a
+  // placeholder — `durationSource` says which kind of number (or non-number) this is.
+  durationMin: number | null;
+  durationSource: DurationSource;
   summary: string;
   prerequisiteConcepts: string[];
   conceptsTaught: string[];

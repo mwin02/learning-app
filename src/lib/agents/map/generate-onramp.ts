@@ -111,6 +111,9 @@ export async function generateOnRampResource(args: {
         url,
         type: 'article',
         durationMin,
+        // Q2: measured off the content we authored — the one duration in the library
+        // that is arithmetic rather than a guess.
+        durationSource: 'extracted',
         summary: lesson.summary,
         content: lesson.content,
         difficulty: 'beginner',
@@ -240,7 +243,7 @@ const RESOURCE_SELECT = {
 
 type ResourceRow = {
   id: string; slug: string; topic: string; title: string; url: string; type: string; tier: string;
-  difficulty: string; durationMin: number; summary: string; prerequisiteConcepts: string[];
+  difficulty: string; durationMin: number | null; summary: string; prerequisiteConcepts: string[];
   conceptsTaught: string[]; requiresPurchase: boolean; trustScore: number; decompositionStatus: string;
 };
 

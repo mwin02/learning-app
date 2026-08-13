@@ -8,7 +8,10 @@ import {
   allocate,
   allotByWeight,
   depthTier,
+  effectiveDurationMin,
   DEPTH_TIER_THRESHOLDS,
+  TYPE_MEDIAN_DURATION_MIN,
+  DEFAULT_MEDIAN_DURATION_MIN,
   type AllocatorLesson,
   type AllocatorCandidate,
 } from '@/lib/agents/track/allocate';
@@ -262,5 +265,100 @@ describe('fill mechanics — ground truth for the Block 3 fill telemetry', () =>
     const lessons = [lesson('L0', [c('monster', 500)]), lesson('L1', [c('ok', 20)])];
     const r = allocate({ lessons, budgetMinutes: 100 });
     expect(r.totalMinutes).toBe(520); // fillRatio 5.2 — loud, not clamped
+  });
+});
+
+// ── Library-quality Q2: unknown durations ────────────────────────────────────
+// `durationMin` is nullable now. The settled rule is a per-type median substitute,
+// not exclusion: a resource must never fall out of a Track because a field is
+// missing, and no arithmetic here may see a NaN or a free 0.
+describe('null durationMin — type-median substitute', () => {
+  const unknown = (resourceId: string, type?: string): AllocatorCandidate => ({
+    resourceId,
+    durationMin: null,
+    type,
+  });
+
+  it('costs an unknown candidate its type median, not zero', () => {
+    const r = allocate({
+      lessons: [L('L0', { mandatory: [unknown('v', 'video')] })],
+      budgetMinutes: null,
+    });
+    expect(byKey(r, 'L0').estMinutes).toBe(TYPE_MEDIAN_DURATION_MIN.video);
+    expect(r.totalMinutes).toBe(TYPE_MEDIAN_DURATION_MIN.video);
+  });
+
+  it('falls back to the library-wide median when the type is absent or unrecognized', () => {
+    const r = allocate({
+      lessons: [L('L0', { mandatory: [unknown('a')] }), L('L1', { mandatory: [unknown('b', 'zine')] })],
+      budgetMinutes: null,
+    });
+    expect(byKey(r, 'L0').estMinutes).toBe(DEFAULT_MEDIAN_DURATION_MIN);
+    expect(byKey(r, 'L1').estMinutes).toBe(DEFAULT_MEDIAN_DURATION_MIN);
+  });
+
+  it('never produces NaN in estMinutes, totalMinutes or a slice', () => {
+    const r = allocate({
+      lessons: [
+        L('L0', { mandatory: [unknown('a', 'article'), unknown('b', 'video')] }),
+        L('L1', { isFrontier: true, mandatory: [unknown('c', 'course')] }),
+      ],
+      budgetMinutes: 300,
+    });
+    expect(Number.isNaN(r.totalMinutes)).toBe(false);
+    for (const l of r.kept) {
+      expect(Number.isNaN(l.estMinutes)).toBe(false);
+      expect(Number.isNaN(l.sliceMinutes ?? 0)).toBe(false);
+    }
+  });
+
+  it('keeps an unknown-duration lesson a budget can afford at the median', () => {
+    // A frontier lesson whose only candidate is unmeasured: it competes at its
+    // median (12), fits, and is kept — the "never silently dropped" guarantee.
+    const r = allocate({
+      lessons: [
+        L('spine', { mandatory: [c('s', 30)] }),
+        L('front', { isFrontier: true, masteryRelevant: true, mandatory: [unknown('f', 'video')] }),
+      ],
+      budgetMinutes: 60,
+    });
+    expect(r.kept.map((l) => l.key)).toEqual(['spine', 'front']);
+    expect(r.droppedMasteryRelevant).toBe(false);
+  });
+
+  it('still trims an unknown-duration frontier lesson a tiny budget cannot afford', () => {
+    // The substitute is a real cost, not a free pass: a 1-minute budget buys the
+    // spine's floor and nothing else.
+    const r = allocate({
+      lessons: [
+        L('spine', { mandatory: [c('s', 30)] }),
+        L('front', { isFrontier: true, mandatory: [unknown('f', 'course')] }),
+      ],
+      budgetMinutes: 30,
+    });
+    expect(r.kept.map((l) => l.key)).toEqual(['spine']);
+    expect(r.dropped.map((l) => l.key)).toEqual(['front']);
+  });
+
+  it('demotes a core tail of unknowns once their medians exhaust the slice', () => {
+    const r = allocate({
+      lessons: [L('L0', { mandatory: [c('a', 20), unknown('b', 'course'), unknown('c', 'course')] })],
+      budgetMinutes: 40,
+    });
+    const l = byKey(r, 'L0');
+    expect(ids(l.primaries)).toEqual(['a']);
+    expect(ids(l.alternates)).toEqual(['b', 'c']);
+    expect(r.depthConstrained).toBe(true);
+  });
+});
+
+describe('effectiveDurationMin', () => {
+  it('prefers a real duration over the median', () => {
+    expect(effectiveDurationMin({ durationMin: 7, type: 'course' })).toBe(7);
+  });
+  it('substitutes the type median for a null', () => {
+    expect(effectiveDurationMin({ durationMin: null, type: 'book' })).toBe(
+      TYPE_MEDIAN_DURATION_MIN.book,
+    );
   });
 });

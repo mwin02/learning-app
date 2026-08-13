@@ -11,16 +11,22 @@
 // and the caller persists via decomposeExisting(). url + title are required per
 // item; the rest is defaulted here:
 //   type        — inferred from the URL (YouTube → video, else article)
-//   durationMin — 20 (same default the doc-TOC router uses)
 //   difficulty  — inherited from the parent (children always inherit)
 //   order       — the supplied list order (the human/agent vouches for it)
 // There is no oversize gate: a hand-supplied list is vouched by construction.
+//
+// durationMin is NOT defaulted (library-quality Q2). It used to fall back to 20 —
+// described here as deliberate parity with doc-TOC — and since this is the route
+// every SPA container takes, that constant was the library's single largest source
+// of placeholder durations: no estimate was ever attempted for 879 Khan Academy
+// rows. The supplier is looking at the rendered page, which is the one context
+// where the real number is free, so a supplied duration is `extracted` and an
+// omitted one is null + `unknown`. Never invent one here.
 
 import { deriveChildConcepts, resolveConcepts } from './concepts';
 import type { ChildInput } from './decompose';
 import type { ManualChildInput } from '@/lib/api/decomposition-review-schema';
 
-const DEFAULT_DURATION_MIN = 20;
 const YOUTUBE_HOSTS = new Set(['youtube.com', 'm.youtube.com', 'youtu.be']);
 
 // YouTube links are videos; everything else defaults to article. Mirrors the
@@ -53,7 +59,8 @@ export async function decomposeManual(args: {
     title: it.title,
     type: it.type ?? inferType(it.url),
     difficulty,
-    durationMin: it.durationMin ?? DEFAULT_DURATION_MIN,
+    durationMin: it.durationMin ?? null,
+    durationSource: it.durationMin == null ? 'unknown' : 'extracted',
     summary: it.summary?.trim() || it.title,
     ...resolveConcepts({ derived: concepts.get(it.url), parentConcepts, topic }),
     orderInParent: idx,

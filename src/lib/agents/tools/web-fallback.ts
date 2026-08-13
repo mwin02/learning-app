@@ -54,6 +54,7 @@ import { listCanonicals } from '@/lib/agents/topic-registry';
 import { decideFiling, decideMintedFiling, knnNeighbourTopics, topicPools } from '@/lib/curation/topic-knn';
 import { createTopicMinter } from '@/lib/curation/topic-mint';
 import { relatedTopics } from '@/types/resource';
+import type { DurationSource } from '@prisma/client';
 
 const RAW_RESOURCE_TYPES = ['article', 'video', 'course', 'interactive', 'docs', 'book'] as const;
 const DIFFICULTIES = ['beginner', 'intermediate', 'advanced'] as const;
@@ -63,7 +64,13 @@ const DiscoveredResourceSchema = z.object({
   title: z.string().min(3),
   type: z.enum(RAW_RESOURCE_TYPES),
   difficulty: z.enum(DIFFICULTIES),
-  durationMin: z.number().int().min(1).max(6000),
+  // Q2: optional. The discovery model is allowed to say it does not know — which is
+  // the answer that actually moves the number, since a required field it can't
+  // measure comes back as a confident placeholder.
+  durationMin: z.number().int().min(1).max(6000).optional(),
+  // Whether `durationMin` was read off the page (a stated runtime/reading time) or
+  // estimated from the resource's shape. Maps to the `extracted`/`estimated` split.
+  durationStated: z.boolean().default(false),
   summary: z.string().min(10),
   rawPrerequisiteConcepts: z.array(z.string()).default([]),
   rawConceptsTaught: z.array(z.string()).min(1),
@@ -76,6 +83,9 @@ type DiscoveredResource = z.infer<typeof DiscoveredResourceSchema>;
 // produces rows that are already live + stat-gated (`preValidated`) and carry the
 // engagement metadata (`youtube`) that upsertResource folds into trustScore.
 type SourcedResource = DiscoveredResource & {
+  // Q2: set by a prong that MEASURED the duration rather than reading it off a page
+  // (the YouTube Data API). Absent ⇒ derived from durationMin/durationStated.
+  durationSource?: DurationSource;
   youtube?: { channelId: string; viewCount: number; likeCount: number | null };
   preValidated?: boolean;
   // Set by the validation pipeline's quarantine outcome: persist this row and let
@@ -101,8 +111,24 @@ function youtubeToSourced(r: YoutubeSourcedResource): SourcedResource {
     summary: r.summary,
     rawPrerequisiteConcepts: r.prerequisiteConcepts,
     rawConceptsTaught: r.conceptsTaught,
+    durationStated: true,
+    durationSource: 'api',
     youtube: r.youtube,
     preValidated: true,
+  };
+}
+
+// Q2: what kind of number the row's duration is. A prong that measured it says so;
+// otherwise the model's own claim about whether it read the number off the page
+// decides, and an omitted duration stays honestly unknown.
+function sourcedDuration(row: SourcedResource): {
+  durationMin: number | null;
+  durationSource: DurationSource;
+} {
+  if (row.durationMin == null) return { durationMin: null, durationSource: 'unknown' };
+  return {
+    durationMin: row.durationMin,
+    durationSource: row.durationSource ?? (row.durationStated ? 'extracted' : 'estimated'),
   };
 }
 
@@ -578,7 +604,7 @@ async function persistDiscovered(
         title: titleByUrl.get(row.url)!,
         type: row.type,
         difficulty: row.difficulty,
-        durationMin: row.durationMin,
+        ...sourcedDuration(row),
         summary: row.summary,
         prerequisiteConcepts: tags.prerequisiteConcepts,
         conceptsTaught: tags.conceptsTaught,
@@ -818,7 +844,9 @@ const DISCOVERY_RULES = `Rules:
 - AVOID marketing pages, course sales pages, and signup landing pages.
 - conceptsTaught and rawConceptsTaught are the agent's first-pass tags; concise, lowercase, hyphen-separated (e.g. "linear-regression", "list-comprehensions"). 3-8 per resource.
 - prerequisiteConcepts use the same vocabulary style; 0-5 per resource.
-- durationMin is your best estimate of time to consume end-to-end in minutes.`;
+- durationMin is the time to consume the resource end-to-end, in whole minutes. Read it off the page when it is stated — a video runtime, "15 min read", a stated course length, a lecture list with times — and set durationStated: true.
+- If no duration is stated and you cannot tell the size of the resource, OMIT durationMin. "Unknown" is a correct, expected answer; it is far better than a plausible-looking guess, which is indistinguishable from a measurement once stored.
+- Only estimate (durationMin present, durationStated false) when the resource's shape tells you its size. Typical ranges by type: article 5-20; docs section 5-30; video 5-60; interactive 10-45; course 120-1200; book 300-3000. A whole course or book is never 20 minutes.`;
 
 const DISCOVERY_OUTPUT = `Output: a single JSON array in a \`\`\`json fenced block. No prose before or after. Each element:
 {
@@ -826,7 +854,8 @@ const DISCOVERY_OUTPUT = `Output: a single JSON array in a \`\`\`json fenced blo
   "title": string,
   "type": "article" | "video" | "course" | "interactive" | "docs" | "book",
   "difficulty": "beginner" | "intermediate" | "advanced",
-  "durationMin": number,
+  "durationMin": number (omit entirely if unknown),
+  "durationStated": boolean (true only if the duration was stated on the page),
   "summary": string (1-2 sentences),
   "rawPrerequisiteConcepts": string[],
   "rawConceptsTaught": string[]

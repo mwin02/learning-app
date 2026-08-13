@@ -46,6 +46,7 @@ describeDb('upsertResource — pre-insert embedding (T2a)', () => {
         type: 'course',
         difficulty: 'beginner',
         durationMin: 600,
+        durationSource: 'estimated' as const,
         summary: 'container',
         prerequisiteConcepts: [],
         conceptsTaught: [],

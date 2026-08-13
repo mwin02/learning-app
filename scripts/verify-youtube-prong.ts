@@ -40,7 +40,7 @@ async function persistOne(row: Awaited<ReturnType<typeof searchYouTubeForConcept
     summary: row.summary,
     conceptsTaught: row.conceptsTaught,
   });
-  const { outcome } = await upsertResource(TOPIC, row, result);
+  const { outcome } = await upsertResource(TOPIC, { ...row, durationSource: 'api' }, result);
   const read = await prisma.resource.findUnique({
     where: { url: row.url },
     select: {

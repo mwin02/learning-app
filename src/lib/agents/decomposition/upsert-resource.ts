@@ -14,7 +14,7 @@
 // here.
 
 import { prisma } from '@/lib/db';
-import { log } from '@/lib/log';
+import { log, logWarn } from '@/lib/log';
 import { safeEmbedBatch, safeEmbedResource, storeEmbedding } from '@/lib/ai/embeddings';
 import { setPrimaryTopic, addCollisionMembership } from '@/lib/curation/resource-topics';
 import { MAX_MEMBERSHIPS, type FilingDecision } from '@/lib/curation/topic-knn';
@@ -23,7 +23,15 @@ import { computeTrustScore } from '@/lib/curation/trust-score';
 import { youtubeEngagementSignal } from '@/lib/curation/youtube-signal';
 import { normalizeResourceUrl } from './normalize-url';
 import { crediblePageTitle } from './page-title';
-import type { PrismaClient, ResourceType, Difficulty, DecompositionStatus, ResourceStatus } from '@prisma/client';
+import { checkDuration, containerDuration, type DurationClaim } from './duration-rules';
+import type {
+  PrismaClient,
+  ResourceType,
+  Difficulty,
+  DecompositionStatus,
+  DurationSource,
+  ResourceStatus,
+} from '@prisma/client';
 import type { DecompositionResult, ChildInput } from './decompose';
 
 export type UpsertResourceInput = {
@@ -31,7 +39,10 @@ export type UpsertResourceInput = {
   title: string;
   type: string;
   difficulty: string;
-  durationMin: number;
+  // Q2: null when the discovery model declined to estimate. `durationSource` states
+  // what kind of number it is; both are re-checked here before they are persisted.
+  durationMin: number | null;
+  durationSource: DurationSource;
   summary: string;
   prerequisiteConcepts: string[];
   conceptsTaught: string[];
@@ -165,6 +176,24 @@ export async function upsertResource(
   const embedTasks: EmbedTask[] = [];
   let parentId: string | null = null;
 
+  // Q2: a container that was actually exploded takes its duration from its children
+  // (a floor over the ones we know), since the discovery estimate was a guess about
+  // an index page. Everything else is the vetted discovery claim.
+  const childSum = containerDuration(decomposition.children);
+  const parentDuration =
+    decomposition.status === 'decomposed' && childSum.durationMin != null
+      ? childSum
+      : vettedDuration(
+          {
+            type: resource.type,
+            durationMin: resource.durationMin,
+            durationSource: resource.durationSource,
+            decompositionStatus: decomposition.status,
+            childCount: decomposition.children.length,
+          },
+          url,
+        );
+
   try {
     await prisma.$transaction(async (tx) => {
       const parentSlug = await uniqueSlug(tx, resource.title, url, taken);
@@ -175,7 +204,7 @@ export async function upsertResource(
           title: resource.title,
           url,
           type: resource.type as ResourceType,
-          durationMin: resource.durationMin,
+          ...parentDuration,
           summary: resource.summary,
           difficulty: resource.difficulty as Difficulty,
           prerequisiteConcepts: resource.prerequisiteConcepts,
@@ -516,6 +545,7 @@ async function createChild(
   }
 
   const decompStatus: DecompositionStatus = child.decompositionStatus ?? 'atomic';
+  const childSum = containerDuration(child.children ?? []);
   const slug = await uniqueSlug(tx, child.title, url, taken);
   const created = await tx.resource.create({
     data: {
@@ -524,7 +554,20 @@ async function createChild(
       title: child.title,
       url,
       type: child.type as ResourceType,
-      durationMin: child.durationMin,
+      // Same two rules as the parent: a nested container is its children's sum, a
+      // leaf is its own vetted claim.
+      ...(decompStatus === 'decomposed' && childSum.durationMin != null
+        ? childSum
+        : vettedDuration(
+            {
+              type: child.type,
+              durationMin: child.durationMin,
+              durationSource: child.durationSource,
+              decompositionStatus: decompStatus,
+              childCount: child.children?.length ?? 0,
+            },
+            url,
+          )),
       summary: child.summary,
       difficulty: child.difficulty as Difficulty,
       prerequisiteConcepts: child.prerequisiteConcepts,
@@ -577,6 +620,26 @@ async function createChild(
 }
 
 // ── topic filing (T2b) ───────────────────────────────────────────────────────
+
+// Q2: run a duration claim past the plausibility gate before it is persisted. A
+// rejected claim costs the NUMBER, never the resource — the row is written with a
+// null duration and `unknown` provenance, which is what the failed claim actually
+// meant. The warning is the operator's signal that a supplier is fabricating.
+function vettedDuration(
+  claim: DurationClaim & { durationSource: DurationSource },
+  url: string,
+): { durationMin: number | null; durationSource: DurationSource } {
+  const verdict = checkDuration(claim);
+  if (verdict.ok) return { durationMin: claim.durationMin, durationSource: claim.durationSource };
+  logWarn('upsert-resource.duration_rejected', {
+    url,
+    type: claim.type,
+    durationMin: claim.durationMin,
+    durationSource: claim.durationSource,
+    reason: verdict.reason,
+  });
+  return { durationMin: null, durationSource: 'unknown' };
+}
 
 // What a caller that gathered no evidence gets: the topic it asked for, filed as
 // `discovery` — which is exactly that origin's definition ("request topic; classifier

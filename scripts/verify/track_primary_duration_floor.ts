@@ -48,7 +48,7 @@ async function partB() {
         orderBy: { orderInLesson: 'asc' },
         select: { resource: { select: { id: true, durationMin: true, title: true } } },
       });
-      const ok = !!prim && prim.resource.id !== SHORT_ID && prim.resource.durationMin >= FLOOR;
+      const ok = !!prim && prim.resource.id !== SHORT_ID && (prim.resource.durationMin ?? 0) >= FLOOR;
       check(
         `B run ${i + 1}: primary is non-thin (${prim?.resource.durationMin}min "${prim?.resource.title}")`,
         ok,

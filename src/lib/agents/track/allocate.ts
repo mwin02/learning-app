@@ -84,7 +84,49 @@ export const TIME_WEIGHT: Record<TimeWeight, number> = { low: 1, normal: 2, high
 // `budget × (1 + slack)`. Tunable per call; the builder (2.5e-7b) passes the default.
 export const DEFAULT_BUDGET_SLACK = 0.1;
 
-export type AllocatorCandidate = { resourceId: string; durationMin: number };
+// Library-quality Q2: `durationMin` is null when nobody measured or estimated the
+// resource (`Resource.durationSource = 'unknown'`). The allocator must still cost it
+// — excluding unknowns would let a good resource fall out of a Track for a missing
+// field, and treating them as 0 would silently let a budget buy unlimited depth. So a
+// null is costed at its TYPE's median instead: wrong by a bounded amount, and wrong in
+// the direction that keeps the resource.
+export type AllocatorCandidate = {
+  resourceId: string;
+  durationMin: number | null;
+  // Resource.type, when the caller has it. Absent → the library-wide median.
+  type?: string | null;
+};
+
+// Medians over the dev library on 2026-08-10, excluding rows at exactly 20 (the
+// placeholder this block removes — including them would just re-import the 20).
+//   SELECT type, percentile_cont(0.5) WITHIN GROUP (ORDER BY "durationMin")
+//   FROM "Resource" WHERE status <> 'deprecated' AND "durationMin" <> 20 GROUP BY type;
+// Re-measure after Q6b's re-derivation: these are stand-ins for missing data, so
+// their only job is to be closer to the truth than 0 or a dropped resource.
+export const TYPE_MEDIAN_DURATION_MIN: Record<string, number> = {
+  article: 10,
+  book: 45,
+  course: 180,
+  docs: 53,
+  interactive: 30,
+  video: 12,
+};
+
+// The library-wide median, for a candidate whose type the caller didn't carry.
+export const DEFAULT_MEDIAN_DURATION_MIN = 14;
+
+// What a candidate COSTS a budget: its own duration, or its type's median when it has
+// none. Exported because the track builder's duration floor pass must agree with the
+// allocator on what an unknown-duration resource costs — reading it as 0 there would
+// demote every unknown row as "too thin".
+export function effectiveDurationMin(candidate: {
+  durationMin: number | null;
+  type?: string | null;
+}): number {
+  if (candidate.durationMin != null) return candidate.durationMin;
+  const key = candidate.type ?? '';
+  return TYPE_MEDIAN_DURATION_MIN[key] ?? DEFAULT_MEDIAN_DURATION_MIN;
+}
 
 export type AllocatorLesson = {
   // Stable key for closure wiring + joining back to the validated lesson (the
@@ -112,7 +154,8 @@ export type AllocatedLesson = {
   // optional pool that follows). The track cleanup pass keeps demoted-core but caps
   // the pool — this is the boundary between the two segments of `alternates`.
   demotedCoreCount: number;
-  // Sum of primary durations (what the lesson actually costs).
+  // Sum of primary durations (what the lesson actually costs), counting an
+  // unknown-duration primary at its type median (effectiveDurationMin).
   estMinutes: number;
   // The budget slice this lesson was allotted (null = no budget given).
   sliceMinutes: number | null;
@@ -162,7 +205,8 @@ export function allocate(args: {
     const hasMandatory = l.mandatory.length > 0;
     const core = hasMandatory ? l.mandatory : l.optional.slice(0, 1);
     const pool = hasMandatory ? l.optional : l.optional.slice(1);
-    return { l, core, pool, floor: core[0]?.durationMin ?? 0 };
+    const first = core[0];
+    return { l, core, pool, floor: first === undefined ? 0 : effectiveDurationMin(first) };
   });
   const byKey = new Map(norm.map((n) => [n.l.key, n]));
   const floorOf = (k: string) => byKey.get(k)?.floor ?? 0;
@@ -224,14 +268,15 @@ export function allocate(args: {
     let used = 0;
     let stopped = false; // once a core item is demoted, the rest of the core is too
     n.core.forEach((cand, j) => {
+      const cost = effectiveDurationMin(cand);
       if (j === 0) {
         primaries.push(cand); // ≥1 guarantee — taken even if it overflows the slice
-        used += cand.durationMin;
+        used += cost;
         return;
       }
-      if (!stopped && (slice === null || used + cand.durationMin <= slice * (1 + slackPct))) {
+      if (!stopped && (slice === null || used + cost <= slice * (1 + slackPct))) {
         primaries.push(cand);
-        used += cand.durationMin;
+        used += cost;
       } else {
         stopped = true;
         alternates.push(cand);

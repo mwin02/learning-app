@@ -27,6 +27,7 @@
 // output into this contract and persists the result.
 
 import { ConceptResourceRole } from '@prisma/client';
+import { effectiveDurationMin } from '@/lib/agents/track/allocate';
 import type { AllocatedLesson, AllocatorCandidate } from '@/lib/agents/track/allocate';
 
 export type CleanupLesson = Pick<
@@ -104,7 +105,7 @@ export function cleanupLessons(args: {
       key: l.key,
       primaries,
       alternates,
-      estMinutes: primaries.reduce((s, p) => s + p.durationMin, 0),
+      estMinutes: primaries.reduce((s, p) => s + effectiveDurationMin(p), 0),
     });
   }
 

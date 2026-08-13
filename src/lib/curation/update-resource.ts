@@ -39,7 +39,7 @@ export type UpdatedResource = {
   type: ResourceType;
   status: ResourceStatus;
   decompositionStatus: DecompositionStatus;
-  durationMin: number;
+  durationMin: number | null;
   difficulty: Difficulty;
   requiresPurchase: boolean;
 };
@@ -60,7 +60,8 @@ export type ResourceUpdateResult =
 // their duration legitimately sums their children.
 function ceilingWarning(row: UpdatedResource): string | undefined {
   if (row.decompositionStatus !== 'atomic') return undefined;
-  if (row.durationMin <= MAX_ATTACHABLE_DURATION_MIN) return undefined;
+  // Q2: an unknown duration can't be over the ceiling. selectAttachable passes it too.
+  if (row.durationMin == null || row.durationMin <= MAX_ATTACHABLE_DURATION_MIN) return undefined;
   return `durationMin ${row.durationMin} is now over the attachable ceiling (${MAX_ATTACHABLE_DURATION_MIN}) on an atomic row — decompose or reject; do not approve.`;
 }
 

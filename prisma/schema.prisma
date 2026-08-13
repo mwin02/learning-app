@@ -18,7 +18,11 @@ model Resource {
   url                  String         @unique
   type                 ResourceType
   tier                 ResourceTier   @default(core)
-  durationMin          Int
+  // Library-quality Q2: nullable because "we did not measure this" is a real
+  // answer and used to be encoded as a number that looked measured (59% of the
+  // library was exactly 20). `durationSource` says which kind of number this is.
+  durationMin          Int?
+  durationSource       DurationSource @default(unknown)
   summary              String
   // Phase 2g: the resource body, in markdown. Null for the overwhelming majority of
   // rows (link-out resources — videos, docs, courseware: the content lives at `url`).
@@ -318,6 +322,18 @@ enum ConceptOrigin {
   derived // the concept deriver returned tags for this resource
   inherited // derivation failed or was never attempted; the parent's array was copied
   fallback // no derivation and no parent concepts either; the array is just [topic]
+}
+
+// Provenance of Resource.durationMin (library-quality Q2). `unknown` is the
+// default for the same reason `inherited` is ConceptOrigin's: rows written before
+// this column carry a number no migration can truthfully attribute, and Q6b
+// re-derives them. So `unknown` means "no provenance recorded", which is the only
+// honest reading of a legacy number as well as of a null.
+enum DurationSource {
+  api // read off a provider API (YouTube contentDetails)
+  extracted // stated by the artifact itself — link text, a TOC, or our own content
+  estimated // a model's guess, calibrated by type but not measured
+  unknown // nobody measured or estimated it; durationMin is null on new writes
 }
 
 enum Origin {

@@ -64,7 +64,7 @@ export default async function ResourceDetailPage({
           <dt className="font-medium">difficulty</dt>
           <dd>{resource.difficulty}</dd>
           <dt className="font-medium">durationMin</dt>
-          <dd>{resource.durationMin}</dd>
+          <dd>{resource.durationMin ?? 'unknown'}</dd>
           <dt className="font-medium">trustScore</dt>
           <dd>{resource.trustScore.toFixed(2)}</dd>
           <dt className="font-medium">origin</dt>
