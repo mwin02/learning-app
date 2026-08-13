@@ -30,6 +30,7 @@ const row = (over: Partial<UpdatedResource> = {}): UpdatedResource => ({
   status: 'pending_review',
   decompositionStatus: 'atomic',
   durationMin: 45,
+  durationSource: 'reviewer',
   difficulty: 'beginner',
   requiresPurchase: false,
   ...over,
@@ -48,11 +49,16 @@ describe('updateResource', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
-  it('applies a durationMin correction with no embedding or ceiling flags', async () => {
+  // Q9: the stamp travels with the number. Before it, a hand-measured duration was
+  // written and still read `unknown` — indistinguishable from one nobody checked.
+  it('applies a durationMin correction, stamping reviewer provenance', async () => {
     update.mockResolvedValue(row({ durationMin: 90 }) as never);
     const result = await updateResource('res_1', { durationMin: 90 });
     expect(update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'res_1' }, data: { durationMin: 90 } }),
+      expect.objectContaining({
+        where: { id: 'res_1' },
+        data: { durationMin: 90, durationSource: 'reviewer' },
+      }),
     );
     expect(result).toMatchObject({
       kind: 'updated',
@@ -60,6 +66,16 @@ describe('updateResource', () => {
       embeddingStale: false,
     });
     expect(result).not.toHaveProperty('warning');
+  });
+
+  // The stamp is derived from the edit, not copied from the caller: an edit that
+  // does not touch the duration must not relabel whatever provenance is stored.
+  it('leaves durationSource alone when the edit does not touch durationMin', async () => {
+    update.mockResolvedValue(row({ title: 'Better Title' }) as never);
+    await updateResource('res_1', { title: 'Better Title' });
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'res_1' }, data: { title: 'Better Title' } }),
+    );
   });
 
   it('flags embeddingStale when title changes', async () => {

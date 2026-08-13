@@ -1030,6 +1030,29 @@ Q9 fixes that write path going forward; it does nothing for the 794 already ther
    (a YouTube-sourced video, a reviewer edit identifiable in the audit record), stamp it. Where
    it cannot, **leave it `unknown` and report the count** — the same rule as everywhere else in
    this plan. This pass must not invent provenance to make a number look better than it is.
+
+   ⚠️ **Measured 2026-08-12, and it guts this pass: there is no attribution trail.** The
+   population is now **786** active rows (Q8's deprecations moved a few out of `active`), and
+   the `ResourceReport.resolution` trail — proposed during Q9 as "the one recoverable subset",
+   since report triage writes a string like `edited durationMin…` against a `resourceId` —
+   reaches **zero of them**:
+
+   ```sql
+   -- active, has a number, stamped unknown ............ 786
+   -- ... of those, reachable via a ResourceReport row ... 0
+   ```
+
+   Every historical reviewer edit went through the bare PATCH route, which records nothing.
+   `Resource` has no per-field audit trail, so **these rows are unattributable by
+   construction**, not merely inconvenient to attribute. Q10 should therefore plan for the
+   honest outcome — the great majority of the 786 stay `unknown` and get **counted**, not
+   guessed — and scope this sub-pass to the one population that genuinely can be attributed:
+   rows whose number provably came from a source Q6b can re-derive (a YouTube-matched video,
+   a Lamar/OCW word count). **Do not** infer "a human probably measured this" from a value's
+   shape; that manufactures exactly the false provenance Q9's `reviewer` member exists to
+   prevent. Q9 fixes the write path going forward — `durationSource = 'reviewer'` is exact for
+   every future correction — so this population is closed-ended and shrinks only by reviewers
+   revisiting rows.
 3. **The residual OCW/Lamar rows** (8 books, 3 articles) via the estimators Q6b already built.
 4. **The 7 case-variant URL duplicate pairs** — added 2026-08-12 from Q8's verification.
 

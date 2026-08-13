@@ -1,7 +1,15 @@
 import Link from 'next/link';
+import type { DurationSource } from '@prisma/client';
 import { requireAdminPage } from '@/lib/auth/viewer';
-import { listPendingReview, type PendingReviewRoot } from '@/lib/curation/pending-review';
+import {
+  listPendingReview,
+  type PendingReviewRoot,
+  type PendingReviewChild,
+  type FilingProvenance,
+} from '@/lib/curation/pending-review';
+import { durationLabel, filingLabel } from '@/lib/curation/pending-review-view';
 import { ReviewActions } from './review-actions';
+import { RowCorrections } from './row-corrections';
 import { CONTAINER_BUTTONS, ROW_BUTTONS, DECOMPOSE_BUTTON } from './buttons';
 
 export const dynamic = 'force-dynamic';
@@ -12,6 +20,55 @@ export const dynamic = 'force-dynamic';
 // that gate; rejecting deprecates the row and pulls it from any path it leaked
 // into. This is a DIFFERENT axis from Decomposition review (which curates a resource's
 // container/atomic shape) — a row can be queued on both.
+
+// Q9: the provenance strip. A reviewer approving a row is signing off on its
+// properties, so which of them nobody verified has to be visible rather than
+// inferred from the number. `unverified` is a nudge, never a gate — it changes
+// the colour and nothing else, and a row can be approved reading `unknown`.
+function Provenance({
+  durationMin,
+  durationSource,
+  filing,
+}: {
+  durationMin: number | null;
+  durationSource: DurationSource;
+  filing: FilingProvenance | null;
+}) {
+  const labels = [durationLabel(durationMin, durationSource), filingLabel(filing)];
+  return (
+    <div className="mt-1 flex flex-wrap gap-1">
+      {labels.map((l) => (
+        <span
+          key={l.text}
+          className={`rounded px-1 text-xs ${
+            l.unverified ? 'bg-amber-50 text-amber-800' : 'bg-gray-100 text-gray-600'
+          }`}
+        >
+          {l.text}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// The correction pair travels with the provenance it corrects, on roots and
+// children alike — a child is exactly where a wrong 20-minute placeholder lives.
+function RowProvenance({ row }: { row: PendingReviewRoot | PendingReviewChild }) {
+  return (
+    <>
+      <Provenance
+        durationMin={row.durationMin}
+        durationSource={row.durationSource}
+        filing={row.filing}
+      />
+      <RowCorrections
+        resourceId={row.id}
+        currentTopic={row.filing?.topic ?? null}
+        currentDurationMin={row.durationMin}
+      />
+    </>
+  );
+}
 
 function ResourceMeta({ root }: { root: PendingReviewRoot }) {
   return (
@@ -30,6 +87,10 @@ function ResourceMeta({ root }: { root: PendingReviewRoot }) {
           {root.url}
         </a>
       </div>
+      {/* `root.topic` above is the denormalized mirror; the filing chip below is
+          the membership it mirrors. Showing both means mirror drift reads as two
+          disagreeing topics instead of hiding behind one of them. */}
+      <RowProvenance row={root} />
     </>
   );
 }
@@ -62,6 +123,7 @@ function ChildList({ items }: { items: PendingReviewRoot['children'] }) {
               {c.url}
             </a>
           </div>
+          <RowProvenance row={c} />
           {/* Per-child approve/reject (cascade=false). A child shown as
               `approved` (active) keeps a Reject button so a later-found-broken
               child can be pulled from existing paths. An atomic child also gets
@@ -157,6 +219,18 @@ export default async function PendingReviewPage() {
           buttons to act on a single lesson. <strong>Send to decompose</strong> re-routes a
           misclassified atomic row (really a container — a course TOC, a whole book) to the
           decomposition queue instead of deciding it here.
+        </p>
+        <p className="mt-2 max-w-2xl text-sm text-gray-600">
+          Each row carries two <strong>provenance</strong> chips: its duration with the source
+          that produced it, and its primary topic membership with the origin that filed it. An{' '}
+          <span className="rounded bg-amber-50 px-1 text-amber-800">amber</span> chip means nobody
+          verified that value — an <code>estimated</code> or <code>unknown</code> duration, an{' '}
+          <code>inherited</code> or <code>discovery</code> filing, a contested membership. You have
+          the page open, which is the one place the true numbers are free:{' '}
+          <strong>Correct duration / topic</strong> records a duration as{' '}
+          <code>reviewer</code>-measured and refiles the topic through the membership seam.{' '}
+          <strong>None of this blocks approval</strong> — an interactive with no measurable
+          duration is meant to be approved reading <code>unknown</code>.
         </p>
       </section>
 

@@ -18,7 +18,14 @@
 // Track immutability note in schema.prisma.
 
 import { PathStatus, BankStaleReason } from '@prisma/client';
-import type { Prisma, ResourceStatus, DecompositionStatus, DeprecationSeverity } from '@prisma/client';
+import type {
+  Prisma,
+  ResourceStatus,
+  DecompositionStatus,
+  DeprecationSeverity,
+  DurationSource,
+  TopicFilingOrigin,
+} from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { recomputeReadiness } from '@/lib/agents/map/recompute-readiness';
 import { DB_WRITE_TX_TIMEOUT_MS } from '@/lib/config';
@@ -34,6 +41,19 @@ const UNRESOLVED: DecompositionStatus[] = ['pending', 'human_review'];
 // found broken (dead link) and drop it from existing paths.
 const CHILD_STATUSES: ResourceStatus[] = ['pending_review', 'active'];
 
+// Q9: what the reviewer needs to see to know which fields are unverified. The
+// duration's provenance travels with the number, and the primary membership's
+// origin/relevance says how the row got filed where it is (`inherited` is a
+// backfill placeholder, `classifier` a measurement, `review` a human's decision).
+// null when the row has no primary membership at all — a filing hole, not a
+// provenance value, and worth showing as such.
+export type FilingProvenance = {
+  topic: string;
+  origin: TopicFilingOrigin;
+  relevance: number;
+  contested: boolean;
+};
+
 export type PendingReviewChild = {
   id: string;
   title: string;
@@ -42,6 +62,8 @@ export type PendingReviewChild = {
   status: ResourceStatus;
   decompositionStatus: DecompositionStatus;
   durationMin: number | null;
+  durationSource: DurationSource;
+  filing: FilingProvenance | null;
   orderInParent: number | null;
 };
 
@@ -54,6 +76,9 @@ export type PendingReviewRoot = {
   origin: string;
   status: ResourceStatus;
   decompositionStatus: DecompositionStatus;
+  durationMin: number | null;
+  durationSource: DurationSource;
+  filing: FilingProvenance | null;
   updatedAt: Date;
   // True when decompositionStatus is unresolved (pending/human_review): shown
   // but not approvable — resolve on the decomposition axis first.
@@ -62,6 +87,19 @@ export type PendingReviewRoot = {
   // time, not by rendering every level here.
   children: PendingReviewChild[];
 };
+
+// Exactly one row by the T1 invariant (setPrimaryTopic keeps it so), but read as a
+// list because nothing at the DB level enforces it — a violation shows up as a
+// missing/odd provenance line here rather than as a crash in the queue.
+const PRIMARY_MEMBERSHIP = {
+  where: { isPrimary: true },
+  select: { topic: true, origin: true, relevance: true, contested: true },
+  take: 1,
+} as const;
+
+function primaryOf(topics: FilingProvenance[]): FilingProvenance | null {
+  return topics[0] ?? null;
+}
 
 // Top-level (parentResourceId === null) resources currently awaiting approval,
 // each with its direct children. Ordered oldest-first (createdAt asc) so the
@@ -81,7 +119,10 @@ export async function listPendingReview(limit?: number): Promise<PendingReviewRo
       origin: true,
       status: true,
       decompositionStatus: true,
+      durationMin: true,
+      durationSource: true,
       updatedAt: true,
+      topics: PRIMARY_MEMBERSHIP,
       children: {
         where: { status: { in: CHILD_STATUSES } },
         select: {
@@ -92,6 +133,8 @@ export async function listPendingReview(limit?: number): Promise<PendingReviewRo
           status: true,
           decompositionStatus: true,
           durationMin: true,
+          durationSource: true,
+          topics: PRIMARY_MEMBERSHIP,
           orderInParent: true,
         },
         orderBy: { orderInParent: 'asc' },
@@ -100,8 +143,13 @@ export async function listPendingReview(limit?: number): Promise<PendingReviewRo
     orderBy: { createdAt: 'asc' },
   });
 
-  return rows.map((r) => ({
+  return rows.map(({ topics, children, ...r }) => ({
     ...r,
+    filing: primaryOf(topics),
+    children: children.map(({ topics: childTopics, ...c }) => ({
+      ...c,
+      filing: primaryOf(childTopics),
+    })),
     blocked: UNRESOLVED.includes(r.decompositionStatus),
   }));
 }

@@ -16,8 +16,18 @@
 // embedding — the staleness test below is an allowlist of the two fields
 // buildEmbeddingText (ai/embeddings.ts) actually reads, so a new non-embedded
 // field needs no change there.
+//
+// Q9 — provenance: a durationMin correction arriving here is a HUMAN measurement
+// (both callers are reviewer surfaces: the PATCH route behind the review queue /
+// review skill, and report triage's `edit` action), so it stamps
+// `durationSource: 'reviewer'` alongside the number. Before Q9 the whitelist
+// carried `durationMin` but not `durationSource`, so every hand-measured value
+// landed still reading `unknown` — indistinguishable from a number nobody
+// checked, which is the exact defect Q2 exists to remove. `durationSource` is
+// deliberately NOT a caller-supplied field: the caller cannot assert a
+// provenance other than "I measured it", so it is derived, not passed.
 
-import type { Difficulty, ResourceStatus, DecompositionStatus, ResourceType } from '@prisma/client';
+import type { Difficulty, ResourceStatus, DecompositionStatus, ResourceType, DurationSource } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { MAX_ATTACHABLE_DURATION_MIN } from '@/lib/config';
 
@@ -40,6 +50,7 @@ export type UpdatedResource = {
   status: ResourceStatus;
   decompositionStatus: DecompositionStatus;
   durationMin: number | null;
+  durationSource: DurationSource;
   difficulty: Difficulty;
   requiresPurchase: boolean;
 };
@@ -77,7 +88,10 @@ export async function updateResource(
 
   const resource = await prisma.resource.update({
     where: { id: resourceId },
-    data: fields,
+    data:
+      fields.durationMin !== undefined
+        ? { ...fields, durationSource: 'reviewer' as const }
+        : fields,
     select: {
       id: true,
       title: true,
@@ -86,6 +100,7 @@ export async function updateResource(
       status: true,
       decompositionStatus: true,
       durationMin: true,
+      durationSource: true,
       difficulty: true,
       requiresPurchase: true,
     },
