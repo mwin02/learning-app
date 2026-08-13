@@ -158,6 +158,168 @@ export function decideRefile(record: RefileRecord, target: string): RefileDecisi
   };
 }
 
+// ── named cohorts (B3) ───────────────────────────────────────────────────────
+//
+// The whole-course parents B3 identified BY HAND. They are not the output of a query and
+// never will be: "this Lamar chapter is really precalculus" is a judgment about a
+// curriculum, and the classifier's inability to make it is the defect being repaired.
+//
+// What IS mechanical, and what lives here, is the SELECTOR — a declarative predicate over
+// the URL and title, so every cohort is re-runnable, auditable against the live library,
+// and reports its matched count against the count B3 measured (2026-07-29). A hardcoded
+// list of resource ids would have neither property, and the library has changed since.
+//
+// Parents first, per B3: a container's children inherit its shelf, so moving the container
+// makes its subtree correct for free. The selectors are URL-shaped rather than
+// subtree-shaped for exactly that reason — a URL prefix catches the root AND the subtree
+// in one rule, and survives a re-decomposition that would renumber parent ids.
+export type CohortSelector = {
+  // Case-insensitive. Every field present must match (AND); within a list, any (OR).
+  urlPrefix?: string;
+  urlContainsAny?: string[];
+  titleContainsAny?: string[];
+};
+
+export type CohortSpec = {
+  key: string;
+  // Only rows currently on one of these shelves are claimed. A cohort that has already
+  // been partly refiled (five of the eight had been, by 2026-08-11) then narrows to the
+  // remainder instead of re-moving rows that are already right.
+  from: string[];
+  target: string;
+  // What B3 measured on 2026-07-29, or null where it gave a description instead of a
+  // count. Reported beside the live match so drift is visible rather than assumed away.
+  stated: number | null;
+  why: string;
+  select: CohortSelector;
+};
+
+export const B3_COHORTS: readonly CohortSpec[] = [
+  {
+    key: 'lamar-differential-equations',
+    from: ['calculus'],
+    target: 'differential-equations',
+    stated: 29,
+    why: "Paul's Online Notes DE course — a whole course filed under calculus",
+    select: { urlPrefix: 'https://tutorial.math.lamar.edu/classes/de/' },
+  },
+  {
+    key: 'lamar-calculus-iii',
+    from: ['calculus'],
+    target: 'multivariable-calculus',
+    stated: 31,
+    why: 'Calculus III is multivariable by definition; both its roots live under /CalcIII/',
+    select: { urlPrefix: 'https://tutorial.math.lamar.edu/classes/calciii/' },
+  },
+  {
+    key: 'lamar-calculus-i-review',
+    from: ['calculus'],
+    // Lamar's CalcI opens with a Review chapter of prerequisite algebra/trig. Named page
+    // by page rather than by `orderInParent < 10`: the ordinal is an artefact of one
+    // decomposition run, the chapter's page set is the site's own published structure.
+    target: 'precalculus',
+    stated: 10,
+    why: "the Review chapter of Paul's CalcI — prerequisite material, not calculus",
+    select: {
+      urlPrefix: 'https://tutorial.math.lamar.edu/classes/calci/',
+      urlContainsAny: [
+        '/functions.aspx',
+        '/inversefunctions.aspx',
+        '/trigfcns.aspx',
+        '/trigequations.aspx',
+        '/trigequations_calci.aspx',
+        '/trigequations_calcii.aspx',
+        '/expfunctions.aspx',
+        '/logfcns.aspx',
+        '/explogeqns.aspx',
+        '/commongraphs.aspx',
+      ],
+    },
+  },
+  {
+    key: 'mit-18-781-number-theory',
+    from: ['discrete-mathematics'],
+    target: 'number-theory',
+    stated: 9,
+    why: 'MIT 18.781 Theory of Numbers — the OCW course number is the selector',
+    select: { urlContainsAny: ['18-781'] },
+  },
+  {
+    key: 'mit-18-409-spectral-graph-theory',
+    from: ['discrete-mathematics'],
+    target: 'graph-theory',
+    stated: 8,
+    why: "MIT 18.409 An Algorithmist's Toolkit — spectral graph theory",
+    select: { urlContainsAny: ['18-409'] },
+  },
+  {
+    key: 'khan-cryptography',
+    from: ['discrete-mathematics'],
+    target: 'cryptography',
+    stated: 12,
+    // Deliberately NOT the whole /cryptography/ subtree: its `modarithmetic` and
+    // `comp-number-theory` units really are discrete mathematics, and B3 named only the
+    // ciphers journey and the RSA/Diffie-Hellman unit.
+    why: 'Khan "Journey into Cryptography" (ciphers) + RSA/Diffie-Hellman (modern-crypt)',
+    select: {
+      urlPrefix: 'https://www.khanacademy.org/computing/computer-science/cryptography/',
+      urlContainsAny: ['/ciphers/', '/modern-crypt/'],
+    },
+  },
+  {
+    key: 'khan-matrices-as-data',
+    from: ['linear-algebra'],
+    target: 'precalculus',
+    stated: 4,
+    why: 'Khan precalculus units that use matrices as data tables, not as linear algebra',
+    select: {
+      urlContainsAny: [
+        ':model-situations-with-matrices/',
+        ':using-matrices-to-manipulate-data/',
+      ],
+    },
+  },
+  {
+    key: 'pca-and-linear-regression',
+    from: ['linear-algebra'],
+    target: 'machine-learning',
+    stated: null,
+    why: 'PCA / linear-regression rows filed under linear-algebra by their method, not their subject',
+    select: {
+      titleContainsAny: ['principal component', 'pca', 'linear regression'],
+    },
+  },
+];
+
+// Why a cohort is or is not safe to move, given the shelf it is moving to.
+export type CohortRoute =
+  // The target shelf already clears MIN_VOUCHABLE_POOL, so k-NN can vouch for these rows
+  // the moment they land. No quorum question arises.
+  | 'vouched'
+  // The target shelf is BELOW the bar and the cohort is what lifts it over — the deadlock
+  // refile-quorum-topics.ts exists to break. Only sound as one whole-cohort move.
+  | 'quorum'
+  // Even with the cohort the shelf stays under the bar. Moving would strand the rows
+  // somewhere the guardrail permanently distrusts, so the cohort is reported, not moved.
+  | 'below-quorum';
+
+// PURE. Which of the three a cohort is.
+//
+// Note the bar is applied to the shelf AFTER the move, not to the cohort alone: B3's thin
+// targets (`differential-equations` 9, `graph-theory` 9, `number-theory` 14) already hold
+// rows, and a cohort of 5 landing on a shelf of 9 clears the bar just as honestly as a
+// cohort of 14 landing on an empty one. Sizing the cohort alone against QUORUM would
+// refuse exactly those merges — the deadlock again, one level up.
+export function routeCohort(
+  cohortSize: number,
+  targetPool: number,
+  quorum = QUORUM,
+): { route: CohortRoute; poolAfter: number } {
+  const poolAfter = targetPool + cohortSize;
+  if (targetPool >= quorum) return { route: 'vouched', poolAfter };
+  return { route: poolAfter >= quorum ? 'quorum' : 'below-quorum', poolAfter };
+}
+
 export type Settlement = {
   relevance: number;
   contested: boolean;

@@ -25,18 +25,28 @@
 // sit at a measured-looking `relevance: 0.0`, which is exactly what a future origin-aware
 // `minRelevance` gates hardest.
 //
+// TWO SOURCES OF COHORTS. The audit record above is one; the other is `--cohorts`, which
+// reads the hand-identified whole-course parents in `B3_COHORTS` (see that registry's
+// header). They differ only in where the cohort comes from — a T4a verdict or a human's —
+// and share every line below the resolution step, including the drift guard and the
+// settle phase.
+//
 // Run:
 //   npx tsx --env-file=.env.local scripts/refile-quorum-topics.ts --from=docs/audits/reclassify-t4a.json
 //   ... --apply
 //   ... --apply --only=precalculus            # one cohort at a time
 //   ... --apply --out=docs/audits/refile-t4b.json
+//   npx tsx --env-file=.env.local scripts/refile-quorum-topics.ts --cohorts            # B3's eight
+//   ... --cohorts --apply --only=lamar-calculus-iii
 //
 // ⚠️ Stop the compose workers first (`docker compose --profile workers stop worker`) —
 // this moves primaries under topics a live sourcing run may be filing into, and a worker
 // that files a row mid-pass would trip the drift guard at best.
 
 import { readFile, writeFile } from 'node:fs/promises';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../src/lib/db';
+import { requireTargetAck } from './target-guard';
 import { listCanonicals } from '../src/lib/agents/topic-registry';
 import { createTopicMinter } from '../src/lib/curation/topic-mint';
 import { knnNeighbourTopicsOf, purity, plurality, topicPools } from '../src/lib/curation/topic-knn';
@@ -49,10 +59,13 @@ import {
   selectQuorumSlate,
   decideRefile,
   decideSettlement,
+  routeCohort,
+  B3_COHORTS,
   QUORUM,
   type RefileRecord,
   type QuorumCandidate,
   type RefileSkip,
+  type CohortSelector,
 } from '../src/lib/curation/quorum-refile';
 
 // Phase-2 reads in flight. One indexed pgvector lookup each, so this is latency- not
@@ -79,35 +92,114 @@ async function mapPool<T, R>(items: T[], fn: (item: T) => Promise<R>): Promise<R
   return out;
 }
 
-async function main() {
-  const apply = process.argv.includes('--apply');
-  const from = arg('from') ?? 'docs/audits/reclassify-t4a.json';
-  const only = arg('only')?.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
+function table(title: string, cohorts: QuorumCandidate[]): void {
+  if (cohorts.length === 0) return;
+  console.log(`${title}:`);
+  for (const c of cohorts) {
+    console.log(`  ${String(c.rows.length).padStart(4)}  ${c.channel.padEnd(5)} ${c.label}`);
+  }
+  console.log('');
+}
 
+type Slate = { selected: QuorumCandidate[]; below: QuorumCandidate[] };
+
+async function slateFromAudit(from: string, only: string[] | undefined): Promise<Slate> {
   const parsed = JSON.parse(await readFile(from, 'utf8')) as { runAt: string; rows: RefileRecord[] };
-  console.log(`mode: ${apply ? 'APPLY' : 'dry-run'}`);
   console.log(`record: ${from} (${parsed.rows.length} decisions from ${parsed.runAt})`);
-  console.log(`quorum: ${QUORUM} (= MIN_VOUCHABLE_POOL)\n`);
-
   const slate = selectQuorumSlate(parsed.rows);
-
-  const table = (title: string, cohorts: QuorumCandidate[]) => {
-    if (cohorts.length === 0) return;
-    console.log(`${title}:`);
-    for (const c of cohorts) {
-      console.log(`  ${String(c.rows.length).padStart(4)}  ${c.channel.padEnd(5)} ${c.label}`);
-    }
-    console.log('');
-  };
   table('clears quorum', slate.clears);
   // Never acted on — these rows keep the primary T4a left them with. Printed so the tally
   // is auditable and so a label creeping up on the bar is visible run over run.
   table('below quorum (untouched)', slate.below);
-
-  const selected = only
-    ? slate.clears.filter((c) => only.includes(c.label))
-    : slate.clears;
+  const selected = only ? slate.clears.filter((c) => only.includes(c.label)) : slate.clears;
   if (only) console.log(`--only: ${selected.length} of ${slate.clears.length} cohorts selected\n`);
+  return { selected, below: slate.below };
+}
+
+// The selector, as SQL. AND across the fields present, OR within each list, all
+// case-insensitively — matching `CohortSelector`'s documented semantics.
+function cohortWhere(select: CohortSelector): Prisma.Sql {
+  const anyOf = (column: Prisma.Sql, needles: string[]) =>
+    Prisma.sql`(${Prisma.join(
+      needles.map((n) => Prisma.sql`${column} LIKE ${`%${n.toLowerCase()}%`}`),
+      ' OR ',
+    )})`;
+  const clauses: Prisma.Sql[] = [];
+  if (select.urlPrefix) {
+    clauses.push(Prisma.sql`lower(r.url) LIKE ${`${select.urlPrefix.toLowerCase()}%`}`);
+  }
+  if (select.urlContainsAny?.length) clauses.push(anyOf(Prisma.sql`lower(r.url)`, select.urlContainsAny));
+  if (select.titleContainsAny?.length) {
+    clauses.push(anyOf(Prisma.sql`lower(r.title)`, select.titleContainsAny));
+  }
+  // An empty selector would match the whole library. A spec that reaches here with no
+  // clause is a coding error, not an operator one, so fail loudly rather than move 2,018 rows.
+  if (clauses.length === 0) throw new Error('cohort selector matched no columns');
+  return Prisma.join(clauses, ' AND ');
+}
+
+// B3's hand-identified cohorts, resolved against the live library.
+//
+// Three things are reported per cohort and none of them is silent: how many rows the
+// selector matched versus what B3 measured on 2026-07-29, how many are already on the
+// target shelf (five of the eight had been partly refiled since), and which of the three
+// quorum routes the remainder takes.
+async function slateFromCohorts(only: string[] | undefined, canonicals: Set<string>): Promise<Slate> {
+  const pools = await topicPools();
+  const specs = only ? B3_COHORTS.filter((c) => only.includes(c.key)) : B3_COHORTS;
+  console.log(`cohorts: ${specs.length} of ${B3_COHORTS.length} (B3's hand-identified parents)\n`);
+  console.log('  key                                match  B3   on-target  route         pool→');
+
+  const selected: QuorumCandidate[] = [];
+  const below: QuorumCandidate[] = [];
+  for (const spec of specs) {
+    const rows = await prisma.$queryRaw<(RefileRecord & { relevance: number })[]>(Prisma.sql`
+      SELECT r.id, r.title, r.topic AS "currentTopic", rt.relevance,
+             NULL::text AS unvouchable, NULL::text AS "newTopic"
+      FROM "Resource" r
+      JOIN "ResourceTopic" rt ON rt."resourceId" = r.id AND rt."isPrimary"
+      WHERE r.topic IN (${Prisma.join([...spec.from, spec.target])})
+        AND ${cohortWhere(spec.select)}
+      ORDER BY r.url
+    `);
+    const toMove = rows.filter((r) => r.currentTopic !== spec.target);
+    const onTarget = rows.length - toMove.length;
+    const { route, poolAfter } = routeCohort(toMove.length, pools.get(spec.target) ?? 0);
+    console.log(
+      `  ${spec.key.padEnd(34)} ${String(rows.length).padStart(4)} ${String(spec.stated ?? '—').padStart(4)}` +
+        `  ${String(onTarget).padStart(8)}  ${route.padEnd(12)}  ${poolAfter}`,
+    );
+    if (toMove.length === 0) continue;
+    const candidate: QuorumCandidate = {
+      // A target already in the vocabulary is a seed; anything else has to clear the topic
+      // gate before a row may be filed under it, same as a T4a-proposed label.
+      channel: canonicals.has(spec.target) ? 'seed' : 'mint',
+      label: spec.target,
+      rows: toMove,
+    };
+    (route === 'below-quorum' ? below : selected).push(candidate);
+  }
+  console.log('');
+  table('below quorum (untouched — the shelf would stay unvouchable even after the move)', below);
+  return { selected, below };
+}
+
+async function main() {
+  const apply = process.argv.includes('--apply');
+  const cohortMode = process.argv.includes('--cohorts');
+  const from = arg('from') ?? 'docs/audits/reclassify-t4a.json';
+  const only = arg('only')?.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
+
+  // This pass moves primaries on live Path material — the same class of damage the shared
+  // guard was written for, and the reason it takes an `action` verb.
+  requireTargetAck('refile-quorum-topics', apply, 'REFILE');
+  console.log(`mode: ${apply ? 'APPLY' : 'dry-run'}`);
+  console.log(`quorum: ${QUORUM} (= MIN_VOUCHABLE_POOL)\n`);
+
+  const canonicals = new Set(await listCanonicals());
+  const { selected, below } = cohortMode
+    ? await slateFromCohorts(only, canonicals)
+    : await slateFromAudit(from, only);
   if (selected.length === 0) {
     console.log('nothing to refile.\n');
     await assertMembershipInvariants();
@@ -125,7 +217,6 @@ async function main() {
   // snap-to-curated-slug guard — i.e. re-open the twin-minting hole T1.5 closed. It goes
   // through `createTopicMinter` (T3's memoized wrapper) instead, so this pass adds no
   // second minting path.
-  const canonicals = new Set(await listCanonicals());
   const mint = createTopicMinter();
   const targets = new Map<QuorumCandidate, string>();
   for (const cohort of selected) {
@@ -271,11 +362,11 @@ async function main() {
       JSON.stringify(
         {
           runAt: new Date().toISOString(),
-          source: from,
+          source: cohortMode ? 'B3_COHORTS' : from,
           applied: apply,
           quorum: QUORUM,
-          clears: slate.clears.map((c) => ({ channel: c.channel, label: c.label, rows: c.rows.length })),
-          below: slate.below.map((c) => ({ channel: c.channel, label: c.label, rows: c.rows.length })),
+          clears: selected.map((c) => ({ channel: c.channel, label: c.label, rows: c.rows.length })),
+          below: below.map((c) => ({ channel: c.channel, label: c.label, rows: c.rows.length })),
           moved: settled.length > 0 ? settled : moved,
           skipped,
         },

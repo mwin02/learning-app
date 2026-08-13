@@ -753,8 +753,51 @@ generated on-ramp creation through the `setPrimaryTopic` seam like every other w
 adds an invariant so a resource with a scalar `topic` and zero memberships is a detected error
 rather than an invisible one.
 
-**Out of scope.** Lowering `MIN_CENTROID_MEMBERS` — explicitly the wrong fix. P7's vocabulary
-question.
+### Added to Q7 on 2026-08-11: promote `database-systems` to the curated vocabulary
+
+Q5's reclassification pass surfaced three mint channels: `database-systems` **15 rows —
+clears quorum**, `reinforcement-learning` 3, `nosql` 1. The user settled the scope on
+2026-08-11: **promote `database-systems` only.** The other two sit far below
+`MIN_VOUCHABLE_POOL` (10); promoting them would create curated shelves that cannot vouch for a
+filing, which is the exact pathology the rest of this block fixes. They mint naturally when
+they reach quorum.
+
+**The distinction this rests on, because it is easy to get wrong.** A shelf *existing* and a
+shelf being *curated* are different things, and the library already leans hard on the
+difference — measured 2026-08-11, **23 shelves are live but `TOPIC_SLUGS` names 13**, two of
+which (`go`, `javascript`) hold zero rows. Twelve live shelves are agent-minted and
+unpromoted, including `probability-and-statistics` at 206 primaries — the second-largest shelf
+in the library. Minting already works without code changes (T3, `createTopicMinter` →
+`validateTopic`); that is how `differential-equations` was born during Q5. So this addition is
+**not** about letting the rows land somewhere. It is about `TOPIC_SLUGS` membership, which per
+that list's own comment is what makes a topic first-class: the topic gate fast-accepts it
+without an LLM call, the planner and registry canonical lists union it, and **the free-beta
+warm set is this list minus `go`**. The learner-facing half is the reason to do it — a tech
+upskiller would plausibly type "database systems" into the box and should get a warm shelf,
+not a cold mint.
+
+**The `TOPIC_RELATIONS` edge must be measured, not assumed.** The 15 rows came off `sql` (117
+primaries), so the two shelves are adjacent. `TOPIC_RELATIONS`'s header is explicit that
+directions are justified on **retrieval** grounds and that attachment archaeology alone is not
+sufficient evidence about a shelf populated after a Path was built — which is exactly this
+shelf's situation. The working hypothesis is `sql: ['database-systems']` without the reverse
+(a SQL learner benefits from normalization and crash recovery; a database-systems learner does
+not necessarily want SQL syntax tutorials), and `scripts/verify-topic-narrowing.ts` is the
+instrument that settles it.
+
+**This is a deliberate partial answer to P7 / open question 1** — it promotes one topic
+without settling the `statistics` / `probability-and-statistics` merge or the parent/child
+relation question. It is safe to take separately because `database-systems` is not a subtopic
+of an existing shelf; the P7 cases that stay open all are.
+
+**Additional files owned:** `src/types/resource.ts` (`TopicSlug`, `TOPIC_SLUGS`,
+`TOPIC_RELATIONS`), plus a refile of the 15 waiting rows through the existing
+`refile-quorum-topics.ts` cohort mode Q5 built.
+
+**Out of scope.** Lowering `MIN_CENTROID_MEMBERS` — explicitly the wrong fix. The rest of P7's
+vocabulary question: the `statistics` / `probability-and-statistics` merge, the parent/child
+topic relation, and promoting any of the other eleven unpromoted shelves. Promoting
+`reinforcement-learning` or `nosql`.
 
 **Migration:** none
 **New deps:** none
@@ -773,6 +816,20 @@ question.
 - [ ] `assertMembershipInvariants` fails when given a resource with a scalar `topic` and zero
       memberships, and the 7 known on-ramp holes are backfilled to zero.
 - [ ] A whole-table invariant run reports no other writer with the same hole.
+- [ ] `database-systems` is in `TopicSlug` and `TOPIC_SLUGS`, and the topic gate fast-accepts
+      it without an LLM call.
+- [ ] The 15 waiting rows are filed on `database-systems`, and the shelf clears
+      `MIN_VOUCHABLE_POOL`.
+- [ ] Any `TOPIC_RELATIONS` edge added between `sql` and `database-systems` is **directed** and
+      backed by a `scripts/verify-topic-narrowing.ts` measurement quoted in the block's report
+      — or no edge is added and the report says the measurement did not support one.
+- [ ] `reinforcement-learning` and `nosql` are **not** promoted.
+- [ ] **The 130 rows Q5's cohort refile moved are re-scored** once the guardrail is
+      pool-aware, and the report gives the before/after contested count. 52 of the 130 (40%)
+      came out `contested` — see the measurement in the P7 note under open question 1. The
+      moves are correct curation; the stamps record a disagreement with evidence that could
+      not express a subtopic relation. A re-score that leaves them all contested is a **valid
+      outcome** to report, not a failure — what is not acceptable is leaving them unexamined.
 
 ## Q8 — junk classifier, deprecation and dedupe (~260 LOC)
 
@@ -873,7 +930,42 @@ model instead of one that shifts under it.
 ## Open questions for you
 
 1. **P7** — merge `statistics` into `probability-and-statistics`, or formalize parent/child
-   topic relations? This changes the warm-set and `TOPIC_RELATIONS`.
+   topic relations? This changes the warm-set and `TOPIC_RELATIONS`. **Partially answered
+   2026-08-11**: `database-systems` is being promoted to `TOPIC_SLUGS` in Q7 (see the section
+   added to that brief). That case was separable because it is not a subtopic of an existing
+   shelf. The merge and the parent/child relation are still **OPEN**, and so is the larger
+   question the promotion exposed: **eleven other live shelves are unpromoted, including
+   `probability-and-statistics` at 206 primaries.** The split between curated and minted looks
+   accidental rather than designed, and deciding it one shelf at a time is how it got this way.
+
+   **Hard evidence that P7 is not optional, measured 2026-08-11 on Q5's 130 cohort refiles.**
+   52 of the 130 (40%) landed `contested`, and the distribution rules out thin shelves as the
+   cause:
+
+   | target shelf | moved | contested | min relevance | avg relevance |
+   | --- | --- | --- | --- | --- |
+   | multivariable-calculus | 50 | 24 | 0.00 | 0.51 |
+   | precalculus | 14 | 10 | 0.20 | 0.39 |
+   | graph-theory | 11 | 5 | 0.10 | 0.37 |
+   | cryptography | 11 | 5 | 0.00 | 0.40 |
+   | number-theory | 11 | 3 | 0.10 | 0.46 |
+   | machine-learning | 3 | 3 | 0.00 | 0.17 |
+   | differential-equations | 30 | 2 | 0.30 | 0.81 |
+
+   `differential-equations` came off a 9-member shelf through the quorum path and is the
+   **cleanest** row in the table; `multivariable-calculus` has 67 primaries and is the worst.
+   So this is not P4. The reading that fits: a Lamar Calculus III page sits in a neighbourhood
+   dominated by `calculus` (389 primaries vs. 67), the evidence votes for the parent, the
+   refile names the subtopic, and the guardrail records the disagreement — *"subtopics compete
+   with their parents"*, which is P7's own sentence. Same shape for the PCA rows moved
+   `linear-algebra` → `machine-learning`, 3 of 3 contested at avg 0.17. (Inference from shelf
+   sizes and the P7 analysis; the losing topic is not stored on the row, so it is not directly
+   measured.)
+
+   Nothing is orphaned today — a contested primary stays retrievable by design — so this is
+   latent, not broken. But it means **40% of a deliberate, human-authored curation decision is
+   recorded in the database as doubt**, and it will stay that way until the vocabulary can say
+   "subtopic of". Q7 re-scores these 130 rows; that is a measurement, not a fix.
 2. **Duration honesty vs. availability** — making `durationMin` nullable is the correct model.
    `attach-candidates.ts` is already null-safe (its `durationFactor` returns 1 on null and the
    `MAX_ATTACHABLE_DURATION_MIN` gate at :131 passes null), so the real decision point is

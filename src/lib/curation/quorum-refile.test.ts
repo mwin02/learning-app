@@ -16,6 +16,8 @@ import {
   selectQuorumSlate,
   decideRefile,
   decideSettlement,
+  routeCohort,
+  B3_COHORTS,
   QUORUM,
   type RefileRecord,
 } from './quorum-refile';
@@ -174,5 +176,67 @@ describe('decideSettlement', () => {
       relevance: 0,
       contested: true,
     });
+  });
+});
+
+describe('routeCohort', () => {
+  it('routes onto an already-vouchable shelf without asking about quorum', () => {
+    // `multivariable-calculus` (17) and `precalculus` (47) are both over the bar, so the
+    // Lamar CalcIII and CalcI-Review cohorts are safe at ANY size — including the
+    // 10-row Review chapter, which is under quorum on its own.
+    expect(routeCohort(10, 47)).toEqual({ route: 'vouched', poolAfter: 57 });
+    expect(routeCohort(1, QUORUM)).toMatchObject({ route: 'vouched' });
+  });
+
+  it('takes the quorum path when the cohort is what lifts a thin shelf over the bar', () => {
+    // B3's deadlock, exactly: `differential-equations` holds 9 and cannot be vouched for,
+    // so the 30-row Lamar DE cohort has to land as one move.
+    expect(routeCohort(30, 9)).toEqual({ route: 'quorum', poolAfter: 39 });
+    // `graph-theory` 9 + MIT 18.409's 11.
+    expect(routeCohort(11, 9)).toMatchObject({ route: 'quorum' });
+  });
+
+  it('sizes the bar against the shelf AFTER the move, not against the cohort alone', () => {
+    // A cohort of 5 landing on a shelf of 9 clears MIN_VOUCHABLE_POOL just as honestly as
+    // a cohort of 10 landing on an empty one. Judging the cohort in isolation would refuse
+    // precisely the merges that break the deadlock.
+    expect(routeCohort(QUORUM - 5, 9)).toMatchObject({ route: 'quorum' });
+  });
+
+  it('refuses when even the whole cohort leaves the shelf unvouchable', () => {
+    // Moving here would strand the rows somewhere the guardrail permanently distrusts,
+    // which is worse than the wrong-but-reachable shelf they are on.
+    expect(routeCohort(3, 2)).toEqual({ route: 'below-quorum', poolAfter: 5 });
+    expect(routeCohort(QUORUM - 1, 0)).toMatchObject({ route: 'below-quorum' });
+  });
+});
+
+describe('B3_COHORTS', () => {
+  it('names all eight cohorts with a distinct key', () => {
+    expect(B3_COHORTS).toHaveLength(8);
+    expect(new Set(B3_COHORTS.map((c) => c.key)).size).toBe(8);
+  });
+
+  it('never targets a shelf a cohort is already filed under', () => {
+    // `from` is the guard that keeps a cohort from claiming rows that are already right;
+    // a spec listing its own target there would make every row a no-op skip.
+    for (const c of B3_COHORTS) expect(c.from).not.toContain(c.target);
+  });
+
+  it('carries a selector with at least one clause', () => {
+    // An empty selector matches the entire library. The driver throws on one; this keeps
+    // the registry from ever handing it that.
+    for (const c of B3_COHORTS) {
+      const clauses = [c.select.urlPrefix, c.select.urlContainsAny, c.select.titleContainsAny];
+      expect(clauses.some((v) => (Array.isArray(v) ? v.length > 0 : Boolean(v)))).toBe(true);
+    }
+  });
+
+  it('keeps every selector needle lowercase — the driver case-folds the column, not the needle', () => {
+    for (const c of B3_COHORTS) {
+      for (const needle of [c.select.urlPrefix ?? '', ...(c.select.urlContainsAny ?? []), ...(c.select.titleContainsAny ?? [])]) {
+        expect(needle).toBe(needle.toLowerCase());
+      }
+    }
   });
 });
