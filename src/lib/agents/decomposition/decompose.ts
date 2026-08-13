@@ -13,7 +13,7 @@
 // until its router lands in 2.5b-2/-3. Children carry per-child concepts; their
 // derivation + canonicalization (decision A) lands with the first real router.
 
-import type { DecompositionStatus } from '@prisma/client';
+import type { ConceptOrigin, DecompositionStatus } from '@prisma/client';
 import { classify } from './router';
 import { decomposePlaylist } from './youtube';
 import { decomposeDocToc } from './doctoc';
@@ -60,6 +60,9 @@ export type ChildInput = {
   summary: string;
   prerequisiteConcepts: string[];
   conceptsTaught: string[];
+  // Q1: every router states where conceptsTaught came from (resolveConcepts in
+  // concepts.ts) rather than leaning on the column default.
+  conceptOrigin: ConceptOrigin;
   orderInParent: number;
   decompositionStatus?: DecompositionStatus;
   children?: ChildInput[];

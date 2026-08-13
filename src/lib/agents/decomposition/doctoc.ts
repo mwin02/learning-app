@@ -44,7 +44,7 @@
 import { generateObject } from 'ai';
 import { z } from 'zod';
 import { getModel } from '@/lib/ai/models';
-import { deriveChildConcepts } from './concepts';
+import { deriveChildConcepts, resolveConcepts } from './concepts';
 import type { ChildInput } from './decompose';
 import { DECOMPOSITION_MAX_AUTO_CHILDREN, DOC_TOC_MAX_HTML_CHARS } from '@/lib/config';
 
@@ -237,6 +237,8 @@ export async function decomposeDocToc(args: {
     const sub = subResults[idx];
     if (sub?.ok === true) {
       // Sub-index → a nested container child (unpickable; its leaves are pickable).
+      // Derivation is never attempted here, so the parent's array is copied
+      // outright — resolveConcepts with no derived result stamps that honestly.
       return {
         url: s.url,
         title: s.title,
@@ -244,14 +246,12 @@ export async function decomposeDocToc(args: {
         difficulty,
         durationMin: s.durationMin,
         summary: s.summary || s.title,
-        prerequisiteConcepts: [],
-        conceptsTaught: parentConcepts.length > 0 ? parentConcepts : [topic],
+        ...resolveConcepts({ derived: undefined, parentConcepts, topic }),
         orderInParent: idx,
         decompositionStatus: 'decomposed',
         children: sub.children,
       };
     }
-    const derived = concepts.get(s.url);
     return {
       url: s.url,
       title: s.title,
@@ -259,8 +259,7 @@ export async function decomposeDocToc(args: {
       difficulty,
       durationMin: s.durationMin,
       summary: s.summary || s.title,
-      prerequisiteConcepts: derived?.prerequisiteConcepts ?? [],
-      conceptsTaught: derived?.conceptsTaught ?? (parentConcepts.length > 0 ? parentConcepts : [topic]),
+      ...resolveConcepts({ derived: concepts.get(s.url), parentConcepts, topic }),
       orderInParent: idx,
       decompositionStatus: 'atomic',
     };

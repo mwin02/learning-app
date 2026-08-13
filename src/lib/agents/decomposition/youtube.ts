@@ -18,7 +18,7 @@
 // the first page, so we bail to human_review before paging the rest or running
 // the per-child concept derivation.
 
-import { deriveChildConcepts } from './concepts';
+import { deriveChildConcepts, resolveConcepts } from './concepts';
 import type { ChildInput } from './decompose';
 import { DECOMPOSITION_MAX_AUTO_CHILDREN, GOOGLEAPIS_FETCH_TIMEOUT_MS } from '@/lib/config';
 
@@ -98,23 +98,16 @@ export async function decomposePlaylist(args: {
     items: items.map((it) => ({ ref: it.videoId, title: it.title, description: it.description })),
   });
 
-  const children: ChildInput[] = items.map((it) => {
-    const derived = concepts.get(it.videoId);
-    return {
-      url: `https://www.youtube.com/watch?v=${it.videoId}`,
-      title: it.title,
-      type: 'video',
-      difficulty,
-      durationMin: durations.get(it.videoId) ?? 1,
-      summary: it.description.trim().slice(0, 300) || it.title,
-      // Fall back to the parent's concepts only if derivation dropped this ref —
-      // never leave a child with no conceptsTaught (dedup relies on it).
-      prerequisiteConcepts: derived?.prerequisiteConcepts ?? [],
-      conceptsTaught:
-        derived?.conceptsTaught ?? (parentConcepts.length > 0 ? parentConcepts : [topic]),
-      orderInParent: it.position,
-    };
-  });
+  const children: ChildInput[] = items.map((it) => ({
+    url: `https://www.youtube.com/watch?v=${it.videoId}`,
+    title: it.title,
+    type: 'video',
+    difficulty,
+    durationMin: durations.get(it.videoId) ?? 1,
+    summary: it.description.trim().slice(0, 300) || it.title,
+    ...resolveConcepts({ derived: concepts.get(it.videoId), parentConcepts, topic }),
+    orderInParent: it.position,
+  }));
 
   return { ok: true, children };
 }

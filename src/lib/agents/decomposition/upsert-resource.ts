@@ -529,6 +529,7 @@ async function createChild(
       difficulty: child.difficulty as Difficulty,
       prerequisiteConcepts: child.prerequisiteConcepts,
       conceptsTaught: child.conceptsTaught,
+      conceptOrigin: child.conceptOrigin,
       origin: 'agent',
       status: childStatus,
       trustScore,
