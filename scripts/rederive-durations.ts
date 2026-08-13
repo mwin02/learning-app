@@ -256,10 +256,18 @@ async function containerPass(apply: boolean) {
   }
 }
 
+// The two passes below select on the number, not on the resume selector, so they are the
+// only writes here that `write()`'s `durationSource = 'unknown'` predicate does not already
+// protect. They exclude `reviewer` by hand: it is the schema's highest authority ("no
+// automated pass may overwrite a `reviewer` row"), and it postdates this driver by three
+// blocks. `api`/`extracted` stay in scope deliberately — a container whose stated number
+// contradicts its own children is exactly the contradiction this pass exists to settle,
+// and the human measurement is the only one we cannot re-derive.
 async function containerRound(apply: boolean, round: number): Promise<number> {
   const parents = await prisma.$queryRaw<{ id: string; type: string; durationMin: number | null }[]>`
     SELECT p.id, p.type::text AS type, p."durationMin"
     FROM "Resource" p JOIN "Resource" c ON c."parentResourceId" = p.id
+    WHERE p."durationSource"::text <> 'reviewer'
     GROUP BY p.id
     HAVING p."durationMin" IS NULL
         OR p."durationMin" = ${PLACEHOLDER}
@@ -291,7 +299,8 @@ async function containerRound(apply: boolean, round: number): Promise<number> {
 async function bookFloorPass(apply: boolean) {
   const rows = await prisma.$queryRaw<Row[]>`
     SELECT id, url, title, type::text AS type FROM "Resource"
-    WHERE type::text = 'book' AND "durationMin" IS NOT NULL AND "durationMin" < 30`;
+    WHERE type::text = 'book' AND "durationMin" IS NOT NULL AND "durationMin" < 30
+      AND "durationSource"::text <> 'reviewer'`;
   console.log(`\n[books] ${rows.length} book(s) under the 30-minute floor`);
   for (const row of rows) await write(row, UNKNOWN, apply);
 }
