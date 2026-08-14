@@ -97,12 +97,54 @@ async function mapPool<T, R>(items: T[], fn: (item: T) => Promise<R>): Promise<R
   return out;
 }
 
-async function fetchText(url: string): Promise<string | null> {
-  const res = await fetch(url, {
-    headers: { 'user-agent': FETCH_UA, accept: 'text/html' },
-    signal: AbortSignal.timeout(30_000),
-  }).catch(() => null);
-  return res?.ok ? res.text() : null;
+// ⚠️ "COULD NOT READ THE PAGE" IS NOT "THE PAGE HAS NO DURATION", and this driver
+// conflated them once, expensively. On 2026-08-13 an --apply run met a DNS blackhole
+// (`tutorial.math.lamar.edu` resolving to 10.68.0.1) and wrote all 156 Lamar rows to
+// null/unknown — 153 of which the dry run twenty minutes earlier had recovered. A
+// network fault got recorded as 156 statements about the library.
+//
+// So the result is explicit: `unreachable` rows are SKIPPED, never written. They keep
+// their placeholder, stay matched by the resume selector, and cost one re-run — which
+// is the whole reason the selector exists. Only a page we actually read may conclude
+// `unknown`.
+//
+// The timeout must also cover the BODY READ. `AbortSignal.timeout` keeps running while
+// the body streams, so a slow response rejects out of `res.text()`, outside a `.catch()`
+// on the fetch alone — that escaped as an unhandled rejection and killed an --apply run
+// 18 rows in, after the Khan pass had already written.
+type Fetched = { ok: true; body: string } | { ok: false };
+
+async function fetchText(url: string): Promise<Fetched> {
+  try {
+    const res = await fetch(url, {
+      headers: { 'user-agent': FETCH_UA, accept: 'text/html' },
+      signal: AbortSignal.timeout(30_000),
+    });
+    // A non-2xx is not a durable fact about the resource either: 403/429/503 are the
+    // shapes a rate-limited crawler sees, and treating them as "no duration" would bake
+    // a throttle into the library.
+    return res.ok ? { ok: true, body: await res.text() } : { ok: false };
+  } catch {
+    return { ok: false };
+  }
+}
+
+// A site that fails wholesale is an environment fault, not a property of the rows. Half
+// a pass failing means the next passes would run on evidence nobody gathered — the
+// container pass in particular sums children that were never re-derived — so stop and
+// let the operator fix the network. Nothing has been written for the skipped rows, so
+// aborting costs only the run.
+const UNREACHABLE_ABORT_RATIO = 0.5;
+const UNREACHABLE_ABORT_FLOOR = 10;
+
+function assertSiteReachable(pass: string, attempted: number, unreachable: number) {
+  if (attempted < UNREACHABLE_ABORT_FLOOR) return;
+  if (unreachable / attempted < UNREACHABLE_ABORT_RATIO) return;
+  throw new Error(
+    `[${pass}] ${unreachable}/${attempted} fetches failed — that is a network or blocking ` +
+      `problem, not ${unreachable} rows without durations. Nothing was written for them. ` +
+      `Fix connectivity and re-run; the resume selector still matches every skipped row.`,
+  );
 }
 
 // ── Khan: the YouTube channel index ──────────────────────────────────────────
@@ -167,10 +209,11 @@ async function lamarPass(apply: boolean, retryUnknown: boolean, limit?: number) 
   const rows = await selectRows(`url ~ 'tutorial\\.math\\.lamar\\.edu'`, retryUnknown, limit);
   console.log(`\n[lamar] ${rows.length} row(s)`);
   const results = await mapPool(rows, async (row) => {
-    const html = await fetchText(row.url);
-    return write(row, html ? estimateLamarArticle(html) : UNKNOWN, apply);
+    const page = await fetchText(row.url);
+    if (!page.ok) return null;
+    return write(row, estimateLamarArticle(page.body), apply);
   });
-  summarise(results);
+  summarise('lamar', results);
 }
 
 // ── OCW: the artifact the resource page wraps ────────────────────────────────
@@ -181,36 +224,47 @@ async function ocwPass(apply: boolean, retryUnknown: boolean, limit?: number) {
 
   // Video pages are resolved through the same Data API as Khan's, in one batch, so
   // a lecture video costs an exact duration rather than a page-count guess.
-  const pending: { row: Row; videoId?: string; estimate?: DurationEstimate }[] = await mapPool(
+  // `null` means unreachable — skipped, exactly as in the Lamar pass. Both the resource
+  // page and the PDF it wraps are fetches that can fail for reasons that say nothing
+  // about the resource.
+  const pending: ({ row: Row; videoId?: string; estimate?: DurationEstimate } | null)[] = await mapPool(
     rows,
     async (row) => {
-      const html = await fetchText(row.url);
-      if (!html) return { row, estimate: UNKNOWN };
-      const artifact = ocwArtifact(html);
+      const page = await fetchText(row.url);
+      if (!page.ok) return null;
+      const artifact = ocwArtifact(page.body);
       if (artifact?.kind === 'youtube') return { row, videoId: artifact.videoId };
       if (artifact?.kind === 'pdf') {
         const href = artifact.href.startsWith('http') ? artifact.href : `https://ocw.mit.edu${artifact.href}`;
-        const res = await fetch(href, { headers: { 'user-agent': FETCH_UA }, signal: AbortSignal.timeout(60_000) }).catch(
-          () => null,
-        );
-        if (!res?.ok) return { row, estimate: UNKNOWN };
-        return { row, estimate: estimateOcwPdf(new Uint8Array(await res.arrayBuffer())) };
+        const res = await fetch(href, {
+          headers: { 'user-agent': FETCH_UA },
+          signal: AbortSignal.timeout(60_000),
+        }).catch(() => null);
+        if (!res?.ok) return null;
+        const bytes = await res.arrayBuffer().catch(() => null);
+        if (!bytes) return null;
+        return { row, estimate: estimateOcwPdf(new Uint8Array(bytes)) };
       }
-      return { row, estimate: estimateOcwPage(html) };
+      return { row, estimate: estimateOcwPage(page.body) };
     },
   );
+  const reached = pending.filter((p) => p !== null);
+  // Checked here as well as in `summarise` below: this is ahead of the YouTube batch, so a
+  // dead ocw.mit.edu aborts before spending quota on ids gathered from the few pages that
+  // did load.
+  assertSiteReachable('ocw', pending.length, pending.length - reached.length);
 
-  const videoIds = pending.filter((p) => p.videoId).map((p) => p.videoId ?? '');
+  const videoIds = reached.filter((p) => p.videoId).map((p) => p.videoId ?? '');
   const durations = await youtubeDurations(videoIds);
-  const results: DurationEstimate[] = [];
-  for (const p of pending) {
+  const results: (DurationEstimate | null)[] = new Array(pending.length - reached.length).fill(null);
+  for (const p of reached) {
     const seconds = p.videoId ? durations.get(p.videoId) : undefined;
     const estimate: DurationEstimate = seconds
       ? { durationMin: secondsToMinutes(seconds), durationSource: 'api' }
       : (p.estimate ?? UNKNOWN);
     results.push(await write(p.row, estimate, apply));
   }
-  summarise(results);
+  summarise('ocw', results);
   if (videoIds.length) console.log(`  (${Math.ceil(videoIds.length / 50)} quota unit(s) for OCW video durations)`);
 }
 
@@ -307,9 +361,16 @@ async function bookFloorPass(apply: boolean) {
 
 // ── reporting ────────────────────────────────────────────────────────────────
 
-function summarise(results: DurationEstimate[]) {
-  const known = results.filter((r) => r.durationMin != null);
-  console.log(`  recovered ${known.length}, unknown ${results.length - known.length}`);
+// `null` is a row the pass could not read and therefore did not write. It is reported
+// separately from `unknown` because the two mean opposite things: `unknown` is a
+// conclusion about the resource, `unreachable` is an admission about the run.
+function summarise(pass: string, results: (DurationEstimate | null)[]) {
+  const reached = results.filter((r) => r !== null);
+  const unreachable = results.length - reached.length;
+  const known = reached.filter((r) => r.durationMin != null);
+  const line = `  recovered ${known.length}, unknown ${reached.length - known.length}`;
+  console.log(unreachable ? `${line}, unreachable ${unreachable} (skipped, not written)` : line);
+  assertSiteReachable(pass, results.length, unreachable);
 }
 
 async function report(label: string) {
