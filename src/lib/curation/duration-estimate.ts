@@ -1,3 +1,5 @@
+import { inflateSync } from 'node:zlib';
+
 // Library-quality Q6b — the pure, per-host duration estimators the re-derivation
 // driver runs on fetched bytes. No I/O here, so every rule below is unit-testable
 // against a fixture instead of a live site.
@@ -70,6 +72,34 @@ export function estimateLamarArticle(html: string): DurationEstimate {
   return { durationMin: readingMinutes(words, countWorkedExamples(html)), durationSource: 'extracted' };
 }
 
+// ── static documentation and tutorial prose ──────────────────────────────────
+
+// Reference documentation is read faster than a worked derivation and slower than a
+// blog: unfamiliar API names and precise wording stop a reader that math prose does
+// not, but nothing here is derived by hand the way MATH_PROSE_WPM assumes.
+export const TECH_PROSE_WPM = 180;
+// A code sample is read, not skimmed, and it is not prose — counting its tokens at a
+// reading rate is meaningless (a `<pre>` of 300 tokens is not 100 seconds of reading),
+// but dropping it to zero under-reads a reference page that is a quarter code by
+// volume. Charged per block instead, which is what a reader actually stops for.
+export const CODE_BLOCK_MIN = 0.5;
+
+// Measured 2026-08-16 against 16 pages across the eight group-1 hosts. Code is 24–31%
+// of raw words on react.dev, docs.python.org, freecodecamp, scikit-learn and MDN — the
+// inflation `countWords` alone would carry, since it strips script/style/nav but not
+// `<pre>`/`<code>`. Against the stored values that were NOT the placeholder, this
+// formula lands within ~10%: python `controlflow` 40 vs 45, freecodecamp `decorator`
+// 36 vs 35, MDN `Variables` 28 vs 30, OpenStax `3-3-differentiation` 46 vs 45.
+export function estimateDocsArticle(html: string): DurationEstimate {
+  const prose = countWords(html.replace(/<pre[\s\S]*?<\/pre>/gi, ' ').replace(/<code[\s\S]*?<\/code>/gi, ' '));
+  if (prose < MIN_CONTENT_WORDS) return UNKNOWN;
+  const blocks = (html.match(/<pre\b/gi) ?? []).length;
+  return {
+    durationMin: Math.max(1, Math.round(prose / TECH_PROSE_WPM + blocks * CODE_BLOCK_MIN)),
+    durationSource: 'extracted',
+  };
+}
+
 // ── ocw.mit.edu ──────────────────────────────────────────────────────────────
 
 // An OCW resource page is a shell around one artifact. Which artifact decides how it
@@ -92,9 +122,59 @@ export function pdfPageCount(bytes: Uint8Array): number | null {
   return pages > 0 ? pages : null;
 }
 
+// Words in the PDF's own content streams. Deflate-decode each stream and pull the
+// strings handed to the text-showing operators; `latin1` throughout so a stream that
+// is an image, or that we cannot inflate, degrades to garbage rather than throwing.
+//
+// Counted as CHARACTERS / 5.5, not as whitespace-separated tokens, because a LaTeX
+// deck positions every glyph individually — Boyd's 6.079 slides emit
+// `(P) (o) (i) (n) (t)` and a token count reads 8,160 "words" on a 32-page deck that
+// holds about 1,900. Characters survive both encodings.
+const CHARS_PER_WORD = 5.5;
+
+export function pdfWords(bytes: Uint8Array): number | null {
+  const raw = Buffer.from(bytes).toString('latin1');
+  let chars = 0;
+  let found = false;
+  for (const m of raw.matchAll(/stream\r?\n/g)) {
+    const start = m.index + m[0].length;
+    const end = raw.indexOf('endstream', start);
+    if (end < 0) continue;
+    const chunk = Buffer.from(raw.slice(start, end), 'latin1');
+    let text: string;
+    try {
+      text = inflateSync(chunk).toString('latin1');
+    } catch {
+      text = chunk.toString('latin1');
+    }
+    for (const s of text.matchAll(/\((?:\\.|[^\\()])*\)/g)) {
+      found = true;
+      chars += s[0].slice(1, -1).replace(/[^A-Za-z0-9]/g, '').length;
+    }
+  }
+  return found ? Math.round(chars / CHARS_PER_WORD) : null;
+}
+
+// A slide deck and a chapter of lecture notes are both PDFs and are read at completely
+// different speeds, which `OCW_PDF_MIN_PER_PAGE` cannot express — its own comment says
+// so. Words per page separates them cleanly, with a wide empty band in between:
+// measured 2026-08-16 over the 14 decks this rule was written for, 6.045J ran 52–73
+// words a page and 6.079 ran 38–71, while the dense notes and textbook chapters the
+// 4 min/page constant was calibrated against sit in the hundreds. 120 is the midpoint
+// of that gap, comfortably clear of both sides.
+export const SLIDE_MAX_WORDS_PER_PAGE = 120;
+
 export function estimateOcwPdf(bytes: Uint8Array): DurationEstimate {
   const pages = pdfPageCount(bytes);
   if (pages == null) return UNKNOWN;
+  // A deck is measured the same way every other text artifact in this file is — by the
+  // words it actually contains. Costing one at 4 min/page read Nancy Lynch's 53-slide
+  // automata deck as 212 minutes against a stored 40; its 3,475 words are 29.
+  const words = pdfWords(bytes);
+  if (words != null && words / pages < SLIDE_MAX_WORDS_PER_PAGE) {
+    if (words < MIN_CONTENT_WORDS) return UNKNOWN;
+    return { durationMin: readingMinutes(words), durationSource: 'extracted' };
+  }
   return { durationMin: Math.max(1, pages * OCW_PDF_MIN_PER_PAGE), durationSource: 'extracted' };
 }
 
@@ -104,6 +184,26 @@ export function estimateOcwPage(html: string): DurationEstimate {
   const words = countWords(html);
   if (words < MIN_CONTENT_WORDS) return UNKNOWN;
   return { durationMin: readingMinutes(words), durationSource: 'extracted' };
+}
+
+// ── generated:// — content we authored ───────────────────────────────────────
+
+// Read at ordinary prose speed, not MATH_PROSE_WPM: an on-ramp lesson is orientation
+// writing, not a worked derivation. Clamped to a short window so a generated lesson
+// reliably wins the on-ramp duration bias (2g-1) over long sourced courses, and never
+// reports an implausible sub-minute or half-hour read.
+export const ONRAMP_MIN_READ = 5;
+export const ONRAMP_MAX_READ = 20;
+export const ONRAMP_READING_WPM = 200;
+
+// Lives here rather than in `generate-onramp.ts` because it now has two callers: the
+// generator that writes new on-ramp rows, and the backfill for the rows written before
+// that path stamped a provenance. Both must produce the same number for the same text,
+// or a backfilled lesson and a fresh one disagree about identical content.
+export function onrampReadingMinutes(content: string): number {
+  const words = content.trim().split(/\s+/).filter(Boolean).length;
+  const mins = Math.round(words / ONRAMP_READING_WPM);
+  return Math.min(ONRAMP_MAX_READ, Math.max(ONRAMP_MIN_READ, mins));
 }
 
 // ── ISO-8601 ─────────────────────────────────────────────────────────────────
