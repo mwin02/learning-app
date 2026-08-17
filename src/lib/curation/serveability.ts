@@ -60,7 +60,7 @@ const PERFORMED_KHAN_KINDS: Record<string, UnserveableReason> = {
   pi: 'khan-project-item',
 };
 
-function isKhanUrl(url: string): boolean {
+export function isKhanUrl(url: string): boolean {
   try {
     const { hostname } = new URL(url);
     return hostname === 'khanacademy.org' || hostname.endsWith('.khanacademy.org');
