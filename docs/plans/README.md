@@ -15,6 +15,7 @@ work — write a new plan instead.
 | Plan | Status | Open blocks |
 | --- | --- | --- |
 | [library-quality.md](library-quality.md) | active, not started | Q1–Q8 |
+| [resource-serveability.md](resource-serveability.md) | active, not started | S1–S9 |
 | [tutor-agent.md](tutor-agent.md) | active, not started | T1–T4 |
 
 ## Archive
@@ -39,9 +40,10 @@ are in shipped PR titles and in source comments:
 | `F` | resource-reports (review-fix chain) | |
 | `Q` | library-quality | |
 | `R` | resource-reports, rung0-starvation | collision, pre-registry |
+| `S` | resource-serveability | |
 | `T` | topic-filing, tutor-agent | collision, pre-registry |
 
-New plans pick an unclaimed letter. `G`–`P`, `S`, `U`–`Z` are free.
+New plans pick an unclaimed letter. `G`–`P`, `U`–`Z` are free.
 
 **A prefix that isn't a block prefix doesn't belong here.** `library-quality.md` uses `P1`–`P7`
 and `B1`–`B6` for defects and backfill tasks — analysis, not blocks — and its blocks are
