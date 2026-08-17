@@ -51,7 +51,7 @@ itself, and each one is invisible to every existing check:
 | --- | --- | --- |
 | Stored URL now serves a different content kind | 7 rows typed `article` whose URLs serve `/v/`, `/pt/`, or a bare unit page | `urlKind(stored)` vs `urlKind(probe.url)` |
 | The page's own declared kind contradicts the stored type | a row typed `interactive` that Khan serves as an article | `probe.pageKind` vs `type` |
-| Stored `type` contradicts the stored URL's own kind | 2 rows typed `interactive` on `/a/` URLs | `urlKind(stored)` vs `type` — **free, no I/O** |
+| Stored `type` contradicts the stored URL's own kind | 8 rows, 3 pickable, 1 attached — a `/a/` URL not typed `article` or a `/v/` URL not typed `video` | `urlKind(stored)` vs `type` — **free, no I/O** |
 | The URL serves content its slug does not name, with no redirect | found only by an agent noticing a title that did not match | stored `title` vs `probe.title` — noisy, so a flag, never a verdict |
 | The body is a shell around an embedded widget | `"Make a spinoff here!"` — 4 words of article where `main` reads 1,126 | `mainWords / articleWords` ratio |
 
@@ -77,7 +77,7 @@ attached to ≥1 concept). Format **all / pickable / pickable-and-attached**:
 | chain pages (`/cryptochallenge/`) | 4 | 8 / 6 / 0 |
 | slug begins `practice-` | 5 | 2 / 2 / 0 |
 | prose under 400 words **with** ≥1 exercise widget | 5 | 44 of 138 probed |
-| stored `type` vs stored URL kind mismatch | 6 | 2 / 2 / 0 |
+| stored `type` vs stored URL kind mismatch | 6 | 8 / 3 / 1 |
 | stored URL redirects across content kinds | 6 | 7 probed |
 
 **The two findings that shaped the block structure:**
@@ -230,6 +230,9 @@ the item-1 investigation, currently untracked) against
   openlearninglibrary.mit.edu 15 (1 attached), visualgo.net 1 (1 attached).
 - Khan pickable by URL kind: `/v/` 723, `/a/` 144, `/pi/` 19, `/pt/` 11,
   `/a/`-typed-`interactive` 2.
+- Clause 6's free rule (a `/a/` URL not typed `article`, or a `/v/` URL not typed `video`)
+  matches **8 / 3 / 1**. The `/a/`-typed-`interactive` pair is a subset; the rule finds six
+  more that a type-only filter misses.
 - 526 Khan rows have probe output in `docs/audits/khan-batch-*.json*`; 138 reported article
   prose. Of those 138: 50 under the 400-word floor, 44 of which carry ≥1 widget and 6 none;
   43 clear the floor while carrying ≥10 widgets. 32 probed rows reported `hasEditor: true`.
@@ -254,9 +257,14 @@ the item-1 investigation, currently untracked) against
   confirm per row, and a `/pt/` row whose video does not resolve is excluded outright
   (resolved open question 2).
 - **`NEEDS VERIFICATION`: whether the 15 MIT Open Learning Library `interactive` rows are
-  genuinely interactive.** Resolved as: S5's report opens a sample and S8 re-types rather
-  than deprecates any that are readings (resolved open question 1). Nobody has opened one
-  yet, so the *population split* between re-type and deprecate is unknown until S5 runs.
+  genuinely interactive.** Resolved as: S5's report lists them and S8 re-types rather than
+  deprecates any that are readings (resolved open question 1). ⚠️ **New evidence, and it
+  points at a third answer:** all 15 are MITx 6.036 URLs of the form
+  `…/jump_to/block-v1:…+type@sequential+block@<name>`. An edX **`sequential`** block is a
+  unit containing several child pages — so these may be *containers* misfiled as atomic
+  leaves (clause 3) rather than interactive pages (clause 5), which would make the repair a
+  decompose, not a re-type and not a deprecate. Nobody has opened one; S5 must, and S8 must
+  not act on this host until it has.
 
 ---
 
