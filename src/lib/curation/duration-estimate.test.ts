@@ -3,6 +3,7 @@ import {
   attributeByRederivation,
   countWords,
   estimateLamarArticle,
+  estimateDocsArticle,
   estimateOcwPage,
   estimateOcwPdf,
   isoDurationToSeconds,
@@ -11,6 +12,10 @@ import {
   OCW_PDF_MIN_PER_PAGE,
   ocwArtifact,
   pdfPageCount,
+  pdfWords,
+  TECH_PROSE_WPM,
+  CODE_BLOCK_MIN,
+  SLIDE_MAX_WORDS_PER_PAGE,
   readingMinutes,
   secondsToMinutes,
   WORKED_EXAMPLE_MIN,
@@ -63,6 +68,39 @@ describe('estimateLamarArticle', () => {
   });
 });
 
+describe('estimateDocsArticle', () => {
+  it('does not read code blocks as prose', () => {
+    const prose = words(TECH_PROSE_WPM * 10);
+    const withCode = page(`<p>${prose}</p><pre>${words(2000)}</pre>`);
+    // 10 minutes of prose + one block, not 10 + 2000 words of "reading".
+    expect(estimateDocsArticle(withCode)).toEqual({
+      durationMin: Math.round(10 + CODE_BLOCK_MIN),
+      durationSource: 'extracted',
+    });
+  });
+
+  it('charges per code block rather than ignoring them', () => {
+    const prose = `<p>${words(TECH_PROSE_WPM * 10)}</p>`;
+    const blocks = Array.from({ length: 8 }, () => `<pre>${words(50)}</pre>`).join('');
+    expect(estimateDocsArticle(page(prose + blocks)).durationMin).toBe(Math.round(10 + 8 * CODE_BLOCK_MIN));
+  });
+
+  it('degrades to unknown when the page is chrome, never to a number', () => {
+    expect(estimateDocsArticle(page(`<p>${words(MIN_CONTENT_WORDS - 1)}</p>`))).toEqual({
+      durationMin: null,
+      durationSource: 'unknown',
+    });
+  });
+
+  it('does not let a wall of code make a stub look substantial', () => {
+    // 100 words of prose around a huge sample: still unknown, because we read nothing.
+    expect(estimateDocsArticle(page(`<p>${words(100)}</p><pre>${words(9000)}</pre>`))).toEqual({
+      durationMin: null,
+      durationSource: 'unknown',
+    });
+  });
+});
+
 describe('ocwArtifact', () => {
   it('finds an embedded video id', () => {
     expect(ocwArtifact(page('<iframe src="https://www.youtube.com/embed/iOZVbILaIZc"></iframe>'))).toEqual({
@@ -109,6 +147,57 @@ describe('pdfPageCount', () => {
       durationMin: null,
       durationSource: 'unknown',
     });
+  });
+});
+
+describe('estimateOcwPdf — slide decks vs dense notes', () => {
+  // An uncompressed content stream, which `pdfWords` falls back to reading when the
+  // bytes will not inflate. `wordsPerPage` words of five letters each are spread over
+  // `pages` pages, so the fixture lands on either side of SLIDE_MAX_WORDS_PER_PAGE.
+  const pdf = (pages: number, wordsPerPage: number) => {
+    const text = Array.from({ length: pages * wordsPerPage }, () => '(aaaaa) Tj').join('\n');
+    return new TextEncoder().encode(
+      `%PDF-1.4\n1 0 obj<</Type /Pages /Count ${pages}>>endobj\n` +
+        Array.from({ length: pages }, (_, i) => `${i + 2} 0 obj<</Type /Page /Parent 1 0 R>>endobj`).join('\n') +
+        `\n${pages + 2} 0 obj<</Length 1>>stream\n${text}\nendstream endobj\n`,
+    );
+  };
+
+  it('counts words from the content streams', () => {
+    // 10 pages x 60 words x 5 chars = 3000 chars / 5.5
+    expect(pdfWords(pdf(10, 60))).toBe(Math.round((10 * 60 * 5) / 5.5));
+  });
+
+  it('reads a sparse deck as reading time, not as pages x 4', () => {
+    const deck = pdf(50, 60); // 60 words/page — a slide deck
+    const words = pdfWords(deck) ?? 0;
+    expect(words / 50).toBeLessThan(SLIDE_MAX_WORDS_PER_PAGE);
+    expect(estimateOcwPdf(deck)).toEqual({ durationMin: readingMinutes(words), durationSource: 'extracted' });
+    // The bug this rule exists to stop: 50 pages x 4 = 200 minutes for a deck that
+    // holds well under an hour of reading.
+    expect(estimateOcwPdf(deck).durationMin).toBeLessThan(50 * OCW_PDF_MIN_PER_PAGE);
+  });
+
+  it('keeps pages x 4 for dense notes', () => {
+    const notes = pdf(10, 400); // 400 words/page — a textbook chapter
+    expect(estimateOcwPdf(notes)).toEqual({
+      durationMin: 10 * OCW_PDF_MIN_PER_PAGE,
+      durationSource: 'extracted',
+    });
+  });
+
+  it('falls back to pages x 4 when no text can be read at all', () => {
+    // A scanned PDF: real pages, no content streams to count.
+    const scanned = new TextEncoder().encode(
+      `%PDF-1.4\n1 0 obj<</Type /Pages /Count 3>>endobj\n` +
+        Array.from({ length: 3 }, (_, i) => `${i + 2} 0 obj<</Type /Page>>endobj`).join('\n'),
+    );
+    expect(pdfWords(scanned)).toBeNull();
+    expect(estimateOcwPdf(scanned)).toEqual({ durationMin: 3 * OCW_PDF_MIN_PER_PAGE, durationSource: 'extracted' });
+  });
+
+  it('is unknown when a deck holds too little text to have been read', () => {
+    expect(estimateOcwPdf(pdf(2, 20))).toEqual({ durationMin: null, durationSource: 'unknown' });
   });
 });
 

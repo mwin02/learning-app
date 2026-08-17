@@ -31,10 +31,7 @@ import { computeTrustScore } from '@/lib/curation/trust-score';
 import { setPrimaryTopic } from '@/lib/curation/resource-topics';
 import type { SearchResult } from '@/lib/agents/tools/search-resources';
 import { logError } from '@/lib/log';
-
-const ONRAMP_MIN_READ = 5;
-const ONRAMP_MAX_READ = 20;
-const READING_WPM = 200;
+import { onrampReadingMinutes } from '@/lib/curation/duration-estimate';
 
 const LessonSchema = z.object({
   // A concise, learner-facing lesson title (NOT the verbose concept title).
@@ -97,7 +94,7 @@ export async function generateOnRampResource(args: {
     }
   }
 
-  const durationMin = readingTimeMin(lesson.content);
+  const durationMin = onrampReadingMinutes(lesson.content);
   const source = await loadGeneratedSource();
   const trustScore = computeTrustScore({ base: source.trustScore, signals: [] });
   const slug = `${topic}-${concept.slug}-onramp`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
@@ -231,15 +228,6 @@ Constraints:
 - Return the full corrected lesson in the same shape (title, summary, content as markdown).`;
 
 // ── helpers ─────────────────────────────────────────────────────────────────
-
-// Minutes to read the content end-to-end, clamped to a short orientation window so a
-// generated lesson reliably wins the on-ramp duration bias (2g-1) over long sourced
-// courses, and never reports an implausible sub-minute or half-hour read.
-function readingTimeMin(content: string): number {
-  const words = content.trim().split(/\s+/).filter(Boolean).length;
-  const mins = Math.round(words / READING_WPM);
-  return Math.min(ONRAMP_MAX_READ, Math.max(ONRAMP_MIN_READ, mins));
-}
 
 // The synthetic source for generated content — upserted on demand (mirrors the
 // web/youtube blanket rows in upsert-resource). trustScore 0.8: a solid prior for our
