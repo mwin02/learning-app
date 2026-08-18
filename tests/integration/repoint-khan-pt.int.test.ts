@@ -8,8 +8,14 @@
 //      these rows: ten attached SQL lessons ride on it, and a repoint routed through a seam
 //      that cleans up links (`applyPendingReview`) would silently destroy them.
 //   2. DEPRECATED, video unresolvable — through the reject seam, not left half-edited.
-//   3. DEPRECATED, target URL already taken — decided BEFORE the write, so the unique
-//      constraint on `Resource.url` is never reached.
+//   3. DEPRECATED, target URL already taken BY A SERVABLE ROW — decided BEFORE the write, so
+//      the unique constraint on `Resource.url` is never reached.
+//   4. ESCALATED, target URL held by a DEPRECATED row. The fourth outcome, and the one the
+//      cross-block review found missing: reading a retired incumbent as an ordinary collision
+//      deprecates the `/pt/` row against a copy that cannot serve either, which retires the
+//      last copy of the lesson and drops the very concept links this block exists to keep.
+//      Both fixtures are seeded — an `active` incumbent and a `deprecated` one — because the
+//      whole defect was that only the first existed.
 //
 // Split by cost as `sweep-serveability.int.test.ts` does: `planFor` is pure, so the outcome
 // table is a plain `describe`, and `describeDb` covers only what the seams do to rows.
@@ -32,6 +38,7 @@ import {
   isProjectTask,
   planFor,
   videoIdFor,
+  type Holder,
   type Planned,
 } from '../../scripts/repoint-khan-pt';
 import { describeDb } from './db';
@@ -43,10 +50,13 @@ const pt = (slug: string) => `https://www.khanacademy.org/computing/${MARK}/sql/
 const OK_URL = pt('querying-the-table');
 const UNRESOLVED_URL = pt('never-probed');
 const COLLIDING_URL = pt('already-filed');
+const RETIRED_INCUMBENT_URL = pt('held-by-a-retired-row');
 
 const OK_VIDEO = 'S9okVIDEO01';
 const DUP_VIDEO = 'S9dupVIDEO2';
 const DUP_WATCH_URL = `https://www.youtube.com/watch?v=${DUP_VIDEO}`;
+const RETIRED_VIDEO = 'S9retiredV3';
+const RETIRED_WATCH_URL = `https://www.youtube.com/watch?v=${RETIRED_VIDEO}`;
 
 // A probe of a `/pt/` page as the artifacts actually record one: `pageKind: 'challenge'`,
 // no readable article, exactly one embedded talkthrough video.
@@ -81,9 +91,10 @@ const durations = new Map([[OK_VIDEO, 214]]);
 const outcome = (
   over: Partial<Parameters<typeof planFor>[0]> = {},
   probe: ProbeEvidence | null = ptProbe(OK_URL, [OK_VIDEO]),
-  takenBy = new Map<string, string>(),
+  holders = new Map<string, Holder>(),
   claimed = new Map<string, string>(),
-) => planFor(row(over), probe, durations, takenBy, claimed);
+) => planFor(row(over), probe, durations, holders, claimed);
+const heldBy = (id: string, status: Holder['status']) => new Map([[OK_VIDEO, { id, status }]]);
 
 describe('repoint-khan-pt — the population', () => {
   it('is whatever the shipped classifier says, never a list of ids', () => {
@@ -124,10 +135,29 @@ describe('repoint-khan-pt — the three outcomes (pure)', () => {
     expect(videoIdFor(ptProbe(OK_URL, []))).toEqual({ reason: '0 youtube id(s) in the page, need exactly 1' });
   });
 
-  it('deprecates a row whose target URL is already another row', () => {
-    const o = outcome({}, ptProbe(OK_URL, [OK_VIDEO]), new Map([[OK_VIDEO, 'other-row']]));
-    expect(o).toMatchObject({ action: 'deprecate', reason: 'collision' });
-    expect(o.action === 'deprecate' && o.detail).toContain('other-row');
+  it('deprecates a row whose target URL is already a servable row', () => {
+    for (const status of ['active', 'pending_review'] as const) {
+      const o = outcome({}, ptProbe(OK_URL, [OK_VIDEO]), heldBy('other-row', status));
+      expect(o).toMatchObject({ action: 'deprecate', reason: 'collision' });
+      expect(o.action === 'deprecate' && o.detail).toContain('other-row');
+    }
+  });
+
+  // The cross-block review's finding. A deprecated incumbent cannot serve the lesson, so
+  // deprecating this row against it would retire the last copy — and the unique constraint
+  // still forbids the repoint, so neither write is available and the driver refuses both.
+  it('escalates rather than deprecating when the target URL is held by a deprecated row', () => {
+    const o = outcome({}, ptProbe(OK_URL, [OK_VIDEO]), heldBy('retired-row', 'deprecated'));
+    expect(o).toMatchObject({ action: 'escalate', reason: 'deprecated-incumbent' });
+    expect(o.action === 'escalate' && o.detail).toContain('retired-row');
+  });
+
+  // The escalation outranks the missing duration: the video is in the library either way, and
+  // the judgment being deferred is about the incumbent, not about a number.
+  it('escalates even when the video resolves to no duration', () => {
+    expect(outcome({}, ptProbe(OK_URL, ['S9missingXX']), new Map([['S9missingXX', { id: 'retired-row', status: 'deprecated' as const }]]))).toMatchObject({
+      action: 'escalate',
+    });
   });
 
   // Two /pt/ rows on the same clip: the second must not plan a write the first made illegal.
@@ -139,7 +169,7 @@ describe('repoint-khan-pt — the three outcomes (pure)', () => {
   });
 
   it('does not read its own claim as a collision', () => {
-    expect(outcome({ id: 'r1' }, ptProbe(OK_URL, [OK_VIDEO]), new Map([[OK_VIDEO, 'r1']]))).toMatchObject({
+    expect(outcome({ id: 'r1' }, ptProbe(OK_URL, [OK_VIDEO]), heldBy('r1', 'active'))).toMatchObject({
       action: 'repoint',
     });
   });
@@ -166,9 +196,16 @@ describeDb('repoint-khan-pt — the write seams (S9)', () => {
   let pathId: string;
   let okConceptId: string;
   let deprecatedConceptId: string;
+  let escalatedConceptId: string;
   let probes: Map<string, ProbeEvidence | null>;
 
-  const seed = async (sourceId: string, slug: string, url: string, type: 'interactive' | 'video') =>
+  const seed = async (
+    sourceId: string,
+    slug: string,
+    url: string,
+    type: 'interactive' | 'video',
+    status: 'active' | 'deprecated' = 'active',
+  ) =>
     (
       await prisma.resource.create({
         data: {
@@ -181,7 +218,8 @@ describeDb('repoint-khan-pt — the write seams (S9)', () => {
           durationSource: 'estimated',
           summary: 'S9 repoint fixture',
           difficulty: 'beginner',
-          status: 'active',
+          status,
+          ...(status === 'deprecated' ? { deprecationSeverity: 'soft' as const } : {}),
           decompositionStatus: 'atomic',
           origin: 'agent',
           prerequisiteConcepts: [],
@@ -194,13 +232,20 @@ describeDb('repoint-khan-pt — the write seams (S9)', () => {
 
   // Never the whole table: `collectPlans` reads every row by design.
   const mine = async (): Promise<Map<string, Planned>> => {
-    const planned = await collectPlans(probes, async () => new Map([[OK_VIDEO, 214]]));
+    const planned = await collectPlans(
+      probes,
+      // `RETIRED_VIDEO` resolves fine — so the only reason its row is not repointed is the
+      // incumbent sitting on the URL, which is the thing under test.
+      async () => new Map([[OK_VIDEO, 214], [RETIRED_VIDEO, 300]]),
+    );
     return new Map(planned.filter((p) => p.row.url.includes(MARK)).map((p) => [p.row.url, p]));
   };
+  // `main()`'s own filter: an escalation is never offered to `applyPlan`, so a run cannot
+  // action a row the driver refused to decide.
   const runDriver = async () => {
     const applied: string[] = [];
     for (const p of (await mine()).values()) {
-      if (p.outcome.action === 'skip') continue;
+      if (p.outcome.action !== 'repoint' && p.outcome.action !== 'deprecate') continue;
       const result = await applyPlan(p);
       expect(result.ok).toBe(true);
       applied.push(p.outcome.action);
@@ -226,6 +271,10 @@ describeDb('repoint-khan-pt — the write seams (S9)', () => {
       // The row that owns the colliding row's target URL already — a perfectly good video
       // resource the repoint must not be allowed to write over.
       incumbent: await seed(source.id, 'incumbent', DUP_WATCH_URL, 'video'),
+      // The same shape with a RETIRED incumbent. The URL is just as taken, but nothing here
+      // can serve the lesson, so the `/pt/` row is the last copy of it.
+      heldByRetired: await seed(source.id, 'held-by-retired', RETIRED_INCUMBENT_URL, 'interactive'),
+      retiredIncumbent: await seed(source.id, 'retired-incumbent', RETIRED_WATCH_URL, 'video', 'deprecated'),
     };
 
     // Two concepts on one spine-ready Path: one covered by the row about to be REPOINTED (its
@@ -249,12 +298,26 @@ describeDb('repoint-khan-pt — the write seams (S9)', () => {
         coverageScore: 0.9,
       },
     });
+    // The escalated row is attached too, and that is the point: the defect this fixture
+    // encodes destroyed exactly this link.
+    escalatedConceptId = (
+      await prisma.concept.create({ data: { pathId, slug: `${MARK}-c-held`, title: 'S9 held' }, select: { id: true } })
+    ).id;
+    await prisma.conceptResource.create({
+      data: {
+        conceptId: escalatedConceptId,
+        resourceId: ids.heldByRetired,
+        role: ConceptResourceRole.teaches,
+        coverageScore: 0.9,
+      },
+    });
 
-    // Only the two probed rows have a page. `unresolved` has none — the production case of a
+    // Only the probed rows have a page. `unresolved` has none — the production case of a
     // `/pt/` row that no batch file covers.
     probes = new Map([
       [ids.ok, ptProbe(OK_URL, [OK_VIDEO])],
       [ids.colliding, ptProbe(COLLIDING_URL, [DUP_VIDEO])],
+      [ids.heldByRetired, ptProbe(RETIRED_INCUMBENT_URL, [RETIRED_VIDEO])],
     ]);
   });
   afterAll(cleanup);
@@ -266,9 +329,17 @@ describeDb('repoint-khan-pt — the write seams (S9)', () => {
     // The collision is found by reading the table, not by catching a constraint error.
     expect(plans.get(COLLIDING_URL)?.outcome).toMatchObject({ action: 'deprecate', reason: 'collision' });
     expect(plans.get(COLLIDING_URL)?.outcome).toMatchObject({ detail: expect.stringContaining(ids.incumbent) });
+    // The same table read, one status apart: a DEPRECATED incumbent is an escalation, never
+    // the collision that would deprecate this row against a copy nobody can be served.
+    expect(plans.get(RETIRED_INCUMBENT_URL)?.outcome).toMatchObject({
+      action: 'escalate',
+      reason: 'deprecated-incumbent',
+      detail: expect.stringContaining(ids.retiredIncumbent),
+    });
     expect(plans.has(DUP_WATCH_URL)).toBe(false);
-    // The point of the block: the repointed row is one of the attached ones.
+    // The point of the block: the repointed and escalated rows are both attached ones.
     expect(plans.get(OK_URL)?.attached).toBe(true);
+    expect(plans.get(RETIRED_INCUMBENT_URL)?.attached).toBe(true);
   });
 
   it('applies each outcome through its own seam, and raises no unique-constraint error', async () => {
@@ -291,6 +362,30 @@ describeDb('repoint-khan-pt — the write seams (S9)', () => {
     // The incumbent kept its URL: the collision was declined, not resolved in the newcomer's
     // favour.
     expect(await rowById(ids.incumbent)).toMatchObject({ url: DUP_WATCH_URL, status: 'active' });
+
+    // The escalated row is untouched on every axis — still `/pt/`, still active, still
+    // carrying its old duration — and so is the retired incumbent. An escalation writes
+    // nothing, which is what leaves both rows as recoverable as they were.
+    expect(await rowById(ids.heldByRetired)).toMatchObject({
+      url: RETIRED_INCUMBENT_URL,
+      type: 'interactive',
+      status: 'active',
+      durationMin: 20,
+      durationSource: 'estimated',
+    });
+    expect(await rowById(ids.retiredIncumbent)).toMatchObject({
+      url: RETIRED_WATCH_URL,
+      status: 'deprecated',
+    });
+  });
+
+  // The defect the cross-block review found, asserted where it would have shown: deprecating
+  // the escalated row would have dropped this link and left the lesson servable from neither
+  // row.
+  it('keeps the escalated row attached to its concept', async () => {
+    expect(
+      await prisma.conceptResource.count({ where: { conceptId: escalatedConceptId, resourceId: ids.heldByRetired } }),
+    ).toBe(1);
   });
 
   // THE property of this block. A repoint is a field update precisely because
@@ -310,8 +405,14 @@ describeDb('repoint-khan-pt — the write seams (S9)', () => {
     const plans = await mine();
     // The repointed row left the population entirely — its URL is no longer a /pt/ URL.
     expect(plans.has(OK_URL)).toBe(false);
-    expect([...plans.values()].filter((p) => p.outcome.action !== 'skip')).toEqual([]);
+    expect(
+      [...plans.values()].filter((p) => p.outcome.action === 'repoint' || p.outcome.action === 'deprecate'),
+    ).toEqual([]);
     expect(plans.get(UNRESOLVED_URL)?.outcome).toMatchObject({ action: 'skip', reason: 'already-decided' });
+    // The escalation is STANDING, not consumed: nothing was written, so the row is in exactly
+    // the state that produced it and will keep being reported until a human resolves it.
+    // Idempotence here means "no second helping of writes", not "the finding goes away".
+    expect(plans.get(RETIRED_INCUMBENT_URL)?.outcome).toMatchObject({ action: 'escalate' });
     expect(await runDriver()).toEqual([]);
   });
 });

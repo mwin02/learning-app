@@ -49,6 +49,30 @@
 // write inside a loop leaves the operator guessing which half of the run applied. Such a row
 // takes the deprecate branch: the lesson is not lost, it is already filed.
 //
+// ⚠️ AND THAT LAST CLAUSE IS ONLY TRUE OF AN INCUMBENT THAT CAN STILL BE SERVED, which is
+// why the holder lookup is filtered to the actionable statuses (`active`, `pending_review` —
+// the same window `sweep-serveability.ts` writes within). A DEPRECATED row at the target URL
+// is not "already filed": deprecating the `/pt/` row against it would retire the second copy
+// of a lesson whose first copy is already retired, drop the concept links of a row this block
+// exists to keep attached, and leave the video unservable from both rows. Ten attached SQL
+// lessons are one furniture sweep away from that, so it is a real path, not a hypothetical.
+//
+// ── THE RETIRED INCUMBENT IS A THIRD STATE, AND IT IS AN ESCALATION ───────────────────────
+//
+// Filtering the lookup does not make the repoint possible: the unique constraint is
+// unconditional and does not care that the incumbent is deprecated. So such a row can neither
+// be repointed nor honestly deprecated, and the driver refuses BOTH and prints it loudly —
+// the shape `sweep-serveability.ts` already uses for a row whose two re-type findings name
+// different targets. The rule both share: WHEN THE RIGHT ANSWER NEEDS A JUDGMENT THE DRIVER
+// CANNOT MAKE, REFUSE AND PRINT — never fall through to the destructive option.
+//
+// The judgment being deferred is real and is nobody's here: reviving the incumbent (why was
+// it retired? a dead link, or a decision this row does not overturn?), or retiring the `/pt/`
+// row and accepting the hole, or merging the two — none of which is "repoint at a video".
+// Escalating touches nothing, so both rows stay exactly as recoverable as they were, and the
+// `/pt/` row keeps teaching in the meantime. It is counted in the totals like every other
+// outcome and it is excluded from the `--apply` loop, so it cannot be actioned by accident.
+//
 // ── EVIDENCE, AND WHY A FRESH CLONE CANNOT REPRODUCE THIS RUN ─────────────────────────────
 //
 // The video ids come from the probe artifacts in `docs/audits/khan-batch-*.json*`, read
@@ -99,7 +123,14 @@ export type Outcome =
   // different findings about the library, and the plan asks for the collision to be printed
   // as such rather than folded into "no video".
   | { action: 'deprecate'; reason: 'unresolvable' | 'collision'; detail: string }
+  // Writes nothing, on purpose — see THE RETIRED INCUMBENT in the header.
+  | { action: 'escalate'; reason: 'deprecated-incumbent'; detail: string }
   | { action: 'skip'; reason: 'already-decided' | 'not-atomic'; detail: string };
+
+// A row already sitting on a candidate video URL. The STATUS travels with it because it is
+// the whole question: an incumbent that can still be served makes the `/pt/` row redundant,
+// and one that cannot makes it the last copy of the lesson.
+export type Holder = { id: string; status: ResourceStatus };
 
 export type Planned = { row: Row; attached: boolean; outcome: Outcome };
 
@@ -124,16 +155,18 @@ export function videoIdFor(probe: ProbeEvidence | null): { id: string } | { reas
 }
 
 /**
- * Pure. `takenBy` maps a video id to the id of an EXISTING row already sitting on it, and
+ * Pure. `holders` maps a video id to the EXISTING row already sitting on that URL, carrying
+ * its status because a live incumbent and a retired one are opposite findings (header).
  * `claimed` maps a video id to the `/pt/` row earlier in this same run that will take it —
- * the second is not optional: two `/pt/` rows embedding the same clip would otherwise both
- * plan a repoint and the second write would hit the unique constraint the first created.
+ * not optional: two `/pt/` rows embedding the same clip would otherwise both plan a repoint
+ * and the second write would hit the unique constraint the first created. An in-run claim is
+ * live by construction, which is why it carries no status.
  */
 export function planFor(
   row: Row,
   probe: ProbeEvidence | null,
   durations: Map<string, number>,
-  takenBy: Map<string, string>,
+  holders: Map<string, Holder>,
   claimed: Map<string, string>,
 ): Outcome {
   if (!ACTIONABLE_STATUS.includes(row.status)) {
@@ -151,12 +184,34 @@ export function planFor(
   if ('reason' in resolved) return { action: 'deprecate', reason: 'unresolvable', detail: resolved.reason };
   const { id: videoId } = resolved;
 
-  const holder = takenBy.get(videoId) ?? claimed.get(videoId);
-  if (holder !== undefined && holder !== row.id) {
+  const claimant = claimed.get(videoId);
+  if (claimant !== undefined && claimant !== row.id) {
     return {
       action: 'deprecate',
       reason: 'collision',
-      detail: `${watchUrl(videoId)} is already resource ${holder} — repointing would violate the unique-URL constraint`,
+      detail: `${watchUrl(videoId)} is claimed by resource ${claimant} earlier in this run — repointing would violate the unique-URL constraint`,
+    };
+  }
+
+  const holder = holders.get(videoId);
+  if (holder !== undefined && holder.id !== row.id) {
+    // The status decides which of two opposite findings this is, and the branch below is the
+    // one the header calls a third state: the URL is taken either way, but only a servable
+    // incumbent makes the lesson safe to let go of.
+    if (ACTIONABLE_STATUS.includes(holder.status)) {
+      return {
+        action: 'deprecate',
+        reason: 'collision',
+        detail: `${watchUrl(videoId)} is already resource ${holder.id} (${holder.status}) — repointing would violate the unique-URL constraint`,
+      };
+    }
+    return {
+      action: 'escalate',
+      reason: 'deprecated-incumbent',
+      detail:
+        `${watchUrl(videoId)} is held by resource ${holder.id}, which is ${holder.status} — ` +
+        'the URL is taken so the repoint is impossible, and the incumbent cannot serve the lesson ' +
+        'either, so deprecating this row would retire the last copy. Revive the incumbent or decide by hand.',
     };
   }
 
@@ -226,21 +281,32 @@ export async function collectPlans(
   // YouTube row can carry (`watch?v=`, `youtu.be/`, `m.youtube.com`, an `embed/` form), and
   // the host filter keeps an 11-character id that happens to appear inside an unrelated URL
   // from reading as a collision.
-  const takenBy = new Map<string, string>();
+  //
+  // ⚠️ NO STATUS FILTER IN THE QUERY, deliberately, and it is not the defect it looks like:
+  // the unique constraint is unconditional, so a DEPRECATED row on the target URL still
+  // blocks the write and this driver still has to know about it. What the status must not do
+  // is decide the outcome by omission — a retired incumbent read as a plain collision would
+  // deprecate the `/pt/` row and retire the last servable copy of the lesson. So every holder
+  // is fetched and `planFor` splits them: live → collision, retired → escalation. A live one
+  // wins when both shapes of the same video exist, because any servable copy makes this row
+  // genuinely redundant.
+  const holders = new Map<string, Holder>();
   for (const videoId of candidates) {
-    const holders = await prisma.resource.findMany({
-      where: { url: { contains: videoId } },
-      select: { id: true, url: true },
-    });
-    const hit = holders.find((h) => YOUTUBE_HOSTS.some((host) => h.url.includes(host)));
-    if (hit) takenBy.set(videoId, hit.id);
+    const onUrl = (
+      await prisma.resource.findMany({
+        where: { url: { contains: videoId } },
+        select: { id: true, url: true, status: true },
+      })
+    ).filter((h) => YOUTUBE_HOSTS.some((host) => h.url.includes(host)));
+    const hit = onUrl.find((h) => ACTIONABLE_STATUS.includes(h.status)) ?? onUrl[0];
+    if (hit) holders.set(videoId, { id: hit.id, status: hit.status });
   }
 
   const durations = await resolve(candidates);
 
   const claimed = new Map<string, string>();
   return rows.map((row) => {
-    const outcome = planFor(row, probes.get(row.id) ?? null, durations, takenBy, claimed);
+    const outcome = planFor(row, probes.get(row.id) ?? null, durations, holders, claimed);
     if (outcome.action === 'repoint') claimed.set(outcome.videoId, row.id);
     return { row, attached: attached.has(row.id), outcome };
   });
@@ -288,6 +354,8 @@ export async function applyPlan({ row, outcome }: Planned): Promise<ApplyOutcome
         }
       : { ok: false, detail: result.kind };
   }
+  // Reached only by `escalate` and `skip`, and both mean the same thing to a caller: this
+  // driver has no write for this row. `main()` never offers them here.
   return { ok: false, detail: `nothing planned (${outcome.reason})` };
 }
 
@@ -311,8 +379,10 @@ function report(planned: Planned[]) {
   const repoint = of('repoint');
   const unresolvable = of('deprecate', 'unresolvable');
   const collision = of('deprecate', 'collision');
+  const escalated = of('escalate');
   const skipped = of('skip');
-  const actionable = planned.length - skipped.length;
+  const inPopulation = planned.length - skipped.length;
+  const decided = repoint.length + unresolvable.length + collision.length + escalated.length;
 
   section(`PER-ROW OUTCOME — ${planned.length} Khan /pt/ row(s) found`);
   for (const p of planned) {
@@ -322,22 +392,32 @@ function report(planned: Planned[]) {
         ? `REPOINT      ${o.videoId} → ${o.seconds}s → ${o.durationMin}min`
         : o.action === 'deprecate'
           ? `DEPRECATE    ${o.reason}: ${o.detail}`
-          : `skip         ${o.reason}: ${o.detail}`;
+          : o.action === 'escalate'
+            ? `⚠ ESCALATE   ${o.reason}: ${o.detail}`
+            : `skip         ${o.reason}: ${o.detail}`;
     line(p, lead);
   }
 
+  const attachedIn = (ps: Planned[]) => ps.filter((p) => p.attached).length;
   section('TOTALS');
   console.log(
-    `  ${String(repoint.length).padStart(4)}  REPOINT    at the embedded video (${repoint.filter((p) => p.attached).length} attached to a concept)\n` +
-      `  ${String(unresolvable.length).padStart(4)}  DEPRECATE  soft — no video resolved (${unresolvable.filter((p) => p.attached).length} attached)\n` +
-      `  ${String(collision.length).padStart(4)}  DEPRECATE  soft — the video is already another row (${collision.filter((p) => p.attached).length} attached)\n` +
+    `  ${String(repoint.length).padStart(4)}  REPOINT    at the embedded video (${attachedIn(repoint)} attached to a concept)\n` +
+      `  ${String(unresolvable.length).padStart(4)}  DEPRECATE  soft — no video resolved (${attachedIn(unresolvable)} attached)\n` +
+      `  ${String(collision.length).padStart(4)}  DEPRECATE  soft — the video is already a SERVABLE row (${attachedIn(collision)} attached)\n` +
+      `  ${String(escalated.length).padStart(4)}  ESCALATE   writes nothing — the video is held by a DEPRECATED row (${attachedIn(escalated)} attached)\n` +
       `  ${'─'.repeat(4)}\n` +
-      `  ${String(repoint.length + unresolvable.length + collision.length).padStart(4)}  = ${actionable} actionable row(s)  ` +
-      `[${repoint.length + unresolvable.length + collision.length === actionable ? '✓ the three outcomes sum' : '⚠️ MISMATCH'}]\n` +
-      `  ${String(skipped.length).padStart(4)}  skipped (outside the actionable population: already deprecated, or not atomic)\n` +
+      `  ${String(decided).padStart(4)}  = ${inPopulation} row(s) in the actionable population  ` +
+      `[${decided === inPopulation ? '✓ the four outcomes sum' : '⚠️ MISMATCH'}]\n` +
+      `  ${String(skipped.length).padStart(4)}  skipped (outside it: already deprecated, or not atomic)\n` +
       `  ${'─'.repeat(4)}\n` +
-      `  ${String(planned.length).padStart(4)}  = /pt/ rows found`,
+      `  ${String(planned.length).padStart(4)}  = /pt/ rows found\n\n` +
+      `  ${String(repoint.length + unresolvable.length + collision.length).padStart(4)}  of those are WRITES; the ${escalated.length} escalation(s) are for a human`,
   );
+
+  if (escalated.length > 0) {
+    section(`⚠ ESCALATION — ${escalated.length} row(s) whose video is held by a deprecated row, LEFT UNTOUCHED`);
+    for (const p of escalated) line(p, p.row.id);
+  }
 }
 
 async function main() {
@@ -348,17 +428,20 @@ async function main() {
   const planned = await collectPlans();
   report(planned);
 
-  const actionable = planned.filter((p) => p.outcome.action !== 'skip');
+  // An escalation is deliberately NOT in here: it is a row the driver refuses to decide, and
+  // an `--apply` that acted on one would be exactly the destructive fallthrough the refusal
+  // exists to prevent.
+  const writes = planned.filter((p) => p.outcome.action === 'repoint' || p.outcome.action === 'deprecate');
   if (!apply) {
     console.log(
-      `\nDry run — nothing written. Read the per-row outcomes above, then re-run with --apply to act on ${actionable.length} row(s).\n`,
+      `\nDry run — nothing written. Read the per-row outcomes above, then re-run with --apply to act on ${writes.length} row(s).\n`,
     );
     return;
   }
 
   const tally = new Map<string, number>();
   const failed: string[] = [];
-  for (const p of actionable) {
+  for (const p of writes) {
     const outcome = await applyPlan(p);
     const key = outcome.ok ? p.outcome.action : `${p.outcome.action} FAILED`;
     tally.set(key, (tally.get(key) ?? 0) + 1);
