@@ -235,10 +235,12 @@ describe('the chain step — clause 4', () => {
     expect(verdict(probe({ url, title: 'Cryptochallenge' }), row({ url })).serveable).toBe(true);
   });
 
+  // Malformed and `generated://` URLs both reach this classifier. Neither may throw, and
+  // neither may exclude: an unparseable URL cannot be shown to agree with the probe's, so the
+  // probe is withheld rather than believed.
   it('does not throw on a value that is not a URL', () => {
-    expect(
-      verdict(probe({ url: 'not a url' }), row({ url: 'generated://onramp/x' })).serveable,
-    ).toBe(true);
+    const out = classifyServeabilityFromProbe(probe({ url: 'not a url' }), row({ url: 'generated://onramp/x' }));
+    expect(out).toEqual({ evidence: false, reason: 'probe-voided' });
   });
 });
 
@@ -254,6 +256,64 @@ describe('no evidence is its own outcome, never a verdict', () => {
 
   it('returns no evidence when the row was never probed', () => {
     expect(classifyServeabilityFromProbe(null, row())).toEqual({ evidence: false, reason: 'no-probe' });
+  });
+
+  // A probe is keyed by resourceId, so it describes the page the row pointed at WHEN PROBED.
+  // The regression this arm exists for: a repointed `/pt/` row still carrying the Khan
+  // challenge page's probe (`hasEditor`, no article) was deprecated on that page's shape,
+  // destroying the ten attached SQL lessons the repoint had just rescued.
+  it('returns no evidence when the probe landed on another host', () => {
+    expect(
+      classifyServeabilityFromProbe(
+        probe({
+          url: 'https://www.khanacademy.org/computing/sql/pt/challenge-book-list',
+          hasEditor: true,
+          articleWords: null,
+          mainWords: null,
+        }),
+        row({ url: 'https://www.youtube.com/watch?v=abc123' }),
+      ),
+    ).toEqual({ evidence: false, reason: 'probe-voided' });
+  });
+
+  // The other half: the stored URL now serves a different content kind, which is exactly what
+  // `url-redirects-across-kinds` reports — so the landed page cannot also be the evidence that
+  // condemns this row.
+  it('returns no evidence when the landed page is a different content kind', () => {
+    expect(
+      classifyServeabilityFromProbe(
+        probe({ url: ARTICLE_URL.replace('/a/', '/pt/'), hasEditor: true, articleWords: null }),
+        row(),
+      ),
+    ).toEqual({ evidence: false, reason: 'probe-voided' });
+  });
+
+  // ⚠️ THE THIRD LOAD-BEARING NEGATIVE. Khan re-slugs constantly, and voiding on slug drift
+  // would silently discard most of the page evidence the library has.
+  it('still counts a probe that merely drifted slug', () => {
+    expect(
+      classifyServeabilityFromProbe(
+        probe({ url: `${ARTICLE_URL}-and-inserting-data`, hasEditor: true, articleWords: null }),
+        row(),
+      ),
+    ).toMatchObject({ serveable: false, reason: 'editor-no-prose' });
+  });
+
+  // We cannot show the two agree, and an unproven signal does not get to exclude.
+  it('voids on an unparseable URL on either side', () => {
+    expect(
+      classifyServeabilityFromProbe(probe({ url: 'not a url', hasEditor: true, articleWords: null }), row()),
+    ).toEqual({ evidence: false, reason: 'probe-voided' });
+    expect(
+      classifyServeabilityFromProbe(probe({ hasEditor: true, articleWords: null }), row({ url: 'generated://onramp/x' })),
+    ).toEqual({ evidence: false, reason: 'probe-voided' });
+  });
+
+  // `blocked` still outranks it, so the two reasons never race for the same probe.
+  it('reports a blocked probe as blocked even when it also fails to describe the row', () => {
+    expect(
+      classifyServeabilityFromProbe(probe({ blocked: true, url: 'https://example.invalid/x' }), row()),
+    ).toEqual({ evidence: false, reason: 'blocked' });
   });
 
   // `blocked` outranks every rule, including the ones that would otherwise fire on the

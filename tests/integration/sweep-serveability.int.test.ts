@@ -156,6 +156,8 @@ describe('sweep-serveability — the three-way precedence (pure)', () => {
 
   // A probe is keyed by resourceId, so it describes the page the row pointed at WHEN PROBED.
   // Letting a stale one answer a serveability question answers it about somebody else's page.
+  // The check itself lives in `classifyServeabilityFromProbe` (so `report-serveability.ts`
+  // gets it too); these cases assert what the driver does with the withheld verdict.
   describe('a probe only decides about the row it actually describes', () => {
     // The Khan challenge page S9 repoints away from: an in-browser editor and nothing to
     // read, which is `editor-no-prose` on any row it is allowed to judge.

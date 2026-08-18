@@ -26,6 +26,7 @@
 
 import { MIN_CONTENT_WORDS } from './duration-estimate';
 import type { KhanProbe } from './khan-probe-duration';
+import { urlKind } from './serveability';
 
 // `KhanProbe` declares only the fields `proposeKhanDuration` reads, and `title`/`mainWords`
 // are emitted by the probe and present in every batch file but not yet declared there — S4
@@ -54,7 +55,8 @@ export type UnserveableProbeReason =
 
 export type NoEvidenceReason =
   | 'no-probe' // the row was never probed, or the probe failed
-  | 'blocked'; // a bot wall or an error page — we saw someone else's page, not this one
+  | 'blocked' // a bot wall or an error page — we saw someone else's page, not this one
+  | 'probe-voided'; // a probe exists, but of a page this row no longer points at
 
 // Three outcomes, not two. A bot wall is not a quality failure and must never be counted as
 // one, so "we have no evidence" is its own arm rather than a `serveable: true` that reads
@@ -102,6 +104,42 @@ function containerSegments(url: string): string[] {
   return kindAt >= 0 ? segments.slice(0, kindAt) : segments.slice(0, -1);
 }
 
+function hostOf(url: string): string | null {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return null;
+  }
+}
+
+// ⚠️ A PROBE IS KEYED BY resourceId, NOT BY URL, so it describes the page that row pointed at
+// WHEN IT WAS PROBED — which is not necessarily the page it points at now. A stale probe
+// allowed to answer a question about a row answers it about somebody else's page.
+//
+// The case that forced this, and it is not hypothetical: the S9 driver repoints a Khan `/pt/`
+// row at its embedded video, so `row.url` becomes a youtube.com URL while the stored probe is
+// still the Khan challenge page — `hasEditor: true`, `articleWords: null`. That fires
+// `editor-no-prose`, and the sweep falls through to deprecating the ten attached SQL lessons
+// S9 exists to save. The same defect, less loudly, on the 7 rows whose stored URL redirects
+// across kinds: `classifyMetadataIntegrity` reports `url-redirects-across-kinds` on those,
+// whose whole meaning is that the landed page is DIFFERENT CONTENT from this row — so it
+// cannot simultaneously be the evidence that condemns it.
+//
+// So: kind or host disagreement voids the probe as evidence about this row.
+// ⚠️ ONLY those two. Slug drift is normal and common on Khan and must still count —
+// `metadata-integrity.ts` draws exactly this line ("the slug alone changing is normal and is
+// deliberately not a finding; the kind changing is not"), and voiding on it would silently
+// discard most of the page evidence the library has. An unparseable URL on either side voids
+// too, because we cannot show the two agree, and the standard's one-sided error budget says
+// an unproven signal does not get to exclude.
+export function probeDescribes(rowUrl: string, probeUrl: string): boolean {
+  const rowHost = hostOf(rowUrl);
+  const probeHost = hostOf(probeUrl);
+  if (rowHost === null || probeHost === null) return false;
+  if (rowHost !== probeHost) return false;
+  return urlKind(rowUrl) === urlKind(probeUrl);
+}
+
 function isChainStep(probe: ProbeEvidence, row: ProbeServeabilityRow): boolean {
   // Both titles and both URLs, because either copy is enough: the stored title is what a
   // learner is shown, the rendered one is what the page says it is, and a stored URL that
@@ -123,6 +161,11 @@ export function classifyServeabilityFromProbe(
 ): ProbeServeabilityOutcome {
   if (!probe) return { evidence: false, reason: 'no-probe' };
   if (probe.blocked) return { evidence: false, reason: 'blocked' };
+  // Routed to the EXISTING no-evidence arm rather than given a fourth outcome: a probe that
+  // does not describe this row is precisely an absence of evidence about it, which is what
+  // that arm already means and already prevents from being read as a pass. Its own reason,
+  // because a caller counting voided probes has to tell them from rows nobody ever probed.
+  if (!probeDescribes(row.url, probe.url)) return { evidence: false, reason: 'probe-voided' };
 
   if (isChainStep(probe, row)) {
     return { evidence: true, serveable: false, clause: 4, reason: 'chain-step' };
