@@ -234,6 +234,16 @@ DATABASE_URL="$SUPABASE_POOLER_URL" npx tsx --env-file=.env.local .claude/skills
   to run without `--target-host=<hostname>` naming the target explicitly
   (`scripts/target-guard.ts`). Documented here only so the extra flag is not a
   surprise.
+- **The library-standard drivers** carry the same guard and are dry-run by
+  default, so `--apply` is always explicit and always preceded by a printed run
+  a human has read. `report-serveability.ts` is read-only and has no `--apply`
+  at all; `sweep-serveability.ts` deprecates, re-types and queues-for-decompose;
+  `repoint-khan-pt.ts` points Khan talkthrough rows at their embedded video.
+  Run them through the launcher so the credential never becomes a shell word:
+  `npx tsx --env-file=.env.local scripts/run-against-prod.ts scripts/<driver>.ts`.
+  The sweep's population must agree with the report's — if the two clause tables
+  disagree, one of them has a stale copy of a rule, which has happened once.
+  Rules in `library-enforcement.md`.
 - **Admin-only probes on the deployed service** (`/api/health?probe=throw`,
   `probe=ai`) — those are `withAdminAuth` routes, so the operator token now
   reaches them: `scripts/operator-curl.sh "/api/health?probe=ai" -s`. See

@@ -15,13 +15,13 @@ work — write a new plan instead.
 | Plan | Status | Open blocks |
 | --- | --- | --- |
 | [library-quality.md](library-quality.md) | active, not started | Q1–Q8 |
-| [resource-serveability.md](resource-serveability.md) | active, not started | S1–S9 |
 | [tutor-agent.md](tutor-agent.md) | active, not started | T1–T4 |
 
 ## Archive
 
 | Plan | Shipped | Blocks |
 | --- | --- | --- |
+| [archive/resource-serveability.md](archive/resource-serveability.md) | 2026-08-18 | S1–S9 (#350–#358), C1–C2 (#359–#360) |
 | [archive/resource-reports.md](archive/resource-reports.md) | 2026-08-09 | R1–R8 (#310–#317), F1–F7 (#320–#326) |
 | [archive/free-beta.md](archive/free-beta.md) | 2026-08-04 | A1–A4, B1, C1–C2, D1–D4, E1–E2 |
 | [archive/rung0-starvation.md](archive/rung0-starvation.md) | 2026-08-01 | R0–R3 (#295–#300) |
@@ -36,11 +36,11 @@ are in shipped PR titles and in source comments:
 
 | Prefix | Claimed by | Note |
 | --- | --- | --- |
-| `A` `B` `C` `D` `E` | free-beta | |
+| `A` `B` `C` `D` `E` | free-beta | `C` collides — see below |
 | `F` | resource-reports (review-fix chain) | |
 | `Q` | library-quality | |
 | `R` | resource-reports, rung0-starvation | collision, pre-registry |
-| `S` | resource-serveability | |
+| `S` | resource-serveability | its post-review follow-ups are `C1`–`C2`, colliding with free-beta's `C` |
 | `T` | topic-filing, tutor-agent | collision, pre-registry |
 
 New plans pick an unclaimed letter. `G`–`P`, `U`–`Z` are free.
