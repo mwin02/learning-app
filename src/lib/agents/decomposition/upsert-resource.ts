@@ -33,7 +33,11 @@ import { listCanonicals } from '@/lib/agents/topic-registry';
 import { safeClassifyAndPersist } from '@/lib/curation/embeddability';
 import { computeTrustScore } from '@/lib/curation/trust-score';
 import { classifyNonTeaching } from '@/lib/curation/non-teaching';
-import { classifyServeability } from '@/lib/curation/serveability';
+import {
+  classifyServeability,
+  type ServeabilityInput,
+  type ServeabilityVerdict,
+} from '@/lib/curation/serveability';
 import { youtubeEngagementSignal } from '@/lib/curation/youtube-signal';
 import { normalizeResourceUrl } from './normalize-url';
 import { crediblePageTitle } from './page-title';
@@ -112,6 +116,33 @@ type EmbedTask = {
   conceptsTaught: string[];
   embedded?: boolean;
 };
+
+// C2: which serveability verdicts may deprecate a row AT CREATION. Clause 5 rests on what
+// the row itself records — its form, or a content-kind segment Khan wrote into its URL —
+// and ingestion genuinely knows both. Clause 3 does not: it fires on `decompositionStatus
+// === 'atomic'`, and at creation `atomic` is a DEFAULT, not a judgement — `classify()`
+// returns it for any non-container type without fetching the page (`router.ts`), and
+// CONTAINER_TYPES is only a candidate signal the doc-TOC router overrides by READING the
+// page. Clause 3 is about what a page does, and nothing here has looked at the page.
+//
+// So a clause-3 row is created in its normal state and the warning carries the signal on.
+// It is `pending_review`, which `searchResources` counts as selectable, so a Khan unit page
+// can reach a learner until someone reviews it. Accepted: the standard's error budget is
+// one-sided (an admitted weak row stays visible to review and the next audit; an excluded
+// real lesson is gone from retrieval permanently and invisibly), and the two checks that
+// CAN see the page — the review rubric's "teaches directly" item, and the sweep — both
+// cover clause 3.
+function deprecatesAtIngestion(verdict: ServeabilityVerdict, input: ServeabilityInput): boolean {
+  if (verdict.serveable) return false;
+  if (verdict.clause === 5) return true;
+  // Clause 3 does not deprecate, but it must not MASK a clause-5 failure either:
+  // `classifyServeability` returns the container verdict first and so never reaches the
+  // interactive rule below it. Omitting `decompositionStatus` disables exactly the
+  // container rule and nothing else (see `ServeabilityInput`), which asks the rest of the
+  // question. Reaching here means the status was `atomic`, and the interactive rule reads
+  // `atomic` and `undefined` identically — it tests only for an explicit `decomposed`.
+  return !classifyServeability({ type: input.type, url: input.url }).serveable;
+}
 
 export async function upsertResource(
   topic: string,
@@ -214,11 +245,13 @@ export async function upsertResource(
   // as the furniture branch in createChild below, and for the same reason: the row is still
   // CREATED (its URL must stay known, or the next discovery re-admits it with nothing for
   // the F8 dedup to collapse onto) but enters soft-deprecated, out of the pickable set.
-  const serveability = classifyServeability({
+  // C2: every failed verdict is still reported; only a clause-5 one deprecates here.
+  const rootServeInput = {
     type: parentType,
     url,
     decompositionStatus: decomposition.status,
-  });
+  };
+  const serveability = classifyServeability(rootServeInput);
   if (!serveability.serveable) {
     logWarn('upsert-resource.unserveable_root', {
       url,
@@ -227,6 +260,7 @@ export async function upsertResource(
       reason: serveability.reason,
     });
   }
+  const rootExcluded = deprecatesAtIngestion(serveability, rootServeInput);
 
   const decision = filing ?? defaultFiling(topic);
   // Q4: classify the children on their own content before the transaction opens (network
@@ -266,8 +300,8 @@ export async function upsertResource(
           likeCount: resource.youtube?.likeCount ?? null,
           youtubeChannelId: resource.youtube?.channelId ?? null,
           origin: 'agent',
-          status: serveability.serveable ? 'pending_review' : 'deprecated',
-          ...(serveability.serveable ? {} : { deprecationSeverity: 'soft' as const }),
+          status: rootExcluded ? 'deprecated' : 'pending_review',
+          ...(rootExcluded ? { deprecationSeverity: 'soft' as const } : {}),
           trustScore: sourceTrust,
           sourceId: source.id,
           decompositionStatus: decomposition.status,
@@ -301,7 +335,9 @@ export async function upsertResource(
       // unserveable root is excluded on the same rule the furniture branch uses: this
       // list flows into `atomicIds`, i.e. retrieval's discovery allowlist, so a
       // deprecated row on it would undo the deprecation a few lines after writing it.
-      if (decomposition.status === 'atomic' && serveability.serveable) {
+      // The gate is `rootExcluded`, not the raw verdict: a clause-3 row is created
+      // pickable, so it belongs on this list like any other admitted atomic root.
+      if (decomposition.status === 'atomic' && !rootExcluded) {
         embedTasks.push({
           id: parent.id,
           url,
@@ -639,13 +675,12 @@ async function createChild(
   // Serveability S2: a second, independent question over the same row — furniture asks
   // whether the page teaches at all, this asks whether what it teaches is something the
   // learner is meant to PERFORM (or a container filed as a leaf). Both classifiers run and
-  // both are reported; either one failing lands the row in the same soft-deprecated state.
+  // both are reported; furniture, or a clause-5 verdict, lands the row in the same
+  // soft-deprecated state. C2: a clause-3 verdict reports and admits — see
+  // `deprecatesAtIngestion`.
   const childType = child.type as ResourceType;
-  const serveability = classifyServeability({
-    type: childType,
-    url,
-    decompositionStatus: decompStatus,
-  });
+  const childServeInput = { type: childType, url, decompositionStatus: decompStatus };
+  const serveability = classifyServeability(childServeInput);
   if (!serveability.serveable) {
     logWarn('upsert-resource.unserveable_child', {
       url,
@@ -655,7 +690,7 @@ async function createChild(
       parentId,
     });
   }
-  const excluded = furniture.nonTeaching || !serveability.serveable;
+  const excluded = furniture.nonTeaching || deprecatesAtIngestion(serveability, childServeInput);
 
   const childSum = containerDuration(child.children ?? []);
   const slug = await uniqueSlug(tx, child.title, url, taken);
