@@ -11,7 +11,7 @@ This version has breaking changes — APIs, conventions, and file structure may 
 | Component | Where | Deploys how |
 | --- | --- | --- |
 | Next.js app | Cloud Run service `learning-app`, `us-west1`, `min-instances=0` | **automatic** on every merge to `main` **that touches code** (`deploy-main` Cloud Build trigger → `cloudbuild.yaml`; see the `ignoredFiles` note below) |
-| Course worker | GCE `e2-micro` on Container-Optimized OS, `us-central1-a` | **manual**: build → `add-metadata worker-image=…` → `instances reset` (`worker-deploy.md` §9) |
+| Course worker | GCE `e2-micro` on Container-Optimized OS, `us-west1-a` | **manual**: build → `add-metadata worker-image=…` → `instances reset` (`worker-deploy.md` §9) |
 | DB + auth | Supabase, `aws-1-us-west-1` | — |
 | Migrations | a step inside `cloudbuild.yaml`, before the deploy | with the app |
 

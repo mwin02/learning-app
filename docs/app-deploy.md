@@ -70,10 +70,17 @@ nothing connects at build time and no placeholder is baked into the output.
 ## 1. Local verification (D1 gate — run this before any cloud step)
 
 ```bash
-set -a; . ./.env.local; set +a
+# Both values are public by design (§0) and live in the trigger's substitutions.
+# Do NOT source .env.local for them — see the note under §3.
+SUPABASE_URL=$(gcloud builds triggers describe deploy-main \
+  --project learning-app-prod-mzw --region us-west1 \
+  --format='value(substitutions._SUPABASE_URL)')
+SUPABASE_ANON_KEY=$(gcloud builds triggers describe deploy-main \
+  --project learning-app-prod-mzw --region us-west1 \
+  --format='value(substitutions._SUPABASE_ANON_KEY)')
 docker build -t learning-app \
-  --build-arg NEXT_PUBLIC_SUPABASE_URL="$NEXT_PUBLIC_SUPABASE_URL" \
-  --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY="$NEXT_PUBLIC_SUPABASE_ANON_KEY" .
+  --build-arg NEXT_PUBLIC_SUPABASE_URL="$SUPABASE_URL" \
+  --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" .
 ```
 
 Run it against the local Docker Postgres. `--env-file` does **not** strip
@@ -137,16 +144,33 @@ throwaway migrator image, build the app image, push, `prisma migrate deploy`,
 then `gcloud run deploy`. Read its header comments before changing it.
 
 ```bash
-set -a; . ./.env.local; set +a
-gcloud builds submit --project $PROJECT_ID --config cloudbuild.yaml \
+SUPABASE_URL=$(gcloud builds triggers describe deploy-main --project $PROJECT_ID \
+  --region $REGION --format='value(substitutions._SUPABASE_URL)')
+SUPABASE_ANON_KEY=$(gcloud builds triggers describe deploy-main --project $PROJECT_ID \
+  --region $REGION --format='value(substitutions._SUPABASE_ANON_KEY)')
+gcloud builds submit --project $PROJECT_ID --region $REGION --config cloudbuild.yaml \
   --substitutions=_TAG=$(git rev-parse --short HEAD),\
-_SUPABASE_URL="$NEXT_PUBLIC_SUPABASE_URL",_SUPABASE_ANON_KEY="$NEXT_PUBLIC_SUPABASE_ANON_KEY" .
+_SUPABASE_URL="$SUPABASE_URL",_SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" .
 ```
 
 ~4m30s end to end. Cloud Build rather than a local `docker build` for the same
 reason as the worker: Apple Silicon produces an arm64 image Cloud Run can't
 run. Substitutions rather than a bare `--tag` because the two `NEXT_PUBLIC_*`
 values are **build args** (§0).
+
+> **Where the two values come from — and why not `.env.local`.** This block used
+> to open with `set -a; . ./.env.local; set +a`, which contradicts AGENTS.md
+> § "Secrets: never let one transit your shell as a value": sourcing loads
+> *every* key in the file into the environment of everything downstream, and a
+> command that fails while holding one may echo it. The trigger already stores
+> these two as substitutions, so read them from there. It is safe to put them in
+> shell variables because they are not secrets — the anon key is publishable and
+> is inlined into the client bundle (§0) — and it is the same pair the automatic
+> deploy uses, so a manual build cannot drift from a triggered one.
+>
+> **Pass `--region`.** Builds in this project are regional; without the flag the
+> submit goes to the global backend and `gcloud builds list` will not show it
+> next to the triggered builds (AGENTS.md makes the same point about `list`).
 
 Two traps this ran into, both now fixed in the repo but worth knowing:
 
