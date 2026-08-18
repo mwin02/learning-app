@@ -412,6 +412,7 @@ async function delegate(
     case 'edit': {
       const result = await updateResource(resourceId, input.fields);
       if (result.kind === 'not_found') return { refused: 'resource no longer exists' };
+      if (result.kind === 'refused') return { refused: result.reason };
       const stale = result.embeddingStale ? '; embedding stale' : '';
       const warning = result.warning ? ` — ${result.warning}` : '';
       return { outcome: `edited ${result.changed.join(', ')}${stale}${warning}` };
