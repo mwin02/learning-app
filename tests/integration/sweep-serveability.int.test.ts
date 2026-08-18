@@ -154,6 +154,74 @@ describe('sweep-serveability — the three-way precedence (pure)', () => {
     });
   });
 
+  // A probe is keyed by resourceId, so it describes the page the row pointed at WHEN PROBED.
+  // Letting a stale one answer a serveability question answers it about somebody else's page.
+  describe('a probe only decides about the row it actually describes', () => {
+    // The Khan challenge page S9 repoints away from: an in-browser editor and nothing to
+    // read, which is `editor-no-prose` on any row it is allowed to judge.
+    const TITLE = 'Challenge: bouncing ball';
+    const challengeProbe = (url: string): ProbeEvidence => ({
+      ...articleProbe(url, TITLE),
+      pageKind: 'challenge',
+      articleWords: null,
+      articleWordsBeforeExpand: null,
+      mainWords: null,
+      hasEditor: true,
+    });
+    // Titles held equal throughout so clause 6's title comparison stays out of the way; each
+    // case below is about the URL disagreement it names, nothing else.
+    const STORED = 'https://www.khanacademy.org/computing/sql/a/creating-a-table';
+    const judge = (url: string, probeUrl: string, type: 'article' | 'video' = 'article') =>
+      analyse(row({ url, title: TITLE, type }), challengeProbe(probeUrl), false);
+
+    // The regression this check exists for. Sequence: sweep --apply, repoint --apply, sweep
+    // again — and before the fix the second sweep deprecated the ten attached SQL lessons S9
+    // had just rescued, because the repointed row still carried its Khan challenge probe.
+    it('does not deprecate a repointed row still carrying its old Khan probe', () => {
+      const a = judge(
+        'https://www.youtube.com/watch?v=abc123',
+        'https://www.khanacademy.org/computing/sql/pt/challenge-book-list',
+        'video',
+      );
+      expect(a).toMatchObject({ probeVoided: true, failures: [] });
+      expect(planFor(a)).toEqual({ action: 'none', reason: 'clean' });
+    });
+
+    // The other half of the same bug: the landed page belongs to different content, which is
+    // exactly what `url-redirects-across-kinds` says — so it cannot also be the evidence that
+    // condemns the row.
+    it('withholds a verdict when the stored URL now serves a different content kind', () => {
+      const a = judge(STORED, STORED.replace('/a/', '/pt/'));
+      expect(a).toMatchObject({
+        probeVoided: true,
+        failures: [],
+        // Clause 6 still sees the redirect and still reports it — voiding the SERVEABILITY
+        // verdict must not delete the finding that explains the row.
+        discrepancies: [{ kind: 'url-redirects-across-kinds', repair: 'review' }],
+      });
+      expect(planFor(a)).toEqual({ action: 'none', reason: 'review-only' });
+    });
+
+    it('voids a probe whose host disagrees, even at the same content kind', () => {
+      const a = judge(STORED, 'https://example.invalid/x/a/creating-a-table');
+      expect(a).toMatchObject({ probeVoided: true, failures: [] });
+    });
+
+    // ⚠️ Slug drift is normal and common on Khan, and voiding on it would silently discard
+    // most of the page evidence the library has. Only kind and host disagreement void.
+    it('still counts a probe that merely drifted slug', () => {
+      const a = judge(STORED, `${STORED}-and-inserting-data`);
+      expect(a.probeVoided).toBe(false);
+      expect(planFor(a)).toMatchObject({ action: 'deprecate', rule: '5:editor-no-prose' });
+    });
+
+    it('still counts a probe that landed on exactly this page', () => {
+      const a = judge(STORED, STORED);
+      expect(a.probeVoided).toBe(false);
+      expect(planFor(a)).toMatchObject({ action: 'deprecate', rule: '5:editor-no-prose' });
+    });
+  });
+
   describe('a re-type clears a duration only when the re-type itself makes it wrong', () => {
     const khanVideoUrl = 'https://www.khanacademy.org/math/x/v/bayes-theorem';
 
