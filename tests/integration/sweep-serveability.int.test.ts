@@ -123,16 +123,32 @@ describe('sweep-serveability — the three-way precedence (pure)', () => {
 
   // S4 deliberately picks no winner between two re-type targets, and neither may the sweep —
   // including by falling through to the deprecation the row is otherwise eligible for.
-  it('refuses a row whose two re-type findings name different targets', () => {
-    // The production row this encodes: a `/a/` URL (so the URL says `article`) that now
-    // serves, and declares itself, a video. Two `retype` findings, two targets, no winner.
+  it('refuses a row whose URL kind and page kind contradict each other', () => {
+    // The production row this encodes (`cmqwq0cr0001eihm5166cir1c`): a `/a/` URL (so the URL
+    // says `article`) that now serves, and declares itself, a video.
     const url = 'https://www.khanacademy.org/math/linear-algebra/x/a/linear-combinations-and-span';
     const probe = { ...articleProbe(url.replace('/a/', '/v/'), 'Linear combinations and span'), pageKind: 'video' };
     expect(plan({ url, title: 'Linear combinations and span', type: 'interactive' }, probe)).toEqual({
       action: 'none',
-      reason: 'retype-target-conflict',
+      reason: 'type-signal-conflict',
     });
   });
+
+  // ⚠️ THE OSCILLATION C3 CLOSED. Before it, the row's STORED type decided which of the two
+  // contradictory signals was visible, so each sweep planned the retype the previous one had
+  // just undone — three production rows flipped between `article` and `video` forever. The
+  // conflict is a property of the two signals, so every stored type must reach the same plan.
+  it.each(['article', 'video', 'interactive'] as const)(
+    'plans the same escalation whatever the row is typed (%s)',
+    (type) => {
+      const url = `https://www.khanacademy.org/math/${MARK}/a/continuity-at-a-point`;
+      const probe = { ...articleProbe(url, 'Exploring continuity at a point'), pageKind: 'video' };
+      expect(plan({ url, title: 'Exploring continuity at a point', type }, probe)).toEqual({
+        action: 'none',
+        reason: 'type-signal-conflict',
+      });
+    },
+  );
 
   it('leaves a clean row alone', () => {
     expect(plan()).toEqual({ action: 'none', reason: 'clean' });

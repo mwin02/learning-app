@@ -274,12 +274,78 @@ describe('a row can lie about more than one thing at a time', () => {
     expect(found.every((d) => d.repair === 'retype' && d.to === 'article')).toBe(true);
   });
 
-  // ⚠️ Two retypes naming DIFFERENT targets are both reported rather than silently resolved.
-  // A caller that means to act must treat the disagreement as an escalation.
-  it('does not pick a winner when the two retype signals disagree', () => {
+  // ⚠️ Two retypes naming DIFFERENT targets would be reported rather than silently resolved —
+  // but when the two SIGNALS are what disagree, no retype is reported at all. See below.
+  it('does not pick a winner when the two type signals disagree', () => {
     const found = checked(row({ type: 'interactive' }), probe({ pageKind: 'video' }));
-    const targets = found.filter((d) => d.repair === 'retype').map((d) => (d.repair === 'retype' ? d.to : null));
-    expect(targets).toEqual(['article', 'video']);
+    expect(found.some((d) => d.repair === 'retype')).toBe(false);
+  });
+});
+
+// ⚠️ THE OSCILLATION. Comparisons 1 and 2 are both written against `row.type`, so on a Khan
+// `/a/` URL that renders a video only one of them is ever active — and applying its repair
+// activates the other. Three production rows flipped between `article` and `video` on
+// alternating sweeps because of it. The contradiction is between the two SIGNALS, so it is
+// detected without reference to the stored type and it suppresses both retypes.
+describe('the URL kind and the page kind contradict each other', () => {
+  // The rendered title is held equal to the stored one throughout, so comparison 4 stays out
+  // of the way and each assertion is about the type conflict alone.
+  const conflicted = (type: MetadataIntegrityRow['type']) =>
+    checked(
+      row({ type, title: 'Introduction to residuals' }),
+      probe({ pageKind: 'video', title: 'Introduction to residuals (video) | Khan Academy' }),
+    );
+
+  it('reports one review finding and no retype, whatever the row is currently typed', () => {
+    for (const type of ['article', 'video', 'interactive'] as const) {
+      expect(conflicted(type)).toEqual([
+        {
+          kind: 'type-url-page-conflict',
+          clause: 6,
+          repair: 'review',
+          detail:
+            `a /a/ URL whose page declares itself a video — no re-type target is trustworthy ` +
+            `(stored type '${type}')`,
+        },
+      ]);
+    }
+  });
+
+  // Applying either target must not turn the row into a finding naming the other one: that
+  // round trip IS the defect, so it is asserted as a round trip rather than case by case.
+  it('says the same thing before and after either repair would have been applied', () => {
+    expect(kinds(conflicted('article'))).toEqual(kinds(conflicted('video')));
+  });
+
+  // Without a page there is no second signal and therefore no contradiction — the free rule
+  // stands exactly as it did.
+  it('leaves the no-probe path alone', () => {
+    const out = classifyMetadataIntegrity(row({ type: 'video' }));
+    if (out.pageChecked) throw new Error('unreachable');
+    expect(out.rowDiscrepancies).toMatchObject([
+      { kind: 'type-contradicts-url', repair: 'retype', to: 'article' },
+    ]);
+  });
+
+  // The ordinary case, and the one that must not regress: the two signals AGREE and only the
+  // stored type is wrong, so both retypes fire and both name the same target.
+  it('still retypes when the two signals agree', () => {
+    const found = checked(row({ type: 'interactive' }), probe());
+    expect(kinds(found)).toEqual(['type-contradicts-url', 'type-contradicts-page']);
+    expect(found.every((d) => d.repair === 'retype' && d.to === 'article')).toBe(true);
+  });
+
+  // The production escalation row: a `/a/` URL that now redirects to, and declares itself,
+  // a video. The conflict replaces the two retypes; comparison 3 is untouched by it. (The
+  // title comparison is separately suppressed here — the probe describes a different kind,
+  // so it does not describe this row.)
+  it('keeps the redirect finding alongside the conflict', () => {
+    const found = checked(
+      row({ type: 'interactive', title: 'Linear combinations and span' }),
+      probe({ url: VIDEO_URL, pageKind: 'video', title: 'Central limit theorem (video) | Khan Academy' }),
+    );
+    expect(kinds(found)).toEqual(['type-url-page-conflict', 'url-redirects-across-kinds']);
+    expect(found.every((d) => d.repair === 'review')).toBe(true);
   });
 });
 
