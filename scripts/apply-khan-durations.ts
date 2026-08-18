@@ -108,7 +108,7 @@ function arg(name: string): string | undefined {
 // video id read from a page usually resolves for zero quota and zero network. The Data
 // API is the fallback for ids the cache does not carry (a video published after the
 // index was built, or one outside Khan's main channel).
-async function youtubeDurations(videoIds: string[]): Promise<Map<string, number>> {
+export async function youtubeDurations(videoIds: string[]): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   const key = process.env.YOUTUBE_API_KEY?.trim();
   if (!key) {
@@ -131,6 +131,17 @@ async function youtubeDurations(videoIds: string[]): Promise<Map<string, number>
     }
   }
   return out;
+}
+
+// The 9,310-video channel index as a plain id → seconds map. Exported alongside the Data API
+// fallback above so `repoint-khan-pt.ts` resolves a Khan video id exactly the way this driver
+// does — cache first, API for the remainder — instead of growing a second copy of the lookup.
+export function loadCachedVideoDurations(): Map<string, number> {
+  return new Map<string, number>(
+    existsSync(INDEX_CACHE)
+      ? (JSON.parse(readFileSync(INDEX_CACHE, 'utf8')) as KhanVideo[]).map((v) => [v.videoId, v.durationSeconds])
+      : [],
+  );
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────
@@ -185,11 +196,7 @@ async function main() {
 
   // Resolve every video id first: the cache answers most of them for free, and the rest
   // go to the Data API in one batched call rather than one per row.
-  const cache = new Map<string, number>(
-    existsSync(INDEX_CACHE)
-      ? (JSON.parse(readFileSync(INDEX_CACHE, 'utf8')) as KhanVideo[]).map((v) => [v.videoId, v.durationSeconds])
-      : [],
-  );
+  const cache = loadCachedVideoDurations();
   // Every id a proposal could spend: the one id a video row resolves, and every clip an
   // article embeds (those count toward its duration). A row whose stored URL redirected
   // across content kinds is excluded — it is unknown regardless of what its page embeds,
@@ -304,9 +311,13 @@ async function main() {
   console.log(`✓ wrote ${writes.length} row(s).\n`);
 }
 
-main()
-  .catch((e) => {
-    console.error(e);
-    process.exitCode = 1;
-  })
-  .finally(() => prisma.$disconnect());
+// Guarded so `repoint-khan-pt.ts` can import the two YouTube helpers above without this
+// driver running as a side effect of the import. Same guard shape as `sweep-serveability.ts`.
+if (process.argv[1]?.endsWith('apply-khan-durations.ts')) {
+  main()
+    .catch((e) => {
+      console.error(e);
+      process.exitCode = 1;
+    })
+    .finally(() => prisma.$disconnect());
+}
