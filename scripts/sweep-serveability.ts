@@ -49,10 +49,16 @@
 // short-circuit S6's schema header and S7's skill both warn about, and would defeat the
 // decomposition this repair exists to trigger. Only `decompositionStatus` moves.
 //
-// ⚠️ TWO RE-TYPE FINDINGS NAMING DIFFERENT TARGETS ARE AN ESCALATION, NOT A CHOICE. S4
+// ⚠️ A ROW WHOSE TYPE SIGNALS CONTRADICT EACH OTHER IS AN ESCALATION, NOT A CHOICE. S4
 // deliberately picks no winner and neither does this driver: such a row is printed loudly,
 // counted separately, and left untouched — including untouched by the deprecation it would
-// otherwise be eligible for.
+// otherwise be eligible for. C3 moved the DETECTION into `metadata-integrity.ts`, where the
+// URL's kind and the page's declared kind are compared to each other rather than each to the
+// stored type: a Khan `/a/` URL rendering a video contradicts itself no matter what the row
+// is typed, so only one of the two retypes could ever fire and applying it flipped the row
+// back and forth on every pass (3 production rows, found by re-running this sweep). The
+// driver now keys off that one `type-url-page-conflict` finding. The two-targets check below
+// is kept as a residue — unreachable through the classifier, and still the right refusal.
 //
 // Khan `/pt/` rows are SKIPPED ENTIRELY and counted: S9 repoints them at their embedded
 // video, and deprecating them here would destroy the ten attached SQL lessons that block
@@ -139,7 +145,7 @@ export type Analysis = {
 type SkipReason =
   | 'clean'
   | 'khan-pt' // S9's population
-  | 'retype-target-conflict' // escalation: two targets, no winner picked
+  | 'type-signal-conflict' // escalation: the URL and the page disagree, no winner picked
   | 'review-only' // a real clause-6 finding that does not say what the row should become
   | 'already-decided' // deprecated: outside the actionable population
   | 'in-decomposition-queue' // pending/human_review: the reject seam refuses it too
@@ -235,9 +241,19 @@ export function planFor(a: Analysis): Plan {
     return { action: 'none', reason: 'clean' };
   }
 
+  // The URL's own kind and the page's declared kind contradict each other, so neither names a
+  // target this driver may act on. Checked before every repair, including the deprecation the
+  // row would otherwise be eligible for.
+  if (a.discrepancies.some((d) => d.kind === 'type-url-page-conflict')) {
+    return { action: 'none', reason: 'type-signal-conflict' };
+  }
+
   const retypes = a.discrepancies.filter((d) => d.repair === 'retype');
   const targets = [...new Set(retypes.map((d) => d.to))];
-  if (targets.length > 1) return { action: 'none', reason: 'retype-target-conflict' };
+  // Unreachable while the classifier emits the conflict finding above, and kept anyway: this
+  // driver refuses to pick a winner between two targets on its own authority, not on the
+  // assumption that its input can no longer contain them.
+  if (targets.length > 1) return { action: 'none', reason: 'type-signal-conflict' };
 
   if (!ACTIONABLE_STATUS.includes(row.status)) return { action: 'none', reason: 'already-decided' };
 
@@ -435,7 +451,7 @@ function report(planned: Planned[]) {
   console.log('');
   for (const [reason, label] of [
     ['khan-pt', 'skipped: Khan /pt/ — S9 repoints these at their embedded video'],
-    ['retype-target-conflict', '⚠ SKIPPED: two re-type findings naming DIFFERENT targets — escalation, no winner picked'],
+    ['type-signal-conflict', '⚠ SKIPPED: the URL kind and the page kind CONTRADICT each other — escalation, no winner picked'],
     ['review-only', 'skipped: clause-6 `review` finding only — a separate review campaign, see report-serveability.ts'],
     ['already-decided', 'skipped: already deprecated — outside the actionable population'],
     ['in-decomposition-queue', 'skipped: pending/human_review — the reject seam refuses it too'],
@@ -457,9 +473,11 @@ function report(planned: Planned[]) {
     for (const p of ps) detail(p.analysis, lead(p));
   }
 
-  const escalated = of('none', 'retype-target-conflict');
+  const escalated = of('none', 'type-signal-conflict');
   if (escalated.length > 0) {
-    section(`⚠ ESCALATION — ${escalated.length} row(s) with two re-type targets, LEFT UNTOUCHED`);
+    section(
+      `⚠ ESCALATION — ${escalated.length} row(s) whose URL and page disagree about the form, LEFT UNTOUCHED`,
+    );
     for (const p of escalated) {
       detail(p.analysis, p.analysis.row.id);
       for (const d of p.analysis.discrepancies) console.log(`      ${repairOf(d).padEnd(15)} ${d.detail}`);

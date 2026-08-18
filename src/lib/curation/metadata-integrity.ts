@@ -35,6 +35,16 @@
 // lies have different repairs. Nothing here collapses or ranks them; two `retype` findings
 // that name DIFFERENT targets are both reported, and a caller that means to act on one must
 // treat the disagreement as an escalation rather than picking a winner.
+//
+// ⚠️ AND COMPARISONS 1 AND 2 CAN CONTRADICT EACH OTHER, WHICH IS NOT THAT CASE. Both are
+// written against `row.type`, so on a Khan `/a/` URL whose page renders a video only ONE of
+// them is ever active — stored `article` fires comparison 2 (→ video), stored `video` fires
+// comparison 1 (→ article). Acting on whichever fired satisfies one signal and breaks the
+// other, so the next pass flips it back: three production rows oscillated exactly like this.
+// The contradiction is between the SIGNALS, not between the row and either of them, so it is
+// detected independently of `row.type` and reported as one `review` finding
+// (`type-url-page-conflict`) which SUPPRESSES both retypes. No target here is trustworthy,
+// and emitting either is what makes the row flip.
 
 import type { ResourceType } from '@prisma/client';
 import type { KhanProbe } from './khan-probe-duration';
@@ -46,6 +56,7 @@ export type RetypeTarget = 'article' | 'video';
 export type MetadataDiscrepancyKind =
   | 'type-contradicts-url' // comparison 1 — stored `type` vs the stored URL's own kind
   | 'type-contradicts-page' // comparison 2 — stored `type` vs the page's declared kind
+  | 'type-url-page-conflict' // comparisons 1 and 2 disagree with EACH OTHER — no target exists
   | 'url-redirects-across-kinds' // comparison 3 — the stored URL now serves something else
   | 'title-contradicts-page'; // comparison 4 — stored title vs the rendered one
 
@@ -159,13 +170,33 @@ export function classifyMetadataIntegrity(
   // someone else's error page would manufacture findings on rows nobody has seen.
   if (probe.blocked) return { pageChecked: false, reason: 'blocked', rowDiscrepancies };
 
-  const discrepancies = [...rowDiscrepancies];
+  const pageSaysType = PAGE_KIND_TYPE[probe.pageKind];
+
+  // ⚠️ THE SIGNALS THEMSELVES DISAGREE — evaluated before either retype, and against neither
+  // of them the stored type. When the URL says one form and the page declares the other, no
+  // stored type can satisfy both: whichever comparison is silent today fires the moment the
+  // other one's repair is applied, and the row oscillates forever. So this replaces both
+  // rather than joining them, and carries `review` because the evidence names a defect
+  // without naming a form the row should have had.
+  const signalsConflict = Boolean(urlSaysType && pageSaysType && urlSaysType !== pageSaysType);
+
+  // Comparisons 3 and 4 are untouched by this: they read the landed page against the stored
+  // URL and the stored title, neither of which the type disagreement says anything about.
+  const discrepancies: MetadataDiscrepancy[] = signalsConflict
+    ? [
+        {
+          kind: 'type-url-page-conflict',
+          clause: 6,
+          repair: 'review',
+          detail: `a /${storedKind}/ URL whose page declares itself a ${pageSaysType} — no re-type target is trustworthy (stored type '${row.type}')`,
+        },
+      ]
+    : [...rowDiscrepancies];
 
   // Comparison 2 — the page's declared kind against the stored type. This is the rule that
   // catches the row typed `interactive` that Khan serves as an article, which no rule over
   // `type` or `url` can see.
-  const pageSaysType = PAGE_KIND_TYPE[probe.pageKind];
-  if (pageSaysType && row.type !== pageSaysType) {
+  if (!signalsConflict && pageSaysType && row.type !== pageSaysType) {
     discrepancies.push({
       kind: 'type-contradicts-page',
       clause: 6,
