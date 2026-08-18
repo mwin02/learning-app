@@ -33,6 +33,7 @@ import { listCanonicals } from '@/lib/agents/topic-registry';
 import { safeClassifyAndPersist } from '@/lib/curation/embeddability';
 import { computeTrustScore } from '@/lib/curation/trust-score';
 import { classifyNonTeaching } from '@/lib/curation/non-teaching';
+import { classifyServeability } from '@/lib/curation/serveability';
 import { youtubeEngagementSignal } from '@/lib/curation/youtube-signal';
 import { normalizeResourceUrl } from './normalize-url';
 import { crediblePageTitle } from './page-title';
@@ -207,6 +208,26 @@ export async function upsertResource(
           url,
         );
 
+  const parentType = resource.type as ResourceType;
+  // Serveability S2: the discovery root is the least-trusted admission path in the pipeline
+  // and was the unguarded one — `classifyNonTeaching` only ever ran on children. Same shape
+  // as the furniture branch in createChild below, and for the same reason: the row is still
+  // CREATED (its URL must stay known, or the next discovery re-admits it with nothing for
+  // the F8 dedup to collapse onto) but enters soft-deprecated, out of the pickable set.
+  const serveability = classifyServeability({
+    type: parentType,
+    url,
+    decompositionStatus: decomposition.status,
+  });
+  if (!serveability.serveable) {
+    logWarn('upsert-resource.unserveable_root', {
+      url,
+      title: resource.title,
+      clause: serveability.clause,
+      reason: serveability.reason,
+    });
+  }
+
   const decision = filing ?? defaultFiling(topic);
   // Q4: classify the children on their own content before the transaction opens (network
   // calls; and the guardrail's evidence must predate the first insert). Gated on `filing`
@@ -227,7 +248,7 @@ export async function upsertResource(
           topic,
           title: resource.title,
           url,
-          type: resource.type as ResourceType,
+          type: parentType,
           ...parentDuration,
           summary: resource.summary,
           difficulty: resource.difficulty as Difficulty,
@@ -245,7 +266,8 @@ export async function upsertResource(
           likeCount: resource.youtube?.likeCount ?? null,
           youtubeChannelId: resource.youtube?.channelId ?? null,
           origin: 'agent',
-          status: 'pending_review',
+          status: serveability.serveable ? 'pending_review' : 'deprecated',
+          ...(serveability.serveable ? {} : { deprecationSeverity: 'soft' as const }),
           trustScore: sourceTrust,
           sourceId: source.id,
           decompositionStatus: decomposition.status,
@@ -275,8 +297,11 @@ export async function upsertResource(
       if (embedding) await storeEmbedding(parent.id, embedding, tx);
       // ...but only an ATOMIC parent joins embedTasks, which is the pickable set that
       // becomes `atomicIds` (see the type comment). Already-embedded rows still need
-      // their embeddability probe, hence the flag rather than an early exit.
-      if (decomposition.status === 'atomic') {
+      // their embeddability probe, hence the flag rather than an early exit. An
+      // unserveable root is excluded on the same rule the furniture branch uses: this
+      // list flows into `atomicIds`, i.e. retrieval's discovery allowlist, so a
+      // deprecated row on it would undo the deprecation a few lines after writing it.
+      if (decomposition.status === 'atomic' && serveability.serveable) {
         embedTasks.push({
           id: parent.id,
           url,
@@ -611,6 +636,27 @@ async function createChild(
       parentId,
     });
   }
+  // Serveability S2: a second, independent question over the same row — furniture asks
+  // whether the page teaches at all, this asks whether what it teaches is something the
+  // learner is meant to PERFORM (or a container filed as a leaf). Both classifiers run and
+  // both are reported; either one failing lands the row in the same soft-deprecated state.
+  const childType = child.type as ResourceType;
+  const serveability = classifyServeability({
+    type: childType,
+    url,
+    decompositionStatus: decompStatus,
+  });
+  if (!serveability.serveable) {
+    logWarn('upsert-resource.unserveable_child', {
+      url,
+      title: child.title,
+      clause: serveability.clause,
+      reason: serveability.reason,
+      parentId,
+    });
+  }
+  const excluded = furniture.nonTeaching || !serveability.serveable;
+
   const childSum = containerDuration(child.children ?? []);
   const slug = await uniqueSlug(tx, child.title, url, taken);
   const created = await tx.resource.create({
@@ -621,7 +667,7 @@ async function createChild(
       topic: childTopic,
       title: child.title,
       url,
-      type: child.type as ResourceType,
+      type: childType,
       // Same two rules as the parent: a nested container is its children's sum, a
       // leaf is its own vetted claim.
       ...(decompStatus === 'decomposed' && childSum.durationMin != null
@@ -642,8 +688,8 @@ async function createChild(
       conceptsTaught: child.conceptsTaught,
       conceptOrigin: child.conceptOrigin,
       origin: 'agent',
-      status: furniture.nonTeaching ? 'deprecated' : childStatus,
-      ...(furniture.nonTeaching ? { deprecationSeverity: 'soft' as const } : {}),
+      status: excluded ? 'deprecated' : childStatus,
+      ...(excluded ? { deprecationSeverity: 'soft' as const } : {}),
       trustScore,
       sourceId,
       parentResourceId: parentId,
@@ -666,11 +712,12 @@ async function createChild(
 
   // Only atomic leaves are pickable, so only they are embedded post-commit. A child whose
   // vector was already written above still needs its embeddability probe, so it joins the
-  // list flagged rather than being skipped (same shape as the parent path). Furniture is
-  // excluded on the same rule: this list IS the pickable-atomic set (see the EmbedTask
-  // comment), so a deprecated row on it would flow into `atomicIds` and back into
-  // retrieval's discovery allowlist — undoing the deprecation two lines after writing it.
-  if (decompStatus === 'atomic' && !furniture.nonTeaching) {
+  // list flagged rather than being skipped (same shape as the parent path). Furniture and
+  // unserveable rows are excluded on the same rule: this list IS the pickable-atomic set
+  // (see the EmbedTask comment), so a deprecated row on it would flow into `atomicIds` and
+  // back into retrieval's discovery allowlist — undoing the deprecation two lines after
+  // writing it.
+  if (decompStatus === 'atomic' && !excluded) {
     embedTasks.push({
       id: created.id,
       url,
