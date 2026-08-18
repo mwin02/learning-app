@@ -12,7 +12,7 @@
 // stored embedding stale (embeddedAt < updatedAt → the backfill re-embeds; the
 // embedding covers title + summary + conceptsTaught). No extra work needed —
 // the result just flags `embeddingStale: true` so the caller knows the backfill
-// will pick it up. durationMin/difficulty/requiresPurchase don't feed the
+// will pick it up. durationMin/difficulty/requiresPurchase/type don't feed the
 // embedding — the staleness test below is an allowlist of the two fields
 // buildEmbeddingText (ai/embeddings.ts) actually reads, so a new non-embedded
 // field needs no change there.
@@ -26,13 +26,35 @@
 // checked, which is the exact defect Q2 exists to remove. `durationSource` is
 // deliberately NOT a caller-supplied field: the caller cannot assert a
 // provenance other than "I measured it", so it is derived, not passed.
+//
+// S6 — clearing durationMin to null is a RETRACTION, not a measurement, so it
+// stamps `unknown` ("nobody measured or estimated it") rather than `reviewer`. A
+// cleared row stamped `reviewer` would be frozen permanently: the enum documents
+// `reviewer` as the highest authority, which no automated pass may overwrite, so
+// the row would read "a human measured this as nothing" forever and no
+// re-measurement could reach it. A supplied number still stamps `reviewer`, and a
+// `reviewer` row can still be cleared later.
+//
+// S6 — a `type` correction is refused on anything but an `atomic` row: on a
+// container the label has already been acted on (children exist), so changing it
+// is a re-decompose decision rather than an edit. resource-update-schema.ts
+// carries the full reasoning and the re-decompose interaction callers inherit. A
+// type edit takes no provenance stamp — there is no per-field provenance column
+// outside duration, and a single-field one is not worth inventing here; the
+// authorship of the edit lives in the review/report trail that produced it.
 
 import type { Difficulty, ResourceStatus, DecompositionStatus, ResourceType, DurationSource } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { MAX_ATTACHABLE_DURATION_MIN } from '@/lib/config';
+import { RETYPEABLE_TYPES } from '@/lib/api/resource-update-schema';
+
+// Extract, not a bare literal union: if the Prisma enum ever loses one of these
+// values this stops compiling instead of accepting a type the column can't hold.
+type RetypeTarget = Extract<ResourceType, (typeof RETYPEABLE_TYPES)[number]>;
 
 export type ResourceUpdateFields = {
-  durationMin?: number;
+  // null retracts the stored number ("nobody measured this") — see the header.
+  durationMin?: number | null;
   title?: string;
   summary?: string;
   difficulty?: Difficulty;
@@ -40,6 +62,9 @@ export type ResourceUpdateFields = {
   // defect like a wrong duration — deprecating a good resource over it throws the
   // resource away to correct a boolean.
   requiresPurchase?: boolean;
+  // S6: standard clause 6 — the repair for a row whose recorded form is not what
+  // the content is. Atomic rows only; see the header.
+  type?: RetypeTarget;
 };
 
 export type UpdatedResource = {
@@ -57,6 +82,7 @@ export type UpdatedResource = {
 
 export type ResourceUpdateResult =
   | { kind: 'not_found' }
+  | { kind: 'refused'; reason: string }
   | {
       kind: 'updated';
       resource: UpdatedResource;
@@ -82,15 +108,25 @@ export async function updateResource(
 ): Promise<ResourceUpdateResult> {
   const existing = await prisma.resource.findUnique({
     where: { id: resourceId },
-    select: { id: true },
+    select: { id: true, decompositionStatus: true },
   });
   if (!existing) return { kind: 'not_found' };
+
+  if (fields.type !== undefined && existing.decompositionStatus !== 'atomic') {
+    return {
+      kind: 'refused',
+      reason: `type is editable on atomic rows only; this row is ${existing.decompositionStatus} — re-type it through decomposition review (action: 'decompose'), not an edit.`,
+    };
+  }
 
   const resource = await prisma.resource.update({
     where: { id: resourceId },
     data:
       fields.durationMin !== undefined
-        ? { ...fields, durationSource: 'reviewer' as const }
+        ? {
+            ...fields,
+            durationSource: fields.durationMin === null ? ('unknown' as const) : ('reviewer' as const),
+          }
         : fields,
     select: {
       id: true,

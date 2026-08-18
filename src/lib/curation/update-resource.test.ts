@@ -38,7 +38,7 @@ const row = (over: Partial<UpdatedResource> = {}): UpdatedResource => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  findUnique.mockResolvedValue({ id: 'res_1' } as never);
+  findUnique.mockResolvedValue({ id: 'res_1', decompositionStatus: 'atomic' } as never);
 });
 
 describe('updateResource', () => {
@@ -137,12 +137,96 @@ describe('updateResource', () => {
     expect(result).not.toHaveProperty('warning');
   });
 
+  // S6: a cleared duration is a retraction, not a measurement. `reviewer` is the
+  // highest authority in the enum — no automated pass may overwrite it — so
+  // stamping it here would freeze the row at "a human measured it as nothing".
+  it('stamps unknown, not reviewer, when durationMin is cleared to null', async () => {
+    update.mockResolvedValue(row({ durationMin: null, durationSource: 'unknown' }) as never);
+    const result = await updateResource('res_1', { durationMin: null });
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'res_1' },
+        data: { durationMin: null, durationSource: 'unknown' },
+      }),
+    );
+    expect(result).toMatchObject({ kind: 'updated', changed: ['durationMin'] });
+    expect(result).not.toHaveProperty('warning');
+  });
+
+  // The clear stays reachable on a row a reviewer already stamped: `reviewer` is
+  // an authority over automated passes, not a lock against the next reviewer.
+  it('clears a reviewer-stamped duration back to unknown', async () => {
+    findUnique.mockResolvedValue({ id: 'res_1', decompositionStatus: 'atomic' } as never);
+    update.mockResolvedValue(
+      row({ durationMin: null, durationSource: 'unknown', type: 'video' }) as never,
+    );
+    const result = await updateResource('res_1', { type: 'video', durationMin: null });
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { type: 'video', durationMin: null, durationSource: 'unknown' },
+      }),
+    );
+    expect(result).toMatchObject({ kind: 'updated' });
+    if (result.kind === 'updated') expect(result.resource.durationSource).toBe('unknown');
+  });
+
   it('does not warn for an over-ceiling container (not directly attachable)', async () => {
     update.mockResolvedValue(
       row({ decompositionStatus: 'decomposed', durationMin: 1200 }) as never,
     );
     const result = await updateResource('res_1', { durationMin: 1200 });
     expect(result).not.toHaveProperty('warning');
+  });
+
+  // S6: the whole safety argument for a type edit is that an atomic row is
+  // already in the never-examined state. A container's label has been acted on —
+  // children exist — so correcting it there is a re-decompose decision.
+  it.each(['decomposed', 'pending', 'unsupported', 'human_review'] as const)(
+    'refuses a type edit on a %s row and writes nothing',
+    async (decompositionStatus) => {
+      findUnique.mockResolvedValue({ id: 'res_1', decompositionStatus } as never);
+      const result = await updateResource('res_1', { type: 'article' });
+      expect(result).toEqual({
+        kind: 'refused',
+        reason: expect.stringContaining(decompositionStatus),
+      });
+      expect(update).not.toHaveBeenCalled();
+    },
+  );
+
+  it('refuses a type edit on a container even when other fields are valid', async () => {
+    findUnique.mockResolvedValue({ id: 'res_1', decompositionStatus: 'decomposed' } as never);
+    const result = await updateResource('res_1', { type: 'video', title: 'Fine Title' });
+    expect(result.kind).toBe('refused');
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it.each(['article', 'video'] as const)('retypes an atomic row to %s', async (type) => {
+    update.mockResolvedValue(row({ type }) as never);
+    const result = await updateResource('res_1', { type });
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'res_1' }, data: { type } }),
+    );
+    expect(result).toMatchObject({ kind: 'updated', changed: ['type'] });
+    if (result.kind === 'updated') expect(result.resource.type).toBe(type);
+  });
+
+  // type is not in buildEmbeddingText (title + summary + conceptsTaught), so a
+  // re-type must not send the row through the re-embedding backfill.
+  it('does not flag embeddingStale for a type-only edit', async () => {
+    update.mockResolvedValue(row({ type: 'video' }) as never);
+    const result = await updateResource('res_1', { type: 'video' });
+    expect(result).toMatchObject({ kind: 'updated', embeddingStale: false });
+  });
+
+  // A type edit carries no provenance stamp — there is no per-field provenance
+  // column outside duration, and none is invented here.
+  it('does not touch durationSource on a type-only edit', async () => {
+    update.mockResolvedValue(row({ type: 'video' }) as never);
+    await updateResource('res_1', { type: 'video' });
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'res_1' }, data: { type: 'video' } }),
+    );
   });
 });
 
@@ -189,6 +273,32 @@ describe('resourceUpdateSchema', () => {
     expect(() =>
       resourceUpdateSchema.parse({ resourceId: 'res_1', fields: { durationMin: 6000 } }),
     ).not.toThrow();
+  });
+
+  // S6: `type` left the exclusion list, narrowed to the two targets clause 6
+  // needs. The container types stay out — that is decomposition's decision, and
+  // `interactive` is excluded from the library as a class.
+  it.each(['article', 'video'] as const)('accepts type: %s', (type) => {
+    const parsed = resourceUpdateSchema.safeParse({ resourceId: 'r', fields: { type } });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.fields).toEqual({ type });
+  });
+
+  it.each(['book', 'course', 'docs', 'interactive'] as const)('rejects type: %s', (type) => {
+    expect(resourceUpdateSchema.safeParse({ resourceId: 'r', fields: { type } }).success).toBe(
+      false,
+    );
+  });
+
+  // S6: null is "nobody has measured this; re-measure me" — the state a retyped
+  // row needs when its number belonged to the wrong form.
+  it('accepts a null durationMin as a retraction', () => {
+    const parsed = resourceUpdateSchema.safeParse({
+      resourceId: 'r',
+      fields: { durationMin: null },
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.fields).toEqual({ durationMin: null });
   });
 
   it('rejects a missing/blank resourceId', () => {

@@ -2,9 +2,13 @@
 // regardless of status (the review skill fixes pending rows; the cleanup/audit
 // block reuses it on active ones).
 //
-// PATCH — { resourceId, fields: { durationMin?, title?, summary?, difficulty? } }.
-//         Whitelist only; see resource-update-schema.ts for what's excluded and
-//         why. Responds with the updated row + flags: `embeddingStale` when a
+// PATCH — { resourceId, fields: { durationMin?, title?, summary?, difficulty?,
+//         requiresPurchase?, type? } }. Whitelist only; see
+//         resource-update-schema.ts for what's excluded and why, and for the
+//         narrowing on `type` (article | video, atomic rows only — a type edit on
+//         a container is refused as INVALID_INPUT with nothing written) and on
+//         `durationMin` (null clears it back to an unmeasured state).
+//         Responds with the updated row + flags: `embeddingStale` when a
 //         title/summary edit made the stored embedding stale (the backfill will
 //         re-embed), `warning` when the row now sits over the attach ceiling
 //         (surfaced, never auto-parked — lifecycle stays with the review/
@@ -54,6 +58,12 @@ export const PATCH = withAdminAuth(async (req) => {
     const result = await updateResource(input.resourceId, input.fields);
     if (result.kind === 'not_found') {
       return errorResponse(404, 'NOT_FOUND', `Resource ${input.resourceId} not found.`);
+    }
+    // A refusal is a bad request against THIS row's state (a type edit on a
+    // container), not a server fault: nothing was written and the operator has to
+    // choose a different tool.
+    if (result.kind === 'refused') {
+      return errorResponse(400, 'INVALID_INPUT', result.reason);
     }
     return Response.json({
       resource: result.resource,
