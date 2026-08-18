@@ -39,10 +39,10 @@ import { prisma } from '../src/lib/db';
 import { isoDurationToSeconds } from '../src/lib/curation/duration-estimate';
 import {
   proposeKhanDuration,
-  urlKind,
   type KhanMeasured,
   type KhanUnmeasured,
 } from '../src/lib/curation/khan-probe-duration';
+import { urlKind } from '../src/lib/curation/serveability';
 import { checkDuration } from '../src/lib/agents/decomposition/duration-rules';
 import type { KhanVideo } from '../src/lib/sources/khan/youtube-index';
 import { requireTargetAck } from './target-guard';

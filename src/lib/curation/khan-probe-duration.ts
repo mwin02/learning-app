@@ -10,6 +10,7 @@
 // without a database or a browser. `scripts/apply-khan-durations.ts` is the only caller.
 
 import { MIN_CONTENT_WORDS, readingMinutes, secondsToMinutes } from './duration-estimate';
+import { urlKind } from './serveability';
 
 // What the in-page probe reports. Only the fields the mapping READS are declared;
 // the driver's zod schema is the boundary that validates them.
@@ -41,12 +42,6 @@ const unreadable = (evidence: string): KhanUnmeasured => ({
   durationSource: 'unknown',
   evidence,
 });
-
-// Khan's content-type path segment: `/a/` article, `/v/` video, `/e/` exercise,
-// `/pt/` project task, `/pi/` project item. A landing or unit page has none.
-export function urlKind(url: string): string | null {
-  return /\/(a|v|e|pt|pi)\/[^/?#]+/.exec(url)?.[1] ?? null;
-}
 
 export function proposeKhanDuration(
   storedType: 'video' | 'article' | 'interactive',
