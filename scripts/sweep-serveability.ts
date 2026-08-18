@@ -69,8 +69,9 @@
 // ⚠️ AND SAFE TO RE-RUN AFTER S9, which is a stronger claim than idempotence and was NOT true
 // of the first version of this driver. A probe is keyed by resourceId, so a repointed row
 // still carries the probe of the page it used to point at; judging the row on that page
-// deprecated the ten attached `/pt/` lessons S9 had just rescued. `probeDescribes` below is
-// the fix, and it is general — no rule here mentions `/pt/` or YouTube.
+// deprecated the ten attached `/pt/` lessons S9 had just rescued. The fix lives in
+// `classifyServeabilityFromProbe` (`probeDescribes`), so every reader of a probe gets it and
+// this driver and the report cannot disagree about it.
 
 import { readdirSync, readFileSync } from 'node:fs';
 import type { DecompositionStatus, ResourceStatus, ResourceType, DurationSource } from '@prisma/client';
@@ -131,7 +132,7 @@ export type Analysis = {
   // the reconciliation table stays byte-comparable with S5's.
   edxSequential: boolean;
   // A probe existed but describes a different page than this row now points at, so it was
-  // withheld from the serveability verdict. See `probeDescribes`.
+  // withheld from the serveability verdict. See `probeDescribes` in `serveability-probe.ts`.
   probeVoided: boolean;
 };
 
@@ -167,71 +168,29 @@ export function readBatches(dir = BATCH_DIR): Map<string, ProbeEvidence | null> 
   return byResource;
 }
 
-function hostOf(url: string): string | null {
-  try {
-    return new URL(url).hostname.replace(/^www\./, '');
-  } catch {
-    return null;
-  }
-}
-
-// ⚠️ A PROBE IS KEYED BY resourceId, NOT BY URL, so it describes the page that row pointed at
-// WHEN IT WAS PROBED — which is not necessarily the page it points at now. A stale probe that
-// is allowed to answer a serveability question answers it about somebody else's page.
-//
-// The case that forced this, and it is not hypothetical: S9 repoints a Khan `/pt/` row at its
-// embedded video, so `row.url` becomes a youtube.com URL while the stored probe is still the
-// Khan challenge page — `hasEditor: true`, `articleWords: null`. That fires `editor-no-prose`,
-// clause 6 finds nothing to repair (the row is no longer a Khan URL, and `pageKind:
-// 'challenge'` names no retype target), and the sweep falls through to DEPRECATE. Running
-// `sweep --apply`, then `repoint --apply`, then the sweep again — the natural sequence after
-// any classifier change, and the one this driver's header advertises as safe — would
-// soft-deprecate the ten attached SQL lessons S9 exists to save.
-//
-// The same defect, less loudly, on the 7 rows whose stored URL redirects across kinds: the
-// probe judges the landed page while `classifyMetadataIntegrity` simultaneously reports
-// `url-redirects-across-kinds`, whose whole meaning is that the landed page is DIFFERENT
-// CONTENT from this row. One classifier judging a row on a page the other has just declared
-// is not this row's is not a verdict.
-//
-// So: kind or host disagreement voids the probe as evidence about this row.
-// ⚠️ ONLY those two. Slug drift is normal and common on Khan and must still count —
-// `metadata-integrity.ts` draws exactly this line ("the slug alone changing is normal and is
-// deliberately not a finding; the kind changing is not"), and voiding on it would silently
-// discard most of the page evidence the library has. An unparseable URL on either side voids
-// too, because we cannot show the two agree, and the standard's one-sided error budget says
-// an unproven signal does not get to exclude.
-function probeDescribes(rowUrl: string, probeUrl: string): boolean {
-  const rowHost = hostOf(rowUrl);
-  const probeHost = hostOf(probeUrl);
-  if (rowHost === null || probeHost === null) return false;
-  if (rowHost !== probeHost) return false;
-  return urlKind(rowUrl) === urlKind(probeUrl);
-}
-
 export function analyse(row: Row, probe: ProbeEvidence | null, attached: boolean): Analysis {
   const failures: Failure[] = [];
 
   const verdict = classifyServeability(row);
   if (!verdict.serveable) failures.push({ clause: verdict.clause, rule: verdict.reason });
 
-  // Routed to the classifier's EXISTING no-evidence arm rather than given a fourth outcome: a
-  // probe that does not describe this row is precisely an absence of evidence about it, which
-  // is what that arm already means and already prevents from being read as a pass.
-  const probeVoided = probe !== null && !probeDescribes(row.url, probe.url);
-  const fromProbe = classifyServeabilityFromProbe(probeVoided ? null : probe, {
-    url: row.url,
-    title: row.title,
-  });
+  // ⚠️ A PROBE IS KEYED BY resourceId, so it describes the page the row pointed at WHEN IT WAS
+  // PROBED. `classifyServeabilityFromProbe` withholds a verdict when that page is no longer
+  // this row's — `probe-voided`, its own no-evidence reason so this driver can still count
+  // them below. The check lives there rather than here so `report-serveability.ts` gets it too
+  // and the two drivers cannot disagree about the population.
+  const fromProbe = classifyServeabilityFromProbe(probe, { url: row.url, title: row.title });
   if (fromProbe.evidence && !fromProbe.serveable) {
     failures.push({ clause: fromProbe.clause, rule: fromProbe.reason });
   }
+  const probeVoided = !fromProbe.evidence && fromProbe.reason === 'probe-voided';
 
   // ⚠️ The FULL probe, deliberately, voided or not. Comparing a stored field against the page
   // the URL actually lands on is what clause 6 IS — `url-redirects-across-kinds` exists to
   // report exactly the disagreement that voided the probe above, and it reports it as
   // `review`, which repairs nothing on its own. Voiding the probe here too would delete the
-  // finding that explains the row instead of acting on it.
+  // finding that explains the row instead of acting on it. (Comparison 4, the title, is the
+  // one exception and `metadata-integrity.ts` suppresses it there.)
   const meta = classifyMetadataIntegrity(row, probe);
 
   return {
@@ -441,12 +400,10 @@ function reconcile(all: Analysis[]) {
   line('edx-sequential-url — clause 3 on a host no classifier covers (S8-local, absent from S5)',
     all.filter((a) => a.edxSequential));
 
-  // ⚠️ THE ONE PLACE THIS DRIVER KNOWINGLY DISAGREES WITH S5, and the disagreement is the
-  // point: `report-serveability.ts` hands every probe to `classifyServeabilityFromProbe`
-  // keyed only by resourceId, so it still derives clause-4/5 verdicts from probes that no
-  // longer describe their row. Any clause-4/5 line above that differs from the report differs
-  // by these rows, and the report is the one that is wrong. Reported, not fixed here — S5 is
-  // read-only and repairing it is its own block.
+  // Counted, not a disagreement: the check that withholds these probes lives in
+  // `classifyServeabilityFromProbe`, so the report applies it over the same artifacts and the
+  // clause-4/5 lines above match it row for row. Listed because a probe withheld is evidence
+  // the library still lacks, and a re-probe is what would supply it.
   const voided = all.filter((a) => a.probeVoided);
   line('PROBE VOIDED — its landed page is a different host or content kind than this row now serves', voided);
   for (const a of voided) {

@@ -226,6 +226,27 @@ describe('comparison 4 — the stored title against the rendered one', () => {
     ).toEqual([]);
   });
 
+  // ⚠️ THE ONLY COMPARISON A VOIDED PROBE DISABLES. A probe is keyed by resourceId, so a row
+  // repointed since it was probed carries the OLD page's title — and comparing against it
+  // reports a mismatch between two pages that were never meant to share a name. Comparisons
+  // 1–3 are deliberately untouched: reading the page the URL actually reaches is what clause
+  // 6 asks, and `url-redirects-across-kinds` exists to report exactly that disagreement.
+  it('is suppressed when the probe describes a page this row no longer points at', () => {
+    const found = checked(
+      row({ title: 'Creating a table' }),
+      probe({ url: 'https://www.youtube.com/watch?v=abc123', title: 'Challenge: book list' }),
+    );
+    expect(kinds(found)).not.toContain('title-contradicts-page');
+  });
+
+  it('keeps comparison 3 on the same row the title comparison is suppressed for', () => {
+    const found = checked(
+      row({ title: 'Creating a table' }),
+      probe({ url: ARTICLE_URL.replace('/a/', '/pt/'), title: 'Challenge: book list', pageKind: 'challenge' }),
+    );
+    expect(kinds(found)).toEqual(['url-redirects-across-kinds']);
+  });
+
   it('disables itself rather than reporting a missing title as a mismatch', () => {
     expect(checked(row({ title: null }), probe())).toEqual([]);
     expect(checked(row(), probe({ title: null }))).toEqual([]);

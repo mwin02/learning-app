@@ -39,6 +39,7 @@
 import type { ResourceType } from '@prisma/client';
 import type { KhanProbe } from './khan-probe-duration';
 import { isKhanUrl, urlKind } from './serveability';
+import { probeDescribes } from './serveability-probe';
 
 export type RetypeTarget = 'article' | 'video';
 
@@ -200,9 +201,15 @@ export function classifyMetadataIntegrity(
   // as `non-teaching.ts`'s `junk-leaf`: a weak signal is grounds for a closer look, never
   // for acting alone. A missing title on either side disables the rule rather than
   // reporting an empty string as a mismatch.
+  //
+  // ⚠️ AND THE ONE COMPARISON HERE THAT A VOIDED PROBE DISABLES. It is the only one that
+  // reads the landed page as a description OF THIS ROW; comparisons 1–3 read it as the page
+  // the URL actually reaches, which is what clause 6 asks. So a row repointed at different
+  // content since it was probed would otherwise pick up a title mismatch against the old
+  // page's title — a finding about two pages that were never meant to have the same name.
   const storedTitle = normalizeTitle(row.title);
   const renderedTitle = normalizeTitle(probe.title);
-  if (storedTitle && renderedTitle && storedTitle !== renderedTitle) {
+  if (probeDescribes(row.url, probe.url) && storedTitle && renderedTitle && storedTitle !== renderedTitle) {
     discrepancies.push({
       kind: 'title-contradicts-page',
       clause: 6,
