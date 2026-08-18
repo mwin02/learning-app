@@ -18,6 +18,13 @@ export type KhanProbe = {
   // Where the browser actually ended up. Khan redirects freely, and a stored `/a/` URL
   // that now lands on `/v/` means the row points at different content — see urlKind.
   url: string;
+  // `title` and `mainWords` are read by `metadata-integrity.ts` and `serveability-probe.ts`,
+  // never by the duration mapping below. Optional and nullable rather than the `string` /
+  // `number` the probe actually always emits, because the declaration has to be readable by
+  // callers that hold a probe object predating the field — and because narrowing it is free
+  // at the one site that needs the guarantee: `scripts/report-unmeasured.ts` intersects
+  // `KhanProbe & { title: string; mainWords: number }` and gets the strict form back.
+  title?: string | null;
   pageKind: string;
   videoIds: string[];
   articleWords: number | null;
@@ -26,6 +33,7 @@ export type KhanProbe = {
   workedExamples: number | null;
   // Diagnostic only — never an input to a number. See the under-floor branch below.
   widgets?: number;
+  mainWords?: number | null;
   hasEditor: boolean;
   blocked: boolean;
 };
