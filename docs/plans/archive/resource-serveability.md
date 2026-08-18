@@ -1,6 +1,30 @@
 # Resource serveability — enforce the library standard
 
-**Status:** active · **Blocks:** S1–S9; no PRs yet · **Block IDs:** `S` · **Started:** 2026-08-17
+**Status:** shipped 2026-08-18 · **Blocks:** S1–S9 (#350–#358) plus two follow-ups found by
+the end-of-feature review, C1 (#359) and C2 (#360) · **Block IDs:** `S`, `C` · **Started:**
+2026-08-17
+
+> **Corrections — this plan asserted four things that were wrong.** Recorded here rather than
+> edited into the body, which stays the record of intent. Durable mechanics are in
+> `library-enforcement.md`; the code is authoritative over both.
+>
+> 1. **`force` does not bypass the re-decompose short-circuit**, and the plan listed that as a
+>    *verified codebase fact*. `route()` calls `classify()` first and the `atomic` branch
+>    returns before `force` is read; `force` lifts `DECOMPOSITION_MAX_AUTO_CHILDREN`. The path
+>    that ignores classification is `action: 'decompose_manual'`. The false version shipped
+>    into S6's schema header before S7's implementer caught it writing the same claim.
+> 2. **The standard is at `.claude/rules/resource-standard.md`**, not `docs/`. Every reference
+>    below points at the wrong directory.
+> 3. **S4's acceptance criterion 7 contradicts its own criterion 4.** A strict
+>    `KhanProbe.title: string` cannot express the missing-title case criterion 4 requires. The
+>    shipped nullable form is correct.
+> 4. **The measured populations came from `report-serveability.ts`**, not
+>    `census-serveability.ts`, which S5 deleted for duplicating the rules.
+>
+> Two more things the plan assumed and the work disproved: the 15 MIT rows are **containers
+> misfiled as leaves**, so their repair is a decompose, not the re-type-or-deprecate split
+> assumed here; and the sweep's precedence had to become **three-way** (decompose > re-type >
+> deprecate) rather than two.
 
 Implements items 2–5 of the serveability work. Item 1 is done and is **not** in this plan:
 the standard is locked at `resource-standard.md`, deliberately free of examples, counts and
