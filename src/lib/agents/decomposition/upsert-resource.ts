@@ -136,9 +136,9 @@ function deprecatesAtIngestion(verdict: ServeabilityVerdict, input: Serveability
   if (verdict.serveable) return false;
   if (verdict.clause === 5) return true;
   // Clause 3 does not deprecate, but it must not MASK a clause-5 failure either:
-  // `classifyServeability` returns the container verdict first and so never reaches the
+  // `classifyServeability` returns a container verdict first and so never reaches the
   // interactive rule below it. Omitting `decompositionStatus` disables exactly the
-  // container rule and nothing else (see `ServeabilityInput`), which asks the rest of the
+  // container rules and nothing else (see `ServeabilityInput`), which asks the rest of the
   // question. Reaching here means the status was `atomic`, and the interactive rule reads
   // `atomic` and `undefined` identically — it tests only for an explicit `decomposed`.
   return !classifyServeability({ type: input.type, url: input.url }).serveable;

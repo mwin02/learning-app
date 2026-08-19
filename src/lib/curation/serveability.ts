@@ -11,10 +11,11 @@
 //
 // ⚠️ THE STANDARD'S ERROR BUDGET IS ONE-SIDED and every rule below is shaped by it:
 // excluding a real lesson removes it from every learner's retrieval, permanently and
-// invisibly. So each rule reads an ABSOLUTE signal — a recorded form, or a content-kind
-// segment Khan itself writes into the URL — never a resemblance. A hostname alone decides
-// nothing, a slug that merely reads like practice decides nothing, and anything ambiguous
-// passes through as serveable by construction. That is the design, not a gap in it.
+// invisibly. So each rule reads an ABSOLUTE signal — a recorded form, or a segment the
+// platform itself writes into the URL to say what the page is — never a resemblance. A
+// hostname alone decides nothing, a slug that merely reads like practice decides nothing,
+// and anything ambiguous passes through as serveable by construction. That is the design,
+// not a gap in it.
 //
 // Shaped like `classifyNonTeaching`: a discriminated union carrying the reason it failed,
 // so a caller cannot read a boolean and lose the why — and, because the standard requires
@@ -29,7 +30,8 @@ export type UnserveableReason =
   | 'khan-exercise' // Khan `/e/` — an exercise set
   | 'khan-project-task' // Khan `/pt/` — talkthrough plus an in-browser challenge
   | 'khan-project-item' // Khan `/pi/` — a coding challenge
-  | 'khan-container-url'; // a Khan URL naming a unit or landing page, filed as a leaf
+  | 'khan-container-url' // a Khan URL naming a unit or landing page, filed as a leaf
+  | 'edx-sequential-url'; // an Open edX `sequential` block — a unit of child pages — filed as a leaf
 
 export type ServeabilityVerdict =
   | { serveable: true }
@@ -39,7 +41,7 @@ export type ServeabilityInput = {
   type: ResourceType;
   url: string;
   // Absent when the caller does not know it — ingestion classifies before the row exists.
-  // Its absence only ever DISABLES the container rule below; it can never turn a serveable
+  // Its absence only ever DISABLES the container rules below; it can never turn a serveable
   // row unserveable, so a caller without it gets a strictly weaker exclusion, never a
   // stricter one.
   decompositionStatus?: DecompositionStatus | null;
@@ -71,6 +73,12 @@ export function isKhanUrl(url: string): boolean {
   }
 }
 
+// Open edX writes the block's own type into the URL, and a `sequential` IS a unit
+// containing child pages — the platform saying "container", not a slug that reads like one.
+// Host-agnostic on purpose: the shape is edX's, not `openlearninglibrary.mit.edu`'s, and a
+// hostname decides nothing here.
+const EDX_SEQUENTIAL = /\+type@sequential\+block@/;
+
 export function classifyServeability(input: ServeabilityInput): ServeabilityVerdict {
   if (isKhanUrl(input.url)) {
     const kind = urlKind(input.url);
@@ -90,6 +98,13 @@ export function classifyServeability(input: ServeabilityInput): ServeabilityVerd
       const reason = PERFORMED_KHAN_KINDS[kind];
       if (reason) return { serveable: false, clause: 5, reason };
     }
+  }
+
+  // The same clause-3 defect `khan-container-url` names, on the other host the library
+  // sources containers from. Gated on `atomic` for the same reason and read the same way:
+  // this URL under a `decomposed` row is a container doing its job.
+  if (input.decompositionStatus === 'atomic' && EDX_SEQUENTIAL.test(input.url)) {
+    return { serveable: false, clause: 3, reason: 'edx-sequential-url' };
   }
 
   // Excluded as a class, not judged case by case. A row that genuinely teaches in prose or
