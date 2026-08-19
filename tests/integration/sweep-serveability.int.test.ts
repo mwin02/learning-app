@@ -95,7 +95,7 @@ describe('sweep-serveability — the three-way precedence (pure)', () => {
     expect(p).toMatchObject({ action: 'decompose', rule: 'khan-container-url' });
   });
 
-  it('queues an edX sequential unit for decompose — clause 3 on a host no classifier covers', () => {
+  it('queues an edX sequential unit for decompose — the same clause-3 repair, second host', () => {
     expect(plan({ url: EDX_URL, type: 'interactive' })).toMatchObject({
       action: 'decompose',
       rule: 'edx-sequential-url',

@@ -5,6 +5,8 @@ paths:
   - "src/lib/agents/tools/**"
   - "scripts/*serveability*"
   - "scripts/repoint-khan-pt.ts"
+  - "scripts/resolve-type-url-conflicts.ts"
+  - "scripts/repair-stale-titles.ts"
 ---
 
 # Enforcing the resource standard
@@ -48,6 +50,22 @@ and the other driver silently disagreed with it about how many rows fail clause 
   `url-redirects-across-kinds` exists to report the very disagreement that voided the probe.
   Only the noisy title comparison is suppressed.
 
+## Four drivers, and they partition the library rather than overlapping
+
+Every one takes its population from a classifier — never an id list — so the four sets are
+disjoint by construction and a row is somebody's or nobody's, never two drivers'.
+
+| Driver | Population | Repair | Writes |
+| --- | --- | --- | --- |
+| `sweep-serveability.ts` | any clause 3/4/5 failure, or a clause-6 `retype` | decompose / re-type / deprecate | `applyPendingReview`, `updateResource` |
+| `repoint-khan-pt.ts` | `urlKind === 'pt'` | point the row at its embedded video | `url` **direct**, or `applyPendingReview` |
+| `resolve-type-url-conflicts.ts` | `type-url-page-conflict` | move `url` to the landed one, or deprecate the duplicate | `url` **direct**, or `applyPendingReview` |
+| `repair-stale-titles.ts` | `title-contradicts-page` | adopt the page's own title | `updateResource` |
+
+All four default to a dry run, take `requireTargetAck` for `--apply`, and are idempotent —
+re-run the dry run after any apply and expect zero. That check is not ceremony: it is how the
+clause-6 oscillation was caught, and it passed every unit and integration gate first.
+
 ## Writing
 
 - **Every removal goes through `applyPendingReview({ action: 'reject', severity: 'soft' })`.**
@@ -65,11 +83,27 @@ and the other driver silently disagreed with it about how many rows fail clause 
 - **`type` is editable only on an `atomic` row, only to `article | video`.** The atomic-only
   constraint is the safety argument; the two targets are scope. A repair into a container type
   is `action: 'decompose'`'s job.
+- **`url` is not in any edit whitelist, and two drivers write it directly anyway.** It is the
+  row's IDENTITY — the unique column every dedup path collapses onto — so a repair that moves
+  it is a `prisma.resource.update`, justified in the driver's header, never a reason to widen
+  `ResourceUpdateFields`. The property that makes it the right seam: **a field update does not
+  touch `ConceptResource`**, which is the exact opposite of `applyPendingReview`. A repointed
+  row is still the same lesson, so it must keep its links.
+- **A repair that moves `url` must check the collision by READING the table, before writing.**
+  `Resource.url` is `@unique`. A caught 23505 tells you a row exists but not which one, and a
+  failed write mid-loop leaves the operator guessing which half of the run applied. And the
+  incumbent's status decides the outcome: an *actionable* incumbent means this row is a
+  duplicate (deprecate it), a *deprecated* one means neither write is available (escalate) —
+  deprecating against a copy nobody can be served retires the last servable copy.
+- **A `title` repair bumps `updatedAt`, which leaves the row's embedding stale.** The vector
+  covers title + summary + conceptsTaught, so retrieval keeps matching on the old name until
+  `scripts/embed-resources.ts` runs. `updateResource` reports it as `embeddingStale`; a driver
+  that retitles in bulk must say so and the operator must run the backfill.
 - **Clearing `durationMin` stamps `durationSource: 'unknown'`, never `'reviewer'`.** `reviewer`
   is the tier no automated pass may overwrite, so stamping it on a *retraction* freezes the row
   at "a human measured it as nothing".
 
-## Four facts that read the opposite of how they behave
+## Five facts that read the opposite of how they behave
 
 - **`force` does NOT bypass the re-decompose short-circuit.** A row retyped to `article` or
   `video` routes straight to atomic on a later `decompose()`, because `classify()` runs first
@@ -85,6 +119,14 @@ and the other driver silently disagreed with it about how many rows fail clause 
   decompositionStatus='atomic'`; the type filter in `search-resources.ts` is an optional
   caller-supplied allowlist that nothing passes by default. Filing a row under a
   "non-servable" type does **not** remove it from retrieval.
+- **`cleanPageTitle` produces a title that does not satisfy the title comparison.** The two
+  modules fold differently and both are right for their own job: `page-title.ts` keeps up to
+  two segments (`Name | Section`) because on the sourcing path the section is real context and
+  the title feeds an embedding, while `metadata-integrity.ts`'s comparison 4 folds a Khan
+  title to its FIRST segment. So a candidate can be a genuine improvement and still leave the
+  finding firing — 19 production rows — which means a driver writes and re-embeds them on
+  every pass, forever. **Verify a clause-6 repair by re-running the classifier over the row as
+  it WOULD be stored, not against your own idea of equality.** Then idempotence is structural.
 - **`type` is a candidate signal for containment, not the verdict.** `CONTAINER_TYPES` only
   decides whether the doc-TOC router *examines* the page; it then decides by fetching. So
   retyping *to* `article` is the direction that skips examination.

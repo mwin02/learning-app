@@ -131,6 +131,43 @@ describe('a Khan URL with no content-kind segment', () => {
   });
 });
 
+describe('an Open edX sequential block URL', () => {
+  const seq = 'https://openlearninglibrary.mit.edu/courses/course-v1:MITx+6.036+1T2019/jump_to/block-v1:MITx+6.036+1T2019+type@sequential+block@intro_ml';
+
+  it('fails clause 3 when the row is filed as a pickable leaf', () => {
+    expect(classifyServeability({ type: 'article', url: seq, decompositionStatus: 'atomic' })).toEqual({
+      serveable: false,
+      clause: 3,
+      reason: 'edx-sequential-url',
+    });
+  });
+
+  it('admits the same URL on a decomposed row', () => {
+    expect(classifyServeability({ type: 'article', url: seq, decompositionStatus: 'decomposed' }).serveable).toBe(true);
+  });
+
+  it('admits it when the caller does not know the decomposition status', () => {
+    expect(classifyServeability({ type: 'article', url: seq }).serveable).toBe(true);
+  });
+
+  // The block type is the signal, not the host and not the `block-v1:` prefix every edX
+  // block carries — a `vertical` is a child page and teaches in place.
+  it('does not fire on a non-sequential block', () => {
+    const vertical = seq.replace('type@sequential', 'type@vertical');
+    expect(classifyServeability({ type: 'article', url: vertical, decompositionStatus: 'atomic' }).serveable).toBe(true);
+  });
+
+  // The MITx 6.036 population exactly: stored `interactive`, filed atomic. Clause 3 has to
+  // win, because its repair is decompose and `interactive-type`'s is deprecation.
+  it('reports clause 3 ahead of the interactive rule', () => {
+    expect(classifyServeability({ type: 'interactive', url: seq, decompositionStatus: 'atomic' })).toEqual({
+      serveable: false,
+      clause: 3,
+      reason: 'edx-sequential-url',
+    });
+  });
+});
+
 describe('hosts with no rules of their own', () => {
   it.each([
     'https://react.dev/learn/state-a-components-memory',

@@ -108,13 +108,6 @@ const ACTIONABLE_STATUS: ResourceStatus[] = ['active', 'pending_review'];
 // unsettled is not approvable or rejectable until the decomposition axis resolves.
 const UNRESOLVED: DecompositionStatus[] = ['pending', 'human_review'];
 
-// An edX `sequential` block is a UNIT CONTAINING CHILD PAGES, so a row filed as an atomic
-// leaf on one is a container misfiled — clause 3, the same defect `khan-container-url`
-// names, on a host the classifier has no rule for. It lives here rather than in
-// `serveability.ts` because S8 may not change the classifiers; that is the reason, and it is
-// the one clause-3 signal this driver adds. A URL SHAPE, never a host or an id list.
-const EDX_SEQUENTIAL = /\+type@sequential\+block@/;
-
 type Row = {
   id: string;
   url: string;
@@ -136,7 +129,6 @@ export type Analysis = {
   discrepancies: MetadataDiscrepancy[];
   // Clause 3 on a host `classifyServeability` has no rule for — reported separately below so
   // the reconciliation table stays byte-comparable with S5's.
-  edxSequential: boolean;
   // A probe existed but describes a different page than this row now points at, so it was
   // withheld from the serveability verdict. See `probeDescribes` in `serveability-probe.ts`.
   probeVoided: boolean;
@@ -205,7 +197,6 @@ export function analyse(row: Row, probe: ProbeEvidence | null, attached: boolean
     attached,
     failures,
     discrepancies: meta.pageChecked ? meta.discrepancies : meta.rowDiscrepancies,
-    edxSequential: EDX_SEQUENTIAL.test(row.url),
     probeVoided,
   };
 }
@@ -237,13 +228,22 @@ export function planFor(a: Analysis): Plan {
   // S9's population, before anything else can claim it.
   if (isKhanUrl(row.url) && urlKind(row.url) === 'pt') return { action: 'none', reason: 'khan-pt' };
 
-  if (a.failures.length === 0 && a.discrepancies.length === 0 && !a.edxSequential) {
+  if (a.failures.length === 0 && a.discrepancies.length === 0) {
     return { action: 'none', reason: 'clean' };
   }
 
+  // ⚠️ AHEAD OF THE CONFLICT ESCALATION BELOW, and the order is the difference between an
+  // escalation that means something and one that never clears. An escalation is a claim that
+  // A HUMAN STILL HAS TO DECIDE THIS ROW — but a deprecated row has been decided, and the
+  // conflict finding reads the URL, which a deprecation does not change. Read the other way
+  // round, every row `resolve-type-url-conflicts.ts` retires as a duplicate reappears under
+  // `⚠ ESCALATION` on every subsequent run, forever, and the block stops being a worklist.
+  if (!ACTIONABLE_STATUS.includes(row.status)) return { action: 'none', reason: 'already-decided' };
+
   // The URL's own kind and the page's declared kind contradict each other, so neither names a
   // target this driver may act on. Checked before every repair, including the deprecation the
-  // row would otherwise be eligible for.
+  // row would otherwise be eligible for. The repair it needs is a URL move, which this driver
+  // may not make — `resolve-type-url-conflicts.ts` owns exactly this population.
   if (a.discrepancies.some((d) => d.kind === 'type-url-page-conflict')) {
     return { action: 'none', reason: 'type-signal-conflict' };
   }
@@ -255,8 +255,6 @@ export function planFor(a: Analysis): Plan {
   // assumption that its input can no longer contain them.
   if (targets.length > 1) return { action: 'none', reason: 'type-signal-conflict' };
 
-  if (!ACTIONABLE_STATUS.includes(row.status)) return { action: 'none', reason: 'already-decided' };
-
   // Out of bounds for all three repairs at once, and checked here so every one of them
   // declines with the same honest reason: the decompose and re-type seams require an atomic
   // row, and the reject seam refuses an unresolved one outright (`blocked`). This is also
@@ -267,9 +265,13 @@ export function planFor(a: Analysis): Plan {
     return { action: 'none', reason: 'in-decomposition-queue' };
   }
 
-  const containerRule = a.failures.find((f) => f.rule === 'khan-container-url')?.rule
-    ?? (a.edxSequential ? 'edx-sequential-url' : null);
+  // Any clause-3 rule, not a named one: `khan-container-url` and `edx-sequential-url` are
+  // the same defect on two hosts and take the same repair, and a third would too.
+  const containerRule = a.failures.find((f) => f.clause === 3)?.rule ?? null;
   if (containerRule !== null) {
+    // Residue, like the two-targets refusal above: both clause-3 rules already require
+    // `atomic` to fire, so this cannot be reached through the classifier — and it is still
+    // the right refusal, because the decompose seam needs an atomic row.
     if (row.decompositionStatus !== 'atomic') return { action: 'none', reason: 'not-atomic' };
     return { action: 'decompose', rule: containerRule };
   }
@@ -409,12 +411,6 @@ function reconcile(all: Analysis[]) {
     line(rule, withDiscrepancy.filter((a) => a.discrepancies.some((d) => `${d.kind}  →  ${repairOf(d)}` === rule)));
   }
   line('— clause 6 total (rows, deduplicated)', withDiscrepancy);
-
-  // ⚠️ NOT IN S5'S REPORT, and the difference is intentional: no classifier implements it,
-  // and S8 may not add one. Listed apart so nobody reads it as a clause-3 count that moved.
-  console.log('');
-  line('edx-sequential-url — clause 3 on a host no classifier covers (S8-local, absent from S5)',
-    all.filter((a) => a.edxSequential));
 
   // Counted, not a disagreement: the check that withholds these probes lives in
   // `classifyServeabilityFromProbe`, so the report applies it over the same artifacts and the
