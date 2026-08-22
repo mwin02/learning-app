@@ -245,9 +245,11 @@ describe('routeCohort', () => {
 });
 
 describe('B3_COHORTS', () => {
-  it('names all eight cohorts with a distinct key', () => {
-    expect(B3_COHORTS).toHaveLength(8);
-    expect(new Set(B3_COHORTS.map((c) => c.key)).size).toBe(8);
+  it('names all ten cohorts with a distinct key', () => {
+    // Eight from B3; the two MIT 6.036 cohorts were added 2026-08-21 with the
+    // machine-learning split (see their `why`).
+    expect(B3_COHORTS).toHaveLength(10);
+    expect(new Set(B3_COHORTS.map((c) => c.key)).size).toBe(10);
   });
 
   it('never targets a shelf a cohort is already filed under', () => {

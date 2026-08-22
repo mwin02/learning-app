@@ -280,6 +280,75 @@ export const B3_COHORTS: readonly CohortSpec[] = [
     },
   },
   {
+    key: 'mit-6036-neural-networks',
+    from: ['machine-learning'],
+    target: 'neural-networks',
+    stated: 78,
+    // Added 2026-08-21 with the machine-learning split (path-standard.md clause 1). The
+    // contested half of 6.036 moved through /review-topic-filing; these chapters are
+    // UNCONTESTED, so that drain could not reach them and `neural-networks` was left at 17
+    // rows — over MIN_VOUCHABLE_POOL but under MIN_CENTROID_MEMBERS, i.e. still cold.
+    // Week4/gradient_descent rides along deliberately: the target map has the
+    // `Gradient Descent` and `Optimizers` spine concepts and `supervised-learning` has no
+    // optimization concept at all, so this is where the chapter can actually attach.
+    // ⚠️ 6.036 publishes each chapter under TWO url shapes: `/courseware/WeekN/<slug>/` for
+    // the pages and `/jump_to/block-v1:...+block@<slug>` for the unit ROOT. The first run of
+    // this cohort selected only the former and left all six unit containers behind on
+    // `machine-learning` — so the prefix is the course root and both shapes are listed.
+    why: 'MIT 6.036 neural-network chapters (NN, CNN, sequential models, RNN, gradient descent)',
+    select: {
+      urlPrefix: 'https://openlearninglibrary.mit.edu/courses/course-v1:mitx+6.036+1t2019/',
+      urlContainsAny: [
+        '/week6/neural_networks',
+        '/week7/neural_networks_2',
+        '/week8/convolutional_neural_networks',
+        '/week9/state_machines',
+        '/week11/rnn',
+        '/week4/gradient_descent',
+        'block@neural_networks',
+        'block@convolutional_neural_networks',
+        'block@state_machines',
+        'block@rnn',
+        'block@gradient_descent',
+      ],
+    },
+  },
+  {
+    key: 'mit-6036-supervised-learning',
+    from: ['machine-learning'],
+    target: 'supervised-learning',
+    // The full live match (2026-08-21), not the 47 this pass moved: 38 of these had
+    // already been refiled row-by-row through /review-topic-filing, and `stated` exists
+    // so drift against the live match is visible.
+    stated: 85,
+    // The other half of the 6.036 split. Its CONTESTED rows moved through
+    // /review-topic-filing on 2026-08-21; this is the uncontested remainder plus the unit
+    // roots, which that drain could not see. Without it one course sits split across two
+    // shelves with no principle behind the division except which rows happened to be
+    // contested.
+    // `Week1/intro_ml` and `recommender_systems` are deliberately EXCLUDED: the first is
+    // region-level framing ("perspective and history") and the second has no spine in
+    // either child, so both stay on the parent shelf that both children reach.
+    why: 'MIT 6.036 classical-supervised chapters (perceptron, linear classifiers, logistic/linear regression, features, non-parametric)',
+    select: {
+      urlPrefix: 'https://openlearninglibrary.mit.edu/courses/course-v1:mitx+6.036+1t2019/',
+      urlContainsAny: [
+        '/week1/linear_classifiers',
+        '/week2/perceptron',
+        '/week3/feature_representation',
+        '/week4/logistic_regression',
+        '/week5/regression',
+        '/week13/non_parametric',
+        'block@linear_classifiers',
+        'block@perceptron',
+        'block@feature_representation',
+        'block@logistic_regression',
+        'block@regression',
+        'block@non_parametric',
+      ],
+    },
+  },
+  {
     key: 'pca-and-linear-regression',
     from: ['linear-algebra'],
     target: 'machine-learning',
