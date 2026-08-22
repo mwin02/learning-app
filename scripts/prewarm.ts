@@ -39,6 +39,21 @@ async function main() {
   const topic = process.argv.find((a) => !a.startsWith('-') && !a.includes('/') && a !== 'tsx' && !a.endsWith('.ts')) ?? 'python';
   console.log(`\n=== cold pre-warm: ${topic} ===`);
 
+  // Keep one pooled connection alive for the whole run. $transaction's default 2s
+  // maxWait covers CONNECTION ACQUISITION, and a cold handshake to the Supabase
+  // pooler from a laptop takes ~1.6s — so any transaction that has to open a fresh
+  // connection loses the race and dies with P2028. That happens twice here: on tx1
+  // (the process's first DB call) and again on tx2, because the pg pool closes idle
+  // connections after 10s while the multi-minute spine-authoring AI phase runs.
+  // Pinging inside that window keeps an idle connection in the pool, so acquisition
+  // is instant. In-cluster (Cloud Run, the worker VM) the handshake is fast enough
+  // that neither case fires, which is why only this operator script needs it.
+  const heartbeat = setInterval(() => {
+    void prisma.$queryRaw`select 1`.catch(() => {});
+  }, 5_000);
+  heartbeat.unref(); // never hold the event loop open, including on a thrown run
+  await prisma.$queryRaw`select 1`;
+
   const t0 = Date.now();
   const map = await ensurePathMap({ topic });
   console.log(`[prewarm] ensurePathMap → status=${map.status} pathId=${map.pathId}`);
@@ -54,6 +69,7 @@ async function main() {
   const final = await prisma.path.findUnique({ where: { id: map.pathId }, select: { status: true } });
   console.log(`\n[prewarm] final Path status: ${final?.status}  (${((Date.now() - t0) / 1000).toFixed(0)}s)`);
   await reportLibrary(topic);
+  clearInterval(heartbeat);
 }
 
 main()

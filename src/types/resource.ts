@@ -12,7 +12,16 @@ export type TopicSlug =
   | 'statistics'
   | 'physics-mechanics'
   | 'database-systems'
-  | 'go';
+  | 'go'
+  | 'discrete-mathematics'
+  | 'differential-equations'
+  | 'multivariable-calculus'
+  | 'probability'
+  | 'cryptography'
+  | 'rust'
+  | 'reinforcement-learning'
+  | 'number-theory'
+  | 'convex-optimization';
 
 // Curated topics. Membership here is what makes a topic first-class: the topic
 // gate fast-accepts it without an LLM call, and the planner/registry canonical
@@ -55,6 +64,32 @@ export const TOPIC_SLUGS: readonly TopicSlug[] = [
   // will web-source from nothing, like any cold topic. It is not backed by a library yet.
   'database-systems',
   'go',
+
+  // Promoted 2026-08-22, all nine warmed to `spine_ready` the day before
+  // (docs/audits/topic-expansion-2026-08-21.md). Every one has a Path and clears
+  // MIN_VOUCHABLE_POOL on LIVE rows — the check `database-systems` above failed, where a
+  // 15-row shelf was entirely `deprecated` and the promotion bought a curated topic
+  // backed by nothing. Live pools measured at promotion: discrete-mathematics 112,
+  // differential-equations 81, multivariable-calculus 64, rust 53, cryptography 42,
+  // reinforcement-learning 32, convex-optimization 29, number-theory 27, probability 15.
+  // (`reinforcement-learning` is the shelf Q7 declined to promote at 3 rows; its own
+  // warm run is what carried it past the floor, which is the "promote themselves by
+  // reaching quorum" path that note describes.)
+  'discrete-mathematics',
+  'differential-equations',
+  'multivariable-calculus',
+  // ⚠️ THINNEST OF THE NINE, AND THE ONE TO WATCH. 15 live rows against a 21-concept
+  // spine, because the 207-row `probability-and-statistics` shelf next door is
+  // unreachable until a directed `probability` -> `probability-and-statistics` edge is
+  // MEASURED into TOPIC_RELATIONS below. Promoted anyway — it clears the floor and the
+  // Path is `spine_ready` — but it is the weakest curated topic in the list until that
+  // edge lands.
+  'probability',
+  'cryptography',
+  'rust',
+  'reinforcement-learning',
+  'number-theory',
+  'convex-optimization',
 ] as const;
 
 // DIRECTED relatedness among topics (topic filing T4d, 2026-07-27 — was symmetric).
@@ -140,6 +175,22 @@ export const TOPIC_RELATIONS: Record<string, readonly string[]> = {
   // The reverse is NOT declared: `probability-and-statistics` is not in TOPIC_SLUGS,
   // has no Path, and (being the superset) would gain nothing it does not already hold.
   statistics: ['probability-and-statistics'],
+  // Same far shelf as the line above, now reached from the `probability` Path too
+  // (warmed 2026-08-21). MEASURED 2026-08-22 with
+  // `verify-topic-narrowing.ts --topic=probability --extra=probability-and-statistics`:
+  // without this edge the Path loses 8 attached `teaches` rows and 110 of 126 top-6
+  // candidate slots churn. No concept is EMPTIED, so the Path is serveable either way —
+  // the edge is about retrieval quality, not readiness.
+  //
+  // What the churn detail actually shows, and the reason this is not a marginal call: on
+  // its own 15-row shelf, ranked search returns essentially THE SAME dozen generic rows
+  // for every concept — `expected-value`, `markov-chains`, `variance` and
+  // `combinatorial-methods` all get back the same "Law of large numbers | Probability
+  // Density Functions | Lecture 16: Markov Chains" list. A shelf that thin cannot
+  // discriminate between its own concepts. With the edge each concept retrieves its own
+  // material. The reverse is NOT declared, for the same reason it is not declared for
+  // `statistics`: the far shelf is the superset and gains nothing.
+  probability: ['probability-and-statistics'],
   // DSA is taught THROUGH a language, and both curated language topics carry real DSA
   // pools. One-hop only, so this does NOT connect python and javascript to each other.
   // These edges were inert until topic-filing T1.5: `TopicAlias` held the drifted
