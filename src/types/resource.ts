@@ -201,6 +201,41 @@ export const TOPIC_RELATIONS: Record<string, readonly string[]> = {
   // Path yet, so these directions are declared on reasoning, not measurement.
   'data-structures-algorithms': ['python', 'javascript'],
 
+  // The two halves of the retired `machine-learning` Path (split 2026-08-21). That topic
+  // failed path-standard.md clause 1 outright: a 12-concept spine against a 205-row shelf
+  // with 137 rows (67%) attached to nothing, where the stranded material formed two clean
+  // MIT 6.036 runs of ~57 rows each — one for linear models/optimization, one for neural
+  // nets — each with a single 6-slot concept able to hold it.
+  // Both edges LOAD-BEARING, measured on PRODUCTION 2026-08-21 immediately after the build
+  // (`verify-topic-narrowing.ts --topic=<child> --drop=machine-learning`). Dropping the
+  // edge costs `neural-networks` 53 attached `teaches` rows across 14 concepts and
+  // `supervised-learning` 47 — including every spine concept that carries the MIT 6.036
+  // corpus (backpropagation, CNNs, RNNs, the-perceptron, gradient-descent, regularization).
+  // Neither narrowing EMPTIES a concept, because the frontier web-sourced a thin shelf of
+  // its own during the build; the edge is what makes the maps teachable, not merely
+  // non-empty.
+  // Measurement runs backwards here — a child's edge cannot be probed before the child
+  // exists — so the order was: declare, build, probe.
+  // RE-MEASURED 2026-08-22, after the refile moved the corpus onto the children (114 rows
+  // via /review-topic-filing + the two `mit-6036-*` B3 cohorts) and both maps were rebuilt
+  // with `warm-paths --force`. The edges WEAKENED sharply but are still load-bearing, and
+  // both are KEPT:
+  //     neural-networks      lost 53 -> 16 rows, churn 116/126 -> 28/126
+  //     supervised-learning  lost 47 -> 20 rows, churn 110/120 -> 33/120
+  // That drop is the refile working as intended: what remains is the residue each child
+  // legitimately draws from the parent shelf — the 6.036 intro/framing pages and the
+  // recommender-systems chapter, which have no spine in either child and deliberately
+  // stayed on the region shelf.
+  // Re-measure again only if that residue is ever refiled; below ~10 rows these edges stop
+  // paying for the reach they grant.
+  // The reverse (`machine-learning` -> child) is deliberately NOT declared: the parent Path
+  // is retired, so there is no map left to serve and the edge would only widen what other
+  // topics reach through the parent slug. A sibling edge between the two children is also
+  // NOT declared — the prerequisite is real pedagogically, but it goes in on measurement
+  // (`--extra=`) or not at all.
+  'supervised-learning': ['machine-learning'],
+  'neural-networks': ['machine-learning'],
+
   // ── Directions deliberately NOT declared (T4d, all measured 2026-07-27) ────────────
   //
   // calculus -> precalculus (was free via the symmetric closure). Dropped: 4 of 132
