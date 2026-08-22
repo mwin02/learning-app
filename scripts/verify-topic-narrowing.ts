@@ -1,6 +1,7 @@
 // Live verification for topic filing T4d (retrieval narrowing via directed relatedness).
 //   npx tsx --env-file=.env.local scripts/verify-topic-narrowing.ts
-//   npx tsx --env-file=.env.local scripts/verify-topic-narrowing.ts --topic=calculus --extra=precalculus
+//   npx tsx --env-file=.env.local scripts/verify-topic-narrowing.ts --topic=calculus --drop=precalculus
+//   npx tsx --env-file=.env.local scripts/verify-topic-narrowing.ts --topic=python-data-ml --extra=neural-networks
 //
 // Read-only. Spends embedding quota only (two ranked searches per concept, no judge
 // calls), so it is safe to re-run and safe to run mid-drain.
@@ -76,8 +77,15 @@ type ConceptRow = {
 };
 
 let failures = 0;
+// `--extra` INVERTS what a negative result means. In sweep/drop mode the script asserts
+// that a narrower topic set costs nothing, so a violation is a defect. In evidence mode
+// the narrow set is what the code reaches TODAY and the wide set adds a proposed edge, so
+// a violation is the finding you are looking for — proof the edge is load-bearing. Same
+// measurement, opposite reading, so evidence mode neither prints ✗ nor fails the run.
+let evidenceMode = false;
 function check(name: string, cond: boolean, detail?: unknown) {
-  if (cond) console.log(`  ✓ ${name}`, detail ?? '');
+  if (cond) console.log(`  ${evidenceMode ? '·' : '✓'} ${name}`, detail ?? '');
+  else if (evidenceMode) console.log(`  → ${name.replace('narrowing ', 'without the proposed edge, ')}`, detail ?? '');
   else {
     failures++;
     console.error(`  ✗ ${name}`, detail ?? '');
@@ -177,21 +185,42 @@ async function main() {
   // weakly-evidenced directions (calculus->precalculus, python->data-structures-algorithms)
   // were settled while `relatedTopics` was still symmetric.
   const drop = arg('drop')?.split(',').map((t) => t.trim()).filter(Boolean);
+  // `--extra` probes an edge that does NOT exist yet: wide is what the code reaches today
+  // PLUS the proposed topic(s), narrow is today. It answers "what would declaring this
+  // edge buy?" — the question a Path split has to answer before editing TOPIC_RELATIONS,
+  // and the one `--drop` cannot ask because it can only remove what is already declared.
+  // Only meaningful for a topic that HAS a Path (the diff is measured per existing
+  // concept), so a child topic must be built before its own edges can be measured.
+  const extra = arg('extra')?.split(',').map((t) => t.trim()).filter(Boolean);
+  evidenceMode = Boolean(extra);
+  if (extra && drop) {
+    console.error('✗ --extra and --drop ask opposite questions; pass one.');
+    process.exit(1);
+  }
 
   const topics = only
     ? [only]
     : (await prisma.path.findMany({ select: { topic: true }, orderBy: { topic: 'asc' } })).map((p) => p.topic);
 
   console.log(`topic filing T4d — live candidate re-search (limit ${MAP_CANDIDATES_PER_CONCEPT}/concept)`);
-  console.log(`mode: ${drop ? `probe (-${drop.join(',')})` : 'sweep (symmetric closure vs relatedTopics)'}`);
+  console.log(
+    `mode: ${
+      extra
+        ? `evidence (+${extra.join(',')}) — a "→" line is proof the proposed edge carries weight`
+        : drop
+          ? `probe (-${drop.join(',')})`
+          : 'sweep (symmetric closure vs relatedTopics)'
+    }`,
+  );
 
   for (const t of topics) {
-    const wide = drop ? relatedTopics(t) : symmetricClosure(t);
-    const narrow = drop ? wide.filter((x) => !drop.includes(x)) : relatedTopics(t);
+    const live = relatedTopics(t);
+    const wide = extra ? [...new Set([...live, ...extra])] : drop ? live : symmetricClosure(t);
+    const narrow = extra ? live : drop ? wide.filter((x) => !drop.includes(x)) : live;
     await auditPath(t, wide, narrow);
   }
 
-  console.log(`\n${failures === 0 ? 'PASS' : `FAIL (${failures})`}`);
+  console.log(`\n${evidenceMode ? 'done (evidence mode makes no assertions)' : failures === 0 ? 'PASS' : `FAIL (${failures})`}`);
   await prisma.$disconnect();
   process.exit(failures === 0 ? 0 : 1);
 }
