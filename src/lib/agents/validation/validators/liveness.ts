@@ -23,8 +23,9 @@
 // non-destructive outcome (validation/index.ts `quarantine`):
 //
 //   AUTHORITATIVE → reject, the row is dropped and never written.
-//     an explicit 404/410 status, a malformed URL, a YouTube oEmbed miss. These
-//     are the server telling us plainly; there is nothing for a human to add.
+//     an explicit 404/410 status, a malformed URL, a YouTube oEmbed miss, a
+//     redirect loop. These are the server telling us plainly; there is nothing
+//     for a human to add.
 //
 //   HEURISTIC → quarantine, the row is persisted into the review queue but kept
 //     off every learner path until someone confirms it.
@@ -231,6 +232,26 @@ async function readCapped(res: Response, limit: number): Promise<string> {
   return out;
 }
 
+// ocw.mit.edu answers a path that does not exist by redirecting it to itself —
+// `/x` → `/x/` → `/x/index.html` → `/x/` — until the client gives up. fetch()
+// surfaces that as a thrown TypeError, which landed in the catch below and was
+// read as "unreachable host" → quarantine. 52 fabricated OCW URLs reached the
+// library that way on 2026-08-21 while the same validator was correctly dropping
+// plain 404s, because OCW never returns one.
+//
+// This is the opposite of a timeout: the host is up and each hop answers
+// promptly. Retrying is what a quarantine is FOR, and here it buys nothing.
+//
+// Matched on undici's cause message because fetch() exposes no structured code
+// for it and does not let the redirect cap be lowered. If a runtime change ever
+// breaks the match, the failure is the old behaviour — a quarantine instead of a
+// reject — so it degrades to a review, never to a deleted live resource.
+function isRedirectLoop(err: unknown): boolean {
+  const cause = err instanceof Error ? err.cause : undefined;
+  const message = cause instanceof Error ? cause.message : '';
+  return /redirect count exceeded/i.test(message);
+}
+
 async function checkHttp(url: string): Promise<LivenessVerdict> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), LIVENESS_TIMEOUT_MS);
@@ -272,7 +293,10 @@ async function checkHttp(url: string): Promise<LivenessVerdict> {
       return suspect(`soft 404: page titled "${title.slice(0, 80)}"`);
     }
     return ALIVE;
-  } catch {
+  } catch (err) {
+    // A redirect loop is the server answering, not failing to: the URL does not
+    // name a page, and no number of retries changes that. Authoritative.
+    if (isRedirectLoop(err)) return { alive: false, reason: 'redirect loop' };
     // Timeout / DNS / reset. Measurably NOT proof of death: re-running the
     // 2026-08-03 sweep flipped 10 of these to alive. Always quarantine.
     return suspect('url not reachable');

@@ -171,6 +171,32 @@ describe('livenessValidator — authoritative failures reject', () => {
     expect(await outcome('not-a-url')).toBe('reject');
   });
 
+  // ocw.mit.edu's answer to a path that does not exist: `/x` → `/x/` →
+  // `/x/index.html` → `/x/`, until fetch() gives up and throws. Indistinguishable
+  // from an unreachable host at the catch site, which is how 52 fabricated OCW
+  // URLs reached the library on 2026-08-21 — quarantined for review instead of
+  // dropped, because OCW never answers a bad path with a 404.
+  it('rejects a redirect loop — the host answered, the url just names nothing', async () => {
+    vi.stubGlobal('fetch', async () => {
+      throw Object.assign(new TypeError('fetch failed'), {
+        cause: new Error('redirect count exceeded'),
+      });
+    });
+    const url = 'https://ocw.mit.edu/courses/18-650/resources/lecture-20-invented';
+    expect(await outcome(url)).toBe('reject');
+    const v = await check(url);
+    expect(v.valid === false && v.reason).toBe('redirect loop');
+  });
+
+  // The narrowness above is the point: a throw with any other cause is still the
+  // slow-host case, and must keep its quarantine.
+  it('still quarantines a throw that is not a redirect loop', async () => {
+    vi.stubGlobal('fetch', async () => {
+      throw Object.assign(new TypeError('fetch failed'), { cause: new Error('ECONNRESET') });
+    });
+    expect(await outcome('https://slow.example.edu/x')).toBe('quarantine');
+  });
+
   it('rejects a YouTube video whose oEmbed says it is gone', async () => {
     vi.stubGlobal('fetch', async () => reply({ status: 404 }));
     const v = await check('https://www.youtube.com/watch?v=aaaaaaaaaaa');
