@@ -39,6 +39,7 @@ import {
   REJUDGE_ROUTE_MAX_DISTANCE,
 } from '@/lib/config';
 import { searchNearbyResources } from '@/lib/agents/tools/search-resources';
+import { resolveAttestedUrls, dedupeKey, type AttestedUrl } from '@/lib/agents/tools/grounding';
 import { runValidationPipeline } from '@/lib/agents/validation';
 import { livenessValidator } from '@/lib/agents/validation/validators/liveness';
 import { rulesAgentValidator } from '@/lib/agents/validation/validators/rules-agent';
@@ -716,7 +717,10 @@ async function discoverAllowlisted(
 // prong but the prompt names the allowed domains and instructs site-scoped search,
 // and a hard post-filter drops any URL whose host isn't on the allowlist (the model
 // strays; the filter is the guarantee, not the prompt).
-async function discoverForConceptScoped(
+// Exported for scripts/verify-grounded-discovery.ts, the live driver that measures
+// what fraction of discovered URLs are reachable (unit tests can't: the property
+// under test is whether a real grounded call still invents URLs).
+export async function discoverForConceptScoped(
   topic: string,
   conceptTitle: string,
   oversample: number,
@@ -733,6 +737,7 @@ async function discoverForConceptScoped(
     denyListSize: denyList.length,
     system: CONCEPT_DISCOVERY_SYSTEM_PROMPT,
     prompt: buildScopedConceptDiscoveryPrompt(topic, conceptTitle, oversample, denyList, allowDomains, targetMastery, preferSubstantial),
+    denyList,
     abortSignal,
   });
   const allow = new Set(allowDomains);
@@ -774,7 +779,8 @@ function hostnameOf(url: string): string | null {
 // Phase 2.5f: concept-focused discovery — find resources that TEACH one concept,
 // within its topic for context. Biased toward `teaches` (remediation needs a
 // qualifying primary), but otherwise the same grounded-search engine.
-async function discoverForConcept(
+// Exported for scripts/verify-grounded-discovery.ts — see discoverForConceptScoped.
+export async function discoverForConcept(
   topic: string,
   conceptTitle: string,
   oversample: number,
@@ -789,19 +795,40 @@ async function discoverForConcept(
     denyListSize: denyList.length,
     system: CONCEPT_DISCOVERY_SYSTEM_PROMPT,
     prompt: buildConceptDiscoveryPrompt(topic, conceptTitle, oversample, denyList, targetMastery, preferSubstantial),
+    denyList,
     abortSignal,
   });
 }
 
-// One grounded-search discovery call + parse, shared by both prompts. Grounded
-// search + structured output don't compose in the AI SDK today — ask for JSON in a
-// fenced block and parse manually.
+// The discovery call, in two halves, with grounding attestation between them.
+//
+// It used to be ONE grounded call that asked for a fenced JSON array and parsed
+// the URLs out of it. That is the bug that put ~106 fabricated ocw.mit.edu rows
+// into the library on 2026-08-21/22. Measured 2026-08-23 on gemini-2.5-pro with
+// this same tool config: asking for prose returns 7-9 grounding chunks, and
+// asking for a JSON array returns ZERO — the model still issues its searches
+// (`webSearchQueries` is populated) but nothing comes back attributed, so every
+// URL it writes is recalled from training rather than retrieved. `result.sources`
+// was therefore ALWAYS empty here, which is why the old `sourceCount` log line
+// read 0 on every discovery call this module ever made.
+//
+// So: half one asks for PROSE and keeps its grounding. Its citations resolve to
+// the real URLs (tools/grounding.ts), and THOSE are the candidates. Half two is a
+// separate, tool-free call that describes each candidate by INDEX — it is never
+// given a url field to fill in, so it cannot write a URL, "correct" one, or
+// invent one. Rows whose index doesn't name a candidate are dropped.
+//
+// Cost: two model calls per discovery instead of one (Pro for the grounded half,
+// Flash for the describe half) plus one cheap 302 per citation. That is the price
+// of the guarantee; a fabricated row costs a liveness fetch, a human review, and
+// — on the hosts where liveness is blind — a dead link served to a learner.
 async function runDiscovery(args: {
   label: string;
   oversample: number;
   denyListSize: number;
   system: string;
   prompt: string;
+  denyList?: string[];
   abortSignal?: AbortSignal;
 }): Promise<DiscoveredResource[]> {
   const { model, temperature, maxOutputTokens } = getModel('curriculumFallback');
@@ -818,57 +845,143 @@ async function runDiscovery(args: {
 
   recordUsage('web-fallback.discovery', result.usage);
 
+  const attested = await resolveAttestedUrls(result.sources, args.abortSignal);
+  const denied = new Set((args.denyList ?? []).map(dedupeKey));
+  const candidates = attested.filter((a) => !denied.has(dedupeKey(a.url)));
+
   console.log('[web-fallback] discovery call', {
     label: args.label,
     oversample: args.oversample,
     denyListSize: args.denyListSize,
     sourceCount: result.sources?.length ?? 0,
+    attested: attested.length,
+    candidates: candidates.length,
     usage: result.usage,
     finishReason: result.finishReason,
   });
 
-  const parsed = parseJsonArray(result.text);
-  const valid: DiscoveredResource[] = [];
-  for (const item of parsed) {
-    const r = DiscoveredResourceSchema.safeParse(item);
-    if (r.success) valid.push(r.data);
+  if (candidates.length === 0) {
+    // Grounding produced nothing usable. An empty return is the honest answer:
+    // the ladder spends another iteration or the concept gets fewer resources,
+    // which is strictly better than the model filling the quota from memory.
+    console.log('[web-fallback] no attested candidates', {
+      label: args.label,
+      sourceCount: result.sources?.length ?? 0,
+    });
+    return [];
   }
-  return valid;
+
+  return describeCandidates(candidates, result.text, args.abortSignal);
 }
 
-// Shared discovery rules + output spec, so the topic and concept system prompts
-// stay in lockstep (same validation contract, same anti-listicle rules).
+// Per-candidate metadata, keyed by index into the attested list. There is no url
+// field, deliberately — see the header. `index` is the only join key.
+const DescribedResourceSchema = z.object({
+  resources: z
+    .array(
+      z.object({
+        index: z.number().int().min(0),
+        title: z.string().min(3),
+        type: z.enum(RAW_RESOURCE_TYPES),
+        difficulty: z.enum(DIFFICULTIES),
+        durationMin: z.number().int().min(1).max(6000).optional(),
+        durationStated: z.boolean().default(false),
+        summary: z.string().min(10),
+        rawPrerequisiteConcepts: z.array(z.string()).default([]),
+        rawConceptsTaught: z.array(z.string()).min(1),
+      }),
+    )
+    .default([]),
+});
+
+// Join the describe call's rows onto the attested URLs. Exported for the unit
+// test: this index join is the seam where a fabricated URL would re-enter if
+// anyone ever "helpfully" added a url field to the schema above.
+export function joinDescribedRows(
+  candidates: { url: string }[],
+  described: z.infer<typeof DescribedResourceSchema>['resources'],
+): DiscoveredResource[] {
+  const used = new Set<number>();
+  const out: DiscoveredResource[] = [];
+  for (const row of described) {
+    if (row.index >= candidates.length || used.has(row.index)) continue;
+    used.add(row.index);
+    const { index, ...rest } = row;
+    const parsed = DiscoveredResourceSchema.safeParse({ ...rest, url: candidates[index].url });
+    if (parsed.success) out.push(parsed.data);
+  }
+  return out;
+}
+
+async function describeCandidates(
+  candidates: AttestedUrl[],
+  groundedProse: string,
+  abortSignal?: AbortSignal,
+): Promise<DiscoveredResource[]> {
+  const { model, temperature, maxOutputTokens } = getModel('discoveryDescriber');
+
+  const listing = candidates.map((c, i) => `${i}. ${c.url}`).join('\n');
+  const result = await generateObject({
+    model,
+    temperature,
+    maxOutputTokens,
+    schema: DescribedResourceSchema,
+    system: DESCRIBE_SYSTEM_PROMPT,
+    prompt: [
+      'Pages that were retrieved (index. url):',
+      listing,
+      '',
+      "What the scout wrote about them:",
+      groundedProse,
+    ].join('\n'),
+    abortSignal,
+  });
+
+  recordUsage('web-fallback.describe', result.usage);
+
+  const rows = joinDescribedRows(candidates, result.object.resources);
+  console.log('[web-fallback] describe call', {
+    candidates: candidates.length,
+    described: result.object.resources.length,
+    joined: rows.length,
+    usage: result.usage,
+  });
+  return rows;
+}
+
+const DESCRIBE_SYSTEM_PROMPT = `You are cataloguing learning resources that a research assistant has already retrieved. You are given a numbered list of page URLs and the assistant's notes about them.
+
+Describe each page you can, referring to it ONLY by its index number. Skip any index the notes say nothing useful about — an omission is correct and expected; a guess is not.
+
+Field rules:
+- title: the page's own title as far as the notes state it. Do not title it after the concept someone was searching for.
+- type: article | video | course | interactive | docs | book.
+- difficulty: beginner | intermediate | advanced.
+- summary: 1-2 sentences on what the page teaches.
+- rawConceptsTaught: 3-8 concise, lowercase, hyphen-separated tags (e.g. "page-tables", "list-comprehensions"). rawPrerequisiteConcepts: 0-5, same style.
+- durationMin: the time to consume the page end-to-end, in whole minutes. Set durationStated: true ONLY when the notes state a real number (a video runtime, "15 min read", a stated course length).
+- If no duration is stated and the notes don't tell you the page's size, OMIT durationMin. "Unknown" is a correct, expected answer; it is far better than a plausible-looking guess, which is indistinguishable from a measurement once stored.
+- Only estimate (durationMin present, durationStated false) when the page's shape tells you its size. Typical ranges by type: article 5-20; docs section 5-30; video 5-60; interactive 10-45; course 120-1200; book 300-3000. A whole course or book is never 20 minutes.`;
+
+// Shared discovery rules, so the concept prompts stay in lockstep (same
+// selection criteria, same anti-listicle rules). The OUTPUT half of this prompt
+// is gone on purpose: this call answers in prose now, because demanding JSON
+// from it costs the grounding that makes it trustworthy at all.
 const DISCOVERY_RULES = `Rules:
-- Use Google Search to find real, currently-reachable URLs. Do NOT invent URLs.
+- Use Google Search, and describe only pages you actually retrieved in this search. Never name a page from memory — if you did not open it, leave it out.
 - Prefer official documentation, well-known educators, university courseware (MIT OCW, Stanford CS, etc.), and recognized free textbook sites.
 - AVOID sites that require login or paid signup for the main content (Coursera, DataCamp, Udemy, LinkedIn Learning, edX verified-track, Pluralsight).
 - AVOID listicles, link aggregators, and "Top 10 X" roundup pages. The resource itself must teach the topic.
 - AVOID marketing pages, course sales pages, and signup landing pages.
-- conceptsTaught and rawConceptsTaught are the agent's first-pass tags; concise, lowercase, hyphen-separated (e.g. "linear-regression", "list-comprehensions"). 3-8 per resource.
-- prerequisiteConcepts use the same vocabulary style; 0-5 per resource.
-- durationMin is the time to consume the resource end-to-end, in whole minutes. Read it off the page when it is stated — a video runtime, "15 min read", a stated course length, a lecture list with times — and set durationStated: true.
-- If no duration is stated and you cannot tell the size of the resource, OMIT durationMin. "Unknown" is a correct, expected answer; it is far better than a plausible-looking guess, which is indistinguishable from a measurement once stored.
-- Only estimate (durationMin present, durationStated false) when the resource's shape tells you its size. Typical ranges by type: article 5-20; docs section 5-30; video 5-60; interactive 10-45; course 120-1200; book 300-3000. A whole course or book is never 20 minutes.`;
+- Returning FEWER resources than asked for is a correct answer when the search does not surface more. The count is a ceiling, not a quota.`;
 
-const DISCOVERY_OUTPUT = `Output: a single JSON array in a \`\`\`json fenced block. No prose before or after. Each element:
-{
-  "url": string,
-  "title": string,
-  "type": "article" | "video" | "course" | "interactive" | "docs" | "book",
-  "difficulty": "beginner" | "intermediate" | "advanced",
-  "durationMin": number (omit entirely if unknown),
-  "durationStated": boolean (true only if the duration was stated on the page),
-  "summary": string (1-2 sentences),
-  "rawPrerequisiteConcepts": string[],
-  "rawConceptsTaught": string[]
-}`;
+const DISCOVERY_OUTPUT = `Answer in PROSE, not JSON, and do not use a fenced code block. For each page you retrieved, give its title, its URL, what it teaches, who it suits, and roughly how long it takes — the last only if the page itself states it.`;
 
 const CONCEPT_DISCOVERY_SYSTEM_PROMPT = `You are a learning-resource scout. Given a SPECIFIC CONCEPT within a topic, find authoritative free or freemium resources that TEACH that concept, using Google Search.
 
 ${DISCOVERY_RULES}
 - PRIORITIZE resources that teach the target concept as a primary subject, from the ground up — not ones that merely use, apply, or mention it in passing.
 - The concept's broader topic is context for disambiguation; the resource must be about the CONCEPT, not the whole topic.
-- rawConceptsTaught must include the target concept (or its obvious synonym) for a genuine match.
 
 ${DISCOVERY_OUTPUT}`;
 
@@ -883,7 +996,7 @@ function buildConceptDiscoveryPrompt(
   const lines = [
     `Target concept: ${conceptTitle}`,
     `Topic (context): ${topic}`,
-    `Target count: ${oversample} resources that TEACH "${conceptTitle}". Use Google Search.`,
+    `Target count: up to ${oversample} resources that TEACH "${conceptTitle}". Use Google Search.`,
   ];
   if (targetMastery) {
     // The in-track thickener sources because the existing material is too shallow
@@ -914,10 +1027,11 @@ function buildScopedConceptDiscoveryPrompt(
   const lines = [
     `Target concept: ${conceptTitle}`,
     `Topic (context): ${topic}`,
-    `Target count: ${oversample} resources that TEACH "${conceptTitle}". Use Google Search.`,
+    `Target count: up to ${oversample} resources that TEACH "${conceptTitle}". Use Google Search.`,
     '',
-    'RESTRICT your search to these trusted domains ONLY — use site: filters (e.g. `site:docs.python.org eigenvalues`). Do NOT return URLs from any other domain; a result off this list will be discarded:',
+    'RESTRICT your search to these trusted domains ONLY — use site: filters (e.g. `site:docs.python.org eigenvalues`). Do NOT return pages from any other domain; a result off this list will be discarded:',
     JSON.stringify(allowDomains),
+    'If these domains have no material for this concept, say so and name nothing. Do not substitute a page you remember.',
   ];
   if (targetMastery) {
     lines.push(
@@ -1015,18 +1129,3 @@ Rules:
 - Preserve the split between prerequisiteConcepts and conceptsTaught.
 - Drop empty/whitespace-only tags.`;
 
-// ── helpers ─────────────────────────────────────────────────────────────────
-
-function parseJsonArray(text: string): unknown[] {
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const raw = fenced ? fenced[1] : text;
-  const start = raw.indexOf('[');
-  const end = raw.lastIndexOf(']');
-  if (start === -1 || end === -1 || end <= start) return [];
-  try {
-    const parsed = JSON.parse(raw.slice(start, end + 1));
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
