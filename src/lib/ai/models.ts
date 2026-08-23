@@ -12,6 +12,7 @@ type AgentName =
   | 'curriculumRetrieval'
   | 'curriculumCritic'
   | 'curriculumFallback'
+  | 'discoveryDescriber'
   | 'mapSpineAuthor'
   | 'mapSpineReviewer'
   | 'mapReviewer'
@@ -83,6 +84,17 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     modelId: 'gemini-2.5-pro',
     temperature: 0.3,
     maxOutputTokens: 32768,
+  },
+  discoveryDescriber: {
+    // Second half of the split discovery call: turns the grounded prose from
+    // curriculumFallback into per-resource metadata, keyed by INDEX into the
+    // attested URL set (tools/grounding.ts). No search tool and no URL field —
+    // asking a grounded call for JSON is what disabled grounding in the first
+    // place, and this call must never be in a position to write a URL at all.
+    // Flash at temperature 0: restructuring text it was handed, not judging.
+    modelId: 'gemini-2.5-flash',
+    temperature: 0,
+    maxOutputTokens: 16384,
   },
   mapSpineAuthor: {
     // Phase 2.5d-1: authors a topic's spine concept DAG (nodes + directed prereq
