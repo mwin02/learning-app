@@ -26,6 +26,10 @@ type Row = {
   url: string;
   origin: string;
   updatedAt: Date;
+  // Set when the row is a child re-routed onto the decomposition axis by the
+  // pending-resources `decompose` action. Shown so a curator can tell a child
+  // apart from a top-level container before deciding.
+  parent: { id: string; title: string } | null;
 };
 
 function QueueList({ rows }: { rows: Row[] }) {
@@ -51,6 +55,14 @@ function QueueList({ rows }: { rows: Row[] }) {
               <span className="text-blue-700">{kind}</span>
             </div>
             <div className="text-gray-500 text-xs mt-1">{KIND_HINT[kind] ?? kind}</div>
+            {r.parent && (
+              <div className="text-gray-500 text-xs mt-1">
+                child of{' '}
+                <Link href={`/playground/resource/${r.parent.id}`} className="underline">
+                  {r.parent.title}
+                </Link>
+              </div>
+            )}
             <div className="text-gray-400 text-xs mt-1 truncate">
               <a href={r.url} target="_blank" rel="noreferrer" className="underline">
                 {r.url}
@@ -67,12 +79,17 @@ function QueueList({ rows }: { rows: Row[] }) {
 export default async function HumanReviewPage() {
   await requireAdminPage();
 
-  // Top-level container rows that aren't pickable: human_review (a human must
-  // decide) and pending (a transient/automatic retry — shown for visibility).
-  // Children are always atomic, so parentResourceId is null for everything here.
+  // Rows that aren't pickable: human_review (a human must decide) and pending
+  // (a transient/automatic retry — shown for visibility).
+  //
+  // Deliberately NOT filtered to parentResourceId: null. A child is normally
+  // atomic, but the pending-resources `decompose` action re-routes any atomic
+  // row onto this axis (applyPendingReview, action 'decompose') and that
+  // includes children. Filtering them out stranded 28 of them: dropped from the
+  // pickable pool by dropCandidateLinks, then invisible here, so nothing could
+  // ever resolve them.
   const rows = await prisma.resource.findMany({
     where: {
-      parentResourceId: null,
       decompositionStatus: { in: ['human_review', 'pending'] },
     },
     select: {
@@ -84,6 +101,7 @@ export default async function HumanReviewPage() {
       origin: true,
       updatedAt: true,
       decompositionStatus: true,
+      parent: { select: { id: true, title: true } },
     },
     orderBy: [{ topic: 'asc' }, { title: 'asc' }],
   });
