@@ -17,7 +17,17 @@ export type TrackResourceView = {
   // `content` is the inline lesson body (markdown), non-null only for generated
   // resources (origin='generated', the on-ramp lesson) — the learn player renders it
   // inline instead of an external link/embed. Null for the link-out majority.
-  resource: { id: string; title: string; url: string; type: string; content: string | null };
+  // `durationMin` is nullable on purpose — "we did not measure this" is a real
+  // answer in the library (see Resource.durationSource). The rail prints a
+  // duration only when there is one.
+  resource: {
+    id: string;
+    title: string;
+    url: string;
+    type: string;
+    content: string | null;
+    durationMin: number | null;
+  };
 };
 
 // Phase 2.5h: one practice exercise on a lesson. Reveal-only — the learner reads
@@ -100,7 +110,16 @@ export const getTrackView = cache(async (trackId: string): Promise<TrackView | n
               role: true,
               deliveryMode: true,
               segmentRef: true,
-              resource: { select: { id: true, title: true, url: true, type: true, content: true } },
+              resource: {
+                select: {
+                  id: true,
+                  title: true,
+                  url: true,
+                  type: true,
+                  content: true,
+                  durationMin: true,
+                },
+              },
             },
           },
           exercises: {
