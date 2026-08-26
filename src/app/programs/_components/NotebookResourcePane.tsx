@@ -62,7 +62,21 @@ export type LessonResourcesState = {
   goNext: () => void;
   hasNext: boolean;
   stageRef: React.RefObject<HTMLDivElement | null>;
+  railRef: React.RefObject<HTMLElement | null>;
 };
+
+// Switching resources must not move the page out from under the reader. On the
+// two-column layout the stage sits BESIDE the rail that was just clicked, so
+// there is nothing to reveal and any scroll is pure disruption — the first cut
+// used scrollIntoView('start') unconditionally and yanked the page to the
+// stage's top on every rail click. Only the stacked layout, where the rail is
+// below the stage, needs the scroll. Which layout is live is read off the
+// geometry rather than a JS copy of the `lg` breakpoint, so the two can't drift.
+function revealStage(stage: HTMLDivElement | null, rail: HTMLElement | null): void {
+  if (!stage || !rail) return;
+  if (rail.getBoundingClientRect().top < stage.getBoundingClientRect().bottom) return;
+  stage.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
 
 // One hook owns the selection + viewed set so the stage and the rail — which the
 // lesson view renders in different columns — stay in step without a context.
@@ -81,6 +95,7 @@ export function useLessonResources(
   // stage out from under them.
   const picked = useRef(false);
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const railRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -122,9 +137,7 @@ export function useLessonResources(
   const goNext = useCallback(() => {
     if (!hasNext) return;
     select(view.cores[activeIndex + 1].id);
-    // The rail row that was clicked can be far above the stage on a wrapped
-    // (narrow) layout, so bring the newly-selected resource into view.
-    stageRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    revealStage(stageRef.current, railRef.current);
   }, [hasNext, select, view.cores, activeIndex]);
 
   return {
@@ -139,6 +152,7 @@ export function useLessonResources(
     goNext,
     hasNext,
     stageRef,
+    railRef,
   };
 }
 
@@ -360,16 +374,16 @@ export function ResourceRail({
   myVotes?: MyVotes;
   lessonId?: string;
 }) {
-  const { view, activeId, select, isViewed, viewedCount, stageRef } = state;
+  const { view, activeId, select, isViewed, viewedCount, stageRef, railRef } = state;
   if (view.cores.length === 0) return null;
 
   const onSelect = (id: string) => {
     select(id);
-    stageRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    revealStage(stageRef.current, railRef.current);
   };
 
   return (
-    <aside className="w-full flex-none lg:w-[300px]">
+    <aside ref={railRef} className="w-full flex-none lg:w-[300px]">
       <div className="font-hand text-[24px] font-bold text-script">
         {view.cores.length > 1 ? 'Core resources' : 'This resource'}
       </div>
@@ -473,14 +487,19 @@ function OptionalPool({
       <div className="mb-1 mt-[22px] font-hand text-[22px] font-bold text-script-faint">
         Optional — if you want more
       </div>
-      <details className="group [&_summary::-webkit-details-marker]:hidden">
+      <details className="group lg:relative [&_summary::-webkit-details-marker]:hidden">
         <summary className="flex cursor-pointer list-none items-center gap-2.5 rounded-[10px] border-2 border-dashed border-rule-strong bg-card/40 px-3.5 py-2.5">
           <span className="font-script text-2xs text-script-faint">{summary}</span>
           <div className="flex-1" />
           <span className="font-script text-sm text-script-faint group-open:hidden">⌄</span>
           <span className="hidden font-script text-sm text-script-faint group-open:inline">⌃</span>
         </summary>
-        <ul className="m-0 flex list-none flex-col gap-3 p-0 pt-4">
+        {/* Out of flow from `lg` up, where the rail is a column beside the sheet's
+            main content: in flow, expanding it grew the rail, which grew the
+            two-column row, which pushed the quiz ~500px down the page. Below
+            `lg` the rail is stacked last, so pushing costs nothing and static
+            keeps the list reachable. */}
+        <ul className="m-0 flex list-none flex-col gap-3 p-0 pt-4 lg:absolute lg:inset-x-0 lg:top-full lg:z-20 lg:pt-3">
           {resources.map((r, i) => (
             <li key={r.id}>
               <ClippedScrap rotate={i % 2 === 0 ? 1.2 : -1.4}>
