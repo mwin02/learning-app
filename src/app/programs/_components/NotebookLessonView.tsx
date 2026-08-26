@@ -1,11 +1,17 @@
 'use client';
 
-// Frontend redesign Block 5: the lesson view as a notebook sheet, per the
-// Lesson View (Notebook) mock. Kicker + hand-font title + dashed type badge,
-// the taped resource pane, summary, "in this lesson" points, practice (index
-// cards, reveal-only), the up-next index card, and the footer nav wired to the
-// shared course context. The mock's tabs (transcript/discussion) and fake
-// player chrome are dropped — no data backs them; the iframe has real controls.
+// Lesson View v3: the lesson as a notebook sheet. v2's single-column stack
+// (one big resource, then everything else) is now a two-column body — the stage
+// plus the lesson's own prose on the left, the core-resource rail and the
+// optional pool on the right — so a lesson with several mandatory resources
+// reads as a set to work through rather than a pile, and the optional pool is
+// visibly a different kind of thing.
+//
+// The mock's fake player chrome is dropped (the iframe has real controls), and
+// the quiz stays reveal-only: Exercise carries MCQ options as prose lines inside
+// `prompt` and a free-text `answer`, with no correct-option marker or attempt
+// record, so the mock's graded states have nothing to render from. Only the
+// chrome — "Check yourself", the per-question card, the counter — is adopted.
 
 import { useState } from 'react';
 import Link from 'next/link';
@@ -13,7 +19,14 @@ import type { TrackExerciseView } from '@/lib/track-view';
 import type { LessonViewModel, LessonNavLesson, LessonNextLesson } from '@/app/learn/_components/LessonView';
 import { useCourse } from '@/app/learn/_components/course-context';
 import { IndexCard, PctDone } from '@/components/notebook/primitives';
-import { NotebookResourcePane, TypeIcon, type MyVotes } from './NotebookResourcePane';
+import { lessonMetaLine } from '@/lib/lesson-resources-view';
+import {
+  ResourceRail,
+  ResourceStage,
+  TypeIcon,
+  useLessonResources,
+  type MyVotes,
+} from './NotebookResourcePane';
 
 const TYPE_LABEL = { video: 'video', embed: 'embed', link: 'reading' } as const;
 
@@ -22,6 +35,7 @@ const TYPE_LABEL = { video: 'video', embed: 'embed', link: 'reading' } as const;
 export function NotebookLessonView({ model, myVotes }: { model: LessonViewModel; myVotes?: MyVotes }) {
   const { model: course, basePath, isComplete, toggleComplete } = useCourse();
   const done = isComplete(model.id);
+  const resources = useLessonResources(model.id, model.resources);
 
   return (
     <>
@@ -36,37 +50,34 @@ export function NotebookLessonView({ model, myVotes }: { model: LessonViewModel;
       </div>
 
       <div className="nb-kicker">{model.eyebrow.toLowerCase()}</div>
-      <div className="mb-4 mt-0.5 flex flex-wrap items-center gap-3.5">
+      <div className="mb-5 mt-0.5 flex flex-wrap items-baseline gap-4">
         <h1 className="m-0 font-hand text-[46px] font-bold leading-none text-script">{model.title}</h1>
-        <span className="-rotate-2 rounded border border-dashed border-note-edge bg-note px-2.5 py-[3px] font-script text-2xs uppercase tracking-[0.5px] text-note-label">
-          ✎ {TYPE_LABEL[model.type]} · ~{model.estMinutes} min
+        <span className="font-script text-sm text-script-faint">
+          {lessonMetaLine({
+            estMinutes: model.estMinutes,
+            coreCount: resources.view.cores.length,
+            exerciseCount: model.exercises.length,
+          })}
         </span>
       </div>
 
-      <NotebookResourcePane resources={model.resources} myVotes={myVotes} lessonId={model.id} />
+      <div className="flex flex-wrap items-start gap-7">
+        <div className="min-w-0 flex-1 basis-[440px]">
+          <ResourceStage state={resources} myVotes={myVotes} lessonId={model.id} />
 
-      {model.summary && (
-        <p className="mb-5 mt-6 max-w-[660px] text-lg leading-[34px]">{model.summary}</p>
-      )}
-
-      {model.concepts.length > 0 && (
-        <div className="mb-6">
-          <div className="mb-1 font-hand text-[26px] font-bold text-script">In this lesson</div>
-          <div className="flex max-w-[640px] flex-col gap-0.5">
-            {model.concepts.map((c) => (
-              <div key={c} className="flex items-start gap-2.5 text-md leading-[30px]">
-                <span className="flex-none text-lg text-pen">→</span>
-                <span>{c}</span>
-              </div>
-            ))}
-          </div>
+          {/* The mock's "In this lesson" concept list is deliberately dropped:
+              lessons are nearly always single-concept here, so it restated the
+              title under a heading. The concepts still drive the syllabus. */}
+          {model.summary && <p className="mt-4 text-lg leading-[34px]">{model.summary}</p>}
         </div>
-      )}
+
+        <ResourceRail state={resources} myVotes={myVotes} lessonId={model.id} />
+      </div>
 
       <NotebookExercises exercises={model.exercises} />
 
       {model.next && (
-        <Link href={`${basePath}/${model.next.id}`} className="block no-underline">
+        <Link href={`${basePath}/${model.next.id}`} className="mt-8 block no-underline">
           <IndexCard
             accent="var(--color-pen)"
             icon={<TypeIcon type={model.next.type} />}
@@ -91,52 +102,68 @@ export function NotebookLessonView({ model, myVotes }: { model: LessonViewModel;
 function NotebookExercises({ exercises }: { exercises: TrackExerciseView[] }) {
   if (exercises.length === 0) return null;
   return (
-    <div className="mb-6">
-      <div className="mb-2 font-hand text-[26px] font-bold text-script">Practice</div>
-      <ul className="m-0 flex list-none flex-col gap-3.5 p-0">
+    <div className="mt-[38px]">
+      <div className="flex flex-wrap items-baseline gap-3.5">
+        <span className="font-hand text-[30px] font-bold text-script">Check yourself</span>
+        <span className="font-script text-2xs text-script-faint">
+          {`${exercises.length} question${exercises.length === 1 ? '' : 's'} · reveal the answer when you’ve had a go`}
+        </span>
+      </div>
+      <ul className="m-0 mt-3.5 flex list-none flex-col gap-3.5 p-0">
         {exercises.map((ex, i) => (
-          <Exercise key={ex.id} exercise={ex} index={i + 1} />
+          <Exercise key={ex.id} exercise={ex} index={i + 1} total={exercises.length} />
         ))}
       </ul>
     </div>
   );
 }
 
-// Reveal-only, like the old card: prompt (MCQ options are lines in the prompt),
-// then a doodle button expands the answer + why. No auto-grading (Phase-4 tutor).
-function Exercise({ exercise, index }: { exercise: TrackExerciseView; index: number }) {
+// Reveal-only: prompt (MCQ options are lines in the prompt), then a doodle button
+// expands the answer + why. No auto-grading (Phase-4 tutor), so the mock's
+// correct/incorrect card states are deliberately absent — only its chrome is here.
+function Exercise({
+  exercise,
+  index,
+  total,
+}: {
+  exercise: TrackExerciseView;
+  index: number;
+  total: number;
+}) {
   const [revealed, setRevealed] = useState(false);
   return (
     <li
-      className="max-w-[640px] rounded-[3px] border border-note-edge bg-card px-[18px] py-3.5 shadow-[0_4px_10px_rgba(0,0,0,.08)]"
-      style={{ borderLeft: '5px solid var(--color-pen)' }}
+      className="max-w-[680px] rounded-[4px] border border-note-edge bg-card px-[22px] py-[18px] shadow-[0_5px_14px_rgba(0,0,0,.09)]"
+      style={{ borderTop: `5px solid var(--color-${revealed ? 'crayon-green' : 'pen'})` }}
     >
-      <div className="mb-1 flex items-baseline gap-2.5">
-        <span className="font-hand text-[22px] font-bold text-pen">Q{index}</span>
+      <div className="flex items-baseline gap-3">
+        <span className="font-script text-2xs uppercase tracking-[1px] text-script-dim">
+          Question {index} of {total}
+        </span>
         <span className="font-script text-2xs uppercase tracking-[1px] text-script-dim">
           {exercise.kind === 'mcq' ? 'multiple choice' : 'short answer'}
         </span>
       </div>
-      <p className="m-0 whitespace-pre-line font-script text-sm leading-[26px] text-script-body">
+      <p className="m-0 mb-3.5 mt-0.5 whitespace-pre-line font-hand text-[24px] font-bold leading-tight text-script">
         {exercise.prompt}
       </p>
       {revealed ? (
-        <div className="mt-3 border-t border-dashed border-rule pt-2.5">
+        <div className="border-t border-dashed border-rule pt-2.5">
           <div className="font-script text-2xs uppercase tracking-[1px] text-crayon-green">answer</div>
           <p className="m-0 mt-1 whitespace-pre-line font-script text-sm leading-[26px] text-script-body">
             {exercise.answer}
           </p>
           {exercise.rubric && (
-            <>
-              <div className="mt-2.5 font-script text-2xs uppercase tracking-[1px] text-script-dim">why</div>
-              <p className="m-0 mt-1 whitespace-pre-line font-script text-sm leading-[26px] text-script-faint">
+            <div className="mt-3 rounded-[0_6px_6px_0] border-l-4 border-note-label bg-note px-4 py-2.5">
+              <div className="font-hand text-[22px] font-bold text-note-label">Why</div>
+              <p className="m-0 whitespace-pre-line font-script text-sm leading-[26px] text-script-body">
                 {exercise.rubric}
               </p>
-            </>
+            </div>
           )}
         </div>
       ) : (
-        <button type="button" onClick={() => setRevealed(true)} className="btn-doodle mt-3 px-3.5 py-0.5 text-[19px]">
+        <button type="button" onClick={() => setRevealed(true)} className="btn-doodle px-5 py-0.5 text-[20px]">
           Reveal answer →
         </button>
       )}
@@ -158,7 +185,7 @@ function FooterNav({
   onToggle: () => void;
 }) {
   return (
-    <div className="mt-[30px] flex flex-wrap items-center gap-3.5 border-t-2 border-dashed border-rule pt-[18px]">
+    <div className="mt-[34px] flex flex-wrap items-center gap-3.5 border-t-2 border-dashed border-rule pt-[18px]">
       {prev ? (
         <Link href={`${basePath}/${prev.id}`} className="btn-doodle px-4 py-1 text-[20px] no-underline">
           ← Previous
@@ -170,6 +197,10 @@ function FooterNav({
       )}
 
       <div className="flex-1" />
+
+      <span className="font-script text-2xs text-script-dim">
+        nothing is gated — mark it done when you&rsquo;re ready
+      </span>
 
       <button
         type="button"
