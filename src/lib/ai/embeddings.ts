@@ -27,6 +27,15 @@ type TxClient = Omit<
 // radius of a single failing call and keeps memory predictable on backfill.
 const BATCH = 100;
 
+// Hard Vertex limit, not a preference: the predict endpoint rejects a request
+// carrying more than 250 instances outright ("250 instance(s) is allowed per
+// prediction. Actual: N"). embedMany does NOT protect us — @ai-sdk/google-vertex
+// declares maxEmbeddingsPerCall = 2048, so it only splits an order of magnitude
+// past the real ceiling. Enforced inside embedTexts so every caller is covered:
+// a 268-child doc-TOC decomposition hit this and lost the embeddings for the
+// whole batch, which silently cost the filing guardrail its input.
+const MAX_INSTANCES_PER_CALL = 250;
+
 type EmbeddingFields = {
   title: string;
   summary: string;
@@ -45,7 +54,14 @@ export function buildEmbeddingText(r: EmbeddingFields): string {
 
 export async function embedTexts(texts: string[]): Promise<number[][]> {
   const { model, dimensions } = getEmbeddingModel();
-  const { embeddings } = await embedMany({ model, values: texts });
+  const embeddings: number[][] = [];
+  for (let i = 0; i < texts.length; i += MAX_INSTANCES_PER_CALL) {
+    const { embeddings: batch } = await embedMany({
+      model,
+      values: texts.slice(i, i + MAX_INSTANCES_PER_CALL),
+    });
+    embeddings.push(...batch);
+  }
   for (const v of embeddings) {
     if (v.length !== dimensions) {
       throw new Error(
