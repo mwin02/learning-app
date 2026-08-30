@@ -236,6 +236,26 @@ export const DECOMPOSITION_MAX_TOTAL_NODES = 250;
 // so a large container stays within the model's output-token budget.
 export const CONCEPT_DERIVATION_CHUNK_SIZE = 25;
 
+// Headroom multiplier on deriveWithBisect's per-batch call budget.
+//
+// Bisection assumes ONE malformed item is failing the parse for the whole batch,
+// so halving isolates it and recovers the rest. Isolating a single poison item in
+// a batch of n costs exactly 3*ceil(log2 n) + 2 calls — ceil(log2 n) + 1 nodes on
+// the failing path at 2 attempts each, plus one succeeding sibling per level (17
+// for n = 25, measured, not estimated). That is the budget floor: anything less
+// drops items the heuristic was built to recover.
+//
+// When the premise does NOT hold — the model failing the schema for every subset —
+// the same recursion pays 2 attempts on each of a 2n-1-node tree: 98 calls for
+// n = 25, to recover nothing. That is what the 2026-08-30 multivariable-calculus
+// build spent 14 of its 30 minutes on.
+//
+// 2x the single-poison cost (34 for n = 25) leaves the healthy path untouched,
+// still fully recovers two or three genuinely bad items, and cuts the pathological
+// collapse by about two thirds. A multiplier rather than a hardcoded call count so
+// this stays correct if CONCEPT_DERIVATION_CHUNK_SIZE moves.
+export const CONCEPT_DERIVATION_BISECT_BUDGET_MULTIPLIER = 2;
+
 // Phase 2.5b-3: cap on the fetched container HTML we process (chars). Doc pages
 // can be huge; we only need the title, anchor links, and a body snippet, so we
 // slice before extracting to bound regex + token cost.
