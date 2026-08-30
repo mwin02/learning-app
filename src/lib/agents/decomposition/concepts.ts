@@ -20,7 +20,10 @@ import { prisma } from '@/lib/db';
 import { getModel } from '@/lib/ai/models';
 import { logWarn } from '@/lib/log';
 import { describeError } from '@/lib/ai/describe-error';
-import { CONCEPT_DERIVATION_CHUNK_SIZE } from '@/lib/config';
+import {
+  CONCEPT_DERIVATION_CHUNK_SIZE,
+  CONCEPT_DERIVATION_BISECT_BUDGET_MULTIPLIER,
+} from '@/lib/config';
 
 // The distinct concept tags already in use by a topic — the vocabulary new tags
 // are grounded against. Includes pending_review rows so freshly-found resources
@@ -130,6 +133,20 @@ export async function deriveChildConcepts(args: {
     for (const [ref, concepts] of result) out.set(ref, concepts);
   }
 
+  // Unmapped refs are not an error — the caller resolves them to inherited/fallback
+  // concepts. But they used to be invisible in aggregate: the per-node warnings say
+  // a batch failed, never how much of the container ended up underived. This is the
+  // line that says whether a decomposition's tags are mostly derived or mostly
+  // inherited, and the one that surfaces a budget that ran out.
+  if (out.size < items.length) {
+    logWarn('concepts.derive_incomplete', {
+      topic,
+      requested: items.length,
+      derived: out.size,
+      batches: batches.length,
+    });
+  }
+
   return out;
 }
 
@@ -139,19 +156,41 @@ export async function deriveChildConcepts(args: {
 // bottoms out at a single item, which is either derived or genuinely undeducible
 // — and that one loss is now logged and stamped rather than silent.
 //
-// Worst case (every item poisonous) is bounded: 2 attempts per node over a
-// 2*n-1-node bisection tree, and a real batch fails at one or two leaves.
+// The bounded-worst-case claim this comment used to make was wrong in the way
+// that matters: 2 attempts over a 2n-1-node tree IS bounded, but at ~98 calls for
+// a 25-item batch, which is a bound in name only. It assumed a real batch fails at
+// one or two leaves. On 2026-08-30 a multivariable-calculus build met the case
+// where the model failed the schema for EVERY subset: the tree collapsed all the
+// way down (25 -> 13/12 -> 7/6 -> 3/3 -> 1) and burned 14 minutes of a 30-minute
+// job deadline. So the recursion now shares a call budget, and a spent budget
+// abandons the remaining items instead of splitting further — bisection is a
+// recovery heuristic, and once its one-poison-item premise is visibly false,
+// continuing to split buys nothing.
 //
-// `run` is injected so the bisection is testable without the model.
+// `run` and `budget` are injected so the bisection is testable without the model.
+//
+// Exported for the same reason: the budget floor is a property of the recursion's
+// shape, so a test asserts it against the real cost rather than a copied number.
+export function bisectBudgetFor(batchSize: number): number {
+  const singlePoisonCost = 3 * Math.ceil(Math.log2(Math.max(batchSize, 2))) + 2;
+  return CONCEPT_DERIVATION_BISECT_BUDGET_MULTIPLIER * singlePoisonCost;
+}
+
 export async function deriveWithBisect(
   batch: DerivableItem[],
   run: (b: DerivableItem[]) => Promise<Map<string, DerivedConcepts>>,
   ctx: { topic: string },
+  budget: { remaining: number } = { remaining: bisectBudgetFor(batch.length) },
 ): Promise<Map<string, DerivedConcepts>> {
   if (batch.length === 0) return new Map();
 
   let lastError: ReturnType<typeof describeError> = { error: '' };
   for (let attempt = 1; attempt <= 2; attempt += 1) {
+    // Checked per ATTEMPT, not per node: the retry is the other half of the cost,
+    // and a budget that only gates recursion would still pay 2 calls at each of
+    // the nodes it was meant to stop creating.
+    if (budget.remaining <= 0) return new Map();
+    budget.remaining -= 1;
     try {
       return await run(batch);
     } catch (err) {
@@ -178,10 +217,13 @@ export async function deriveWithBisect(
   }
 
   const mid = Math.ceil(batch.length / 2);
-  const halves = await Promise.all([
-    deriveWithBisect(batch.slice(0, mid), run, ctx),
-    deriveWithBisect(batch.slice(mid), run, ctx),
-  ]);
+  // Sequential, not Promise.all: the halves share one budget, and running them
+  // concurrently lets both read the same `remaining` before either decrements —
+  // so a spent budget would still fund a full extra level of the tree.
+  const halves = [
+    await deriveWithBisect(batch.slice(0, mid), run, ctx, budget),
+    await deriveWithBisect(batch.slice(mid), run, ctx, budget),
+  ];
   const out = new Map<string, DerivedConcepts>();
   for (const half of halves) {
     for (const [ref, concepts] of half) out.set(ref, concepts);

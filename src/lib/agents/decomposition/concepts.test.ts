@@ -15,7 +15,7 @@ vi.mock('@/lib/ai/models', () => ({
   getModel: () => ({ model: {}, temperature: 0, maxOutputTokens: 0 }),
 }));
 
-import { deriveWithBisect, resolveConcepts, loadTopicVocab } from './concepts';
+import { deriveWithBisect, bisectBudgetFor, resolveConcepts, loadTopicVocab } from './concepts';
 import type { DerivableItem, DerivedConcepts } from './concepts';
 
 const ctx = { topic: 'linear-algebra' };
@@ -102,6 +102,84 @@ describe('deriveWithBisect', () => {
     const { run, calls } = poisonedRunner('none');
     expect((await deriveWithBisect([], run, ctx)).size).toBe(0);
     expect(calls).toHaveLength(0);
+  });
+});
+
+// The 2026-08-30 multivariable-calculus regression: the model failed the schema
+// for EVERY subset, so bisection's one-poison-item premise was false and the tree
+// collapsed 25 → 13/12 → 7/6 → 3/3 → 1, paying ~98 calls to recover nothing.
+describe('deriveWithBisect call budget', () => {
+  // Everything fails — the shape that made the recursion pathological.
+  function alwaysFails() {
+    const calls: number[] = [];
+    const run = async (batch: DerivableItem[]) => {
+      calls.push(batch.length);
+      throw new Error('No object generated: response did not match schema.');
+    };
+    return { run, calls };
+  }
+
+  it('caps a total collapse well below the unbudgeted cost', async () => {
+    const { run, calls } = alwaysFails();
+    const out = await deriveWithBisect(items(25), run, ctx);
+
+    expect(out.size).toBe(0);
+    expect(calls.length).toBeLessThanOrEqual(bisectBudgetFor(25));
+    // The unbudgeted tree was 2 attempts over 2n-1 nodes.
+    expect(calls.length).toBeLessThan(2 * (2 * 25 - 1));
+  });
+
+  it('leaves the single-poison recovery intact — the budget never costs an item', async () => {
+    // Poison at index 0 is the most expensive placement (17 calls for n=25),
+    // so if any single-poison batch fits the budget, this one does.
+    const { run, calls } = poisonedRunner('r0');
+    const out = await deriveWithBisect(items(25), run, ctx);
+
+    expect(out.size).toBe(24);
+    expect(calls.length).toBeLessThan(bisectBudgetFor(25));
+  });
+
+  it('recovers two poisoned items without exhausting the budget', async () => {
+    const calls: string[][] = [];
+    const run = async (batch: DerivableItem[]) => {
+      calls.push(batch.map((it) => it.ref));
+      if (batch.some((it) => it.ref === 'r0' || it.ref === 'r24')) throw new Error('bad');
+      return tagged(batch);
+    };
+    const out = await deriveWithBisect(items(25), run, ctx);
+
+    expect(out.size).toBe(23);
+    expect(out.has('r0')).toBe(false);
+    expect(out.has('r24')).toBe(false);
+  });
+
+  it('budget floor is the measured single-poison cost, not a guess', () => {
+    // 3*ceil(log2 n) + 2 is the exact worst-case single-poison cost; the budget
+    // must sit at or above it or the heuristic loses items it could recover.
+    for (const n of [2, 3, 7, 12, 25, 50]) {
+      expect(bisectBudgetFor(n)).toBeGreaterThanOrEqual(3 * Math.ceil(Math.log2(n)) + 2);
+    }
+  });
+
+  it('stops calling once the budget is spent', async () => {
+    const { run, calls } = alwaysFails();
+    await deriveWithBisect(items(25), run, ctx, { remaining: 5 });
+    expect(calls).toHaveLength(5);
+  });
+
+  it('does not call at all when handed a spent budget', async () => {
+    const { run, calls } = alwaysFails();
+    const out = await deriveWithBisect(items(25), run, ctx, { remaining: 0 });
+    expect(calls).toHaveLength(0);
+    expect(out.size).toBe(0);
+  });
+
+  it('shares one budget across both halves rather than one per subtree', async () => {
+    // Concurrent halves would both read the same `remaining` before either
+    // decremented, funding an extra level of the tree past the cap.
+    const { run, calls } = alwaysFails();
+    await deriveWithBisect(items(25), run, ctx, { remaining: 7 });
+    expect(calls).toHaveLength(7);
   });
 });
 
