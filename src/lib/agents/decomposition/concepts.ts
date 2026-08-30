@@ -19,6 +19,7 @@ import type { ConceptOrigin } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { getModel } from '@/lib/ai/models';
 import { logWarn } from '@/lib/log';
+import { describeError } from '@/lib/ai/describe-error';
 import { CONCEPT_DERIVATION_CHUNK_SIZE } from '@/lib/config';
 
 // The distinct concept tags already in use by a topic — the vocabulary new tags
@@ -149,17 +150,20 @@ export async function deriveWithBisect(
 ): Promise<Map<string, DerivedConcepts>> {
   if (batch.length === 0) return new Map();
 
-  let lastError = '';
+  let lastError: ReturnType<typeof describeError> = { error: '' };
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
       return await run(batch);
     } catch (err) {
-      lastError = (err as Error).message;
+      // finishReason/schemaIssues are what separate "the response was truncated"
+      // from "the schema rejected it" — the two have opposite fixes, and
+      // err.message alone reads identically for both.
+      lastError = describeError(err);
       logWarn('concepts.derive_batch_failed', {
         topic: ctx.topic,
         batchSize: batch.length,
         attempt,
-        error: lastError,
+        ...lastError,
       });
     }
   }
@@ -168,7 +172,7 @@ export async function deriveWithBisect(
     logWarn('concepts.derive_item_abandoned', {
       topic: ctx.topic,
       ref: batch[0].ref,
-      error: lastError,
+      ...lastError,
     });
     return new Map();
   }

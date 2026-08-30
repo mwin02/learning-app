@@ -30,6 +30,7 @@ import {
   MAX_FRONTIER_PER_TOPIC,
 } from '@/lib/config';
 import { log, logError, logWarn, runWithTrace, traceUsageSnapshot } from '@/lib/log';
+import { describeError } from '@/lib/ai/describe-error';
 import { reclaimStaleRemediationJobs } from '@/lib/agents/track/remediation-job';
 import {
   claimNextQueued,
@@ -345,7 +346,11 @@ async function processRequestPipeline(
       return requeueShutdown(cr).catch(() => 'requeued' as const);
     }
     const message = err instanceof Error ? err.message : String(err);
-    logError('course-worker.failed', { id: cr.id, topic: cr.topic, error: message });
+    // The stored `error` stays the bare message (it is user-facing on the failed-
+    // builds view), but the log carries the cause chain: the thrown error is
+    // routinely a wrapper — TrackBuildError's message names only the Path, and
+    // the reason it failed lives entirely in its `cause`.
+    logError('course-worker.failed', { id: cr.id, topic: cr.topic, ...describeError(err) });
     await finishCourseRequest(cr.id, {
       status: 'failed',
       error: message,
