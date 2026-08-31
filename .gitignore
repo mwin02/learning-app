@@ -63,3 +63,8 @@ backups/
 
 # local audit working docs (deliberately untracked)
 /docs/audits/
+
+# demo recording pipeline (scripts/demo-*.ts)
+.demo-profile/
+demo-out/
+.demo-auth.json
