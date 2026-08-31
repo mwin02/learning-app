@@ -117,6 +117,31 @@ export default async function Home({
 
             <GoalScratchpad />
 
+            <div className="mb-3 font-hand text-3xl font-bold text-script">See it in action</div>
+            {/* Anonymous only: the pitch's proof, so the app can be judged without
+                signing up. muted + playsInline are what let it autoplay at all under
+                browser policy; controls stay so it can be stopped. Recorded by
+                scripts/demo-record.ts — re-shoot and re-encode there, then replace
+                public/demo.mp4, rather than editing this markup. */}
+            <figure className="mb-11 max-w-[820px]">
+              <video
+                className="w-full rounded border-2 border-note-edge"
+                src="/demo.mp4"
+                poster="/demo-poster.jpg"
+                preload="metadata"
+                autoPlay
+                muted
+                loop
+                playsInline
+                controls
+                aria-label="Screen recording: writing a learning goal, the intake conversation, and a tour of the generated program"
+              />
+              <figcaption className="mt-2 font-script text-sm text-script-faint">
+                A real program, built on the spot — the few minutes spent writing the courses are
+                trimmed.
+              </figcaption>
+            </figure>
+
             <div className="mb-3 font-hand text-3xl font-bold text-script">How it works</div>
             <div className="grid max-w-[820px] grid-cols-1 gap-[26px] sm:grid-cols-3">
               {STEPS.map((step) => (
