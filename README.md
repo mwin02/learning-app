@@ -119,7 +119,7 @@ flowchart TB
 Autonomous curation needs a human escape hatch. `/playground` is an admin-gated console for exactly that: a worker-queue view, failed-build triage, a pending-resource review queue with cascading approve/reject, concept-map review and manual editing, broken-track triage, a resource-report triage inbox, and per-agent execution traces with token accounting.
 
 <p align="center">
-  <img src="docs/images/playground.png" alt="The operator dashboard: review-queue counts, worker and build-queue depth, the topic-filing review backlog broken down by topic, and library health totals." width="900">
+  <img src="docs/images/playground.png" alt="The operator dashboard: review-queue counts, worker and build-queue depth, and the topic-filing review backlog broken down by topic." width="900">
 </p>
 
 The library behind it currently holds **2,155 active resources**, each filed to a topic with provenance, embedded for semantic search, and carrying a trust score that moves as evidence arrives.
