@@ -12,15 +12,16 @@ export function Sheet({
   className?: string;
 }) {
   return (
-    <div className={`sheet relative min-w-0 flex-1 overflow-hidden pb-[60px] pl-[92px] pr-[46px] pt-[26px] ${className}`}>
+    <div className={`sheet relative min-w-0 flex-1 overflow-hidden pb-[60px] pl-[var(--sheet-pl)] pr-[var(--sheet-pr)] pt-[26px] ${className}`}>
       {/* red margin + its thinner companion */}
-      <div className="absolute bottom-0 left-[66px] top-0 w-[2px] bg-margin" />
-      <div className="absolute bottom-0 left-[70px] top-0 w-px bg-margin-soft" />
-      {/* three punch holes */}
+      <div className="absolute bottom-0 left-[var(--sheet-margin-x)] top-0 w-[2px] bg-margin" />
+      <div className="absolute bottom-0 left-[calc(var(--sheet-margin-x)+4px)] top-0 w-px bg-margin-soft" />
+      {/* three punch holes — hidden on phones, where the margin is too narrow to
+          hold them clear of the text */}
       {['top-[130px]', 'top-1/2', 'bottom-[130px]'].map((pos) => (
         <div
           key={pos}
-          className={`absolute left-[26px] h-5 w-5 rounded-full bg-hole shadow-[var(--shadow-hole)] ${pos}`}
+          className={`absolute left-[var(--sheet-hole-x)] hidden h-5 w-5 rounded-full bg-hole shadow-[var(--shadow-hole)] sm:block ${pos}`}
         />
       ))}
       {children}
@@ -39,7 +40,7 @@ export function Desk({
 }) {
   return (
     <div
-      className="min-h-[calc(100vh-var(--nav-h))] bg-desk px-[22px] pb-[60px] pt-[26px] font-script text-script-body"
+      className="min-h-[calc(100vh-var(--nav-h))] bg-desk px-[var(--desk-px)] pb-[60px] pt-[26px] font-script text-script-body"
       style={{
         backgroundImage: 'radial-gradient(var(--desk-dot) 1px, transparent 1px)',
         backgroundSize: '5px 5px',
