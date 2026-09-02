@@ -27,6 +27,18 @@
      black dark desk (black-on-black reads as flat otherwise). */
   --desk-dot: rgba(0, 0, 0, 0.04);
 
+  /* Sheet geometry. One group because it is one drawing: the writing area's
+     left padding exists to clear the red margin rule, which in turn clears the
+     punch holes. A phone has to shrink all three together — shrinking the
+     padding alone drops text on top of the rule. Consumed as arbitrary
+     utilities (pl-[var(--sheet-pl)]) in components/notebook/Sheet.tsx.
+     The desktop values are the original design constants. */
+  --sheet-pl: 92px;
+  --sheet-pr: 46px;
+  --sheet-margin-x: 66px; /* the red rule; its thin companion sits 4px right */
+  --sheet-hole-x: 26px;
+  --desk-px: 22px;
+
   /* The notebook highlighter: a fixed yellow marker swipe. Space-separated RGB
      channels so callers compose their own alpha — rgb(var(--nb-highlighter) / .72).
      Deliberately NOT overridden in the dark block: a highlighter reads yellow in
@@ -43,6 +55,18 @@
      alpha differs per theme too. */
   --nb-swipe: rgb(255 224 102 / 0.72);
   --nb-row-hover: rgb(255 224 102 / 0.14);
+}
+
+/* Phone sheets: the desktop insets spend 182px of a 375px viewport on chrome,
+   leaving the writing area under half the screen. Punch holes are dropped
+   rather than scaled — at this margin they would sit under the text. */
+@media (width < 40rem) {
+  :root {
+    --sheet-pl: 46px;
+    --sheet-pr: 16px;
+    --sheet-margin-x: 30px;
+    --desk-px: 12px;
+  }
 }
 
 /* ===== Design tokens (the central palette) =====
