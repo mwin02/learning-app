@@ -51,7 +51,9 @@ export function NotebookLessonView({ model, myVotes }: { model: LessonViewModel;
 
       <div className="nb-kicker">{model.eyebrow.toLowerCase()}</div>
       <div className="mb-5 mt-0.5 flex flex-wrap items-baseline gap-4">
-        <h1 className="m-0 font-hand text-[46px] font-bold leading-none text-script">{model.title}</h1>
+        <h1 className="m-0 font-hand text-[34px] font-bold leading-none text-script sm:text-[46px]">
+          {model.title}
+        </h1>
         <span className="font-script text-sm text-script-faint">
           {lessonMetaLine({
             estMinutes: model.estMinutes,
@@ -89,6 +91,24 @@ export function NotebookLessonView({ model, myVotes }: { model: LessonViewModel;
       )}
 
       <FooterNav
+        basePath={basePath}
+        prev={model.prev}
+        next={model.next}
+        done={done}
+        onToggle={() => toggleComplete(model.id)}
+      />
+
+      {/* The reassurance line lives inside FooterNav on wider screens; the phone
+          bar has no room for it, so it gets its own line above the bar. */}
+      <div className="mt-6 border-t-2 border-dashed border-rule pt-3.5 text-center font-script text-2xs text-script-dim sm:hidden">
+        nothing is gated — mark it done when you’re ready
+      </div>
+
+      {/* Clears the fixed bar below, which is out of flow and would otherwise
+          sit on top of the footer's last line. */}
+      <div className="h-[72px] sm:hidden" />
+
+      <MobileLessonBar
         basePath={basePath}
         prev={model.prev}
         next={model.next}
@@ -171,6 +191,69 @@ function Exercise({
   );
 }
 
+// The phone action bar. Unlike the rail→strip swap (which happens at `lg`,
+// where a 268px column stops fitting), this switches at `sm`: the inline footer
+// stays perfectly usable on a tablet, and the reason to pin the actions is
+// thumb reach on a phone, not width.
+function MobileLessonBar({
+  basePath,
+  prev,
+  next,
+  done,
+  onToggle,
+}: {
+  basePath: string;
+  prev: LessonNavLesson | null;
+  next: LessonNextLesson | null;
+  done: boolean;
+  onToggle: () => void;
+}) {
+  const box = 'flex h-[46px] items-center justify-center font-hand text-[20px] font-bold';
+  return (
+    <div
+      className="fixed inset-x-0 bottom-0 z-30 flex items-center gap-2.5 border-t-2 border-rule bg-paper px-3.5 pt-2.5 shadow-[0_-4px_14px_rgba(0,0,0,.14)] sm:hidden"
+      // The home indicator overlays the bottom of the viewport on modern
+      // iPhones; without this the Next button sits under it.
+      style={{ paddingBottom: 'calc(0.6875rem + env(safe-area-inset-bottom))' }}
+    >
+      {prev ? (
+        <Link
+          href={`${basePath}/${prev.id}`}
+          aria-label="Previous lesson"
+          className={`${box} w-12 flex-none rounded-[9px_11px_10px_8px] border-2 border-rule text-script-dim no-underline`}
+        >
+          ←
+        </Link>
+      ) : (
+        <span
+          aria-hidden
+          className={`${box} w-12 flex-none rounded-[9px_11px_10px_8px] border-2 border-dashed border-rule text-script-faint`}
+        >
+          ←
+        </span>
+      )}
+
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-pressed={done}
+        className={`${box} flex-none rounded-[9px_8px_11px_10px] border-2 border-crayon-green px-3.5 text-[18px] ${
+          done ? 'bg-crayon-green text-on-accent' : 'bg-transparent text-crayon-green'
+        }`}
+      >
+        ✓ Done
+      </button>
+
+      <Link
+        href={next ? `${basePath}/${next.id}` : basePath}
+        className={`${box} btn-ink flex-1 px-4 no-underline`}
+      >
+        {next ? 'Next lesson →' : 'Overview →'}
+      </Link>
+    </div>
+  );
+}
+
 function FooterNav({
   basePath,
   prev,
@@ -185,7 +268,7 @@ function FooterNav({
   onToggle: () => void;
 }) {
   return (
-    <div className="mt-[34px] flex flex-wrap items-center gap-3.5 border-t-2 border-dashed border-rule pt-[18px]">
+    <div className="mt-[34px] hidden flex-wrap items-center gap-3.5 border-t-2 border-dashed border-rule pt-[18px] sm:flex">
       {prev ? (
         <Link href={`${basePath}/${prev.id}`} className="btn-doodle px-4 py-1 text-[20px] no-underline">
           ← Previous

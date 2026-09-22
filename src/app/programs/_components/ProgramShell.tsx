@@ -12,25 +12,10 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { useParams } from 'next/navigation';
 import { createProgressStore, type ProgressStore } from '@/lib/progress-store';
 import { Desk } from '@/components/notebook/Sheet';
-import {
-  BookmarkRail,
-  BookmarkTab,
-  type TabLesson,
-  type TabSection,
-} from '@/components/notebook/BookmarkTab';
-import { accentFor, romanize } from '@/components/notebook/accents';
-import { groupLessonsBySection } from './program-ui';
+import { BookmarkRail, BookmarkStrip, BookmarkTab } from '@/components/notebook/BookmarkTab';
+import { buildRailTabs, type RailCourse } from './program-ui';
 
-// One rail entry per plan slot, in program order. Unready slots have trackId
-// null (or a non-ready track) and render inert.
-export type RailCourse = {
-  trackId: string | null;
-  ready: boolean;
-  topic: string;
-  title: string | null;
-  lessons: { id: string; title: string; sectionId: string | null }[];
-  sections: { id: string; title: string }[];
-};
+export type { RailCourse };
 
 type ProgramProgressValue = {
   completed: Set<string>;
@@ -142,78 +127,47 @@ export function ProgramShell({
   const setExpandOverride = (trackId: string, value: boolean) =>
     setRail((prev) => ({ ...prev, overrides: { ...prev.overrides, [trackId]: value } }));
 
-  const builtCount = courses.filter((c) => c.ready).length;
+  const tabs = buildRailTabs({
+    programId,
+    courses,
+    completed,
+    activeTrackId,
+    activeLessonId,
+  });
 
   return (
     <ProgramProgressContext.Provider value={value}>
       <Desk maxWidth={1440}>
         <BookmarkRail>
-          <BookmarkTab
-            kicker="Program"
-            label="Overview"
-            meta={`${builtCount}/${courses.length} ready`}
-            bg="var(--color-nb-slate)"
-            active={activeTrackId === null}
-            href={`/programs/${programId}`}
-          />
-          {courses.map((course, i) => {
-            const isActive = course.trackId !== null && course.trackId === activeTrackId;
-            const done = course.lessons.filter((l) => completed.has(l.id)).length;
-            const base = `/programs/${programId}/${course.trackId}`;
-
-            // `current` rides separately from the completion mark: the lesson
-            // being viewed may itself be completed (state stays 'done').
-            const toLesson = (l: RailCourse['lessons'][number]): TabLesson => ({
-              id: l.id,
-              title: l.title,
-              state: completed.has(l.id) ? 'done' : 'todo',
-              current: l.id === activeLessonId,
-              href: `${base}/${l.id}`,
-            });
-            // Sectioned course → grouped (with an "Other" group for SetNull
-            // ungrouped leftovers); a flat course renders a plain lesson list.
-            let sections: TabSection[] | undefined;
-            let lessons: TabLesson[] | undefined;
-            if (course.ready) {
-              const grouped = groupLessonsBySection(course.lessons, course.sections);
-              if (grouped) {
-                sections = grouped.map((g) => ({
-                  id: g.id,
-                  title: g.title,
-                  lessons: g.lessons.map(toLesson),
-                }));
-              } else {
-                lessons = course.lessons.map(toLesson);
-              }
-            }
-
+          {tabs.map((tab) => {
+            const id = tab.trackId;
+            const collapsible = id !== null && Boolean(tab.sections?.length || tab.lessons?.length);
+            const expanded = id === null ? undefined : (expandOverrides[id] ?? tab.active);
             return (
               <BookmarkTab
-                key={course.topic}
-                kicker={`Course ${romanize(i)}${course.ready ? ` · ${done}/${course.lessons.length}` : ''}`}
-                label={course.title ?? course.topic}
-                meta={course.ready ? `${course.lessons.length} lessons` : 'building…'}
-                bg={accentFor(i).bg}
-                active={isActive}
-                href={course.ready && course.trackId ? base : undefined}
-                sections={sections}
-                lessons={lessons}
-                expanded={
-                  course.trackId ? (expandOverrides[course.trackId] ?? isActive) : false
-                }
+                key={tab.key}
+                kicker={tab.kicker}
+                label={tab.label}
+                meta={tab.meta}
+                bg={tab.bg}
+                active={tab.active}
+                href={tab.href}
+                sections={tab.sections}
+                lessons={tab.lessons}
+                expanded={expanded}
                 onToggleExpand={
-                  course.ready && course.trackId
-                    ? () => {
-                        const id = course.trackId!;
-                        setExpandOverride(id, !(expandOverrides[id] ?? isActive));
-                      }
+                  collapsible && id !== null
+                    ? () => setExpandOverride(id, !(expandOverrides[id] ?? tab.active))
                     : undefined
                 }
               />
             );
           })}
         </BookmarkRail>
-        <main className="min-w-0 flex-1">{children}</main>
+        <div className="min-w-0 flex-1">
+          <BookmarkStrip tabs={tabs} routeKey={activeLessonId ?? activeTrackId ?? 'overview'} />
+          <main className="min-w-0">{children}</main>
+        </div>
       </Desk>
     </ProgramProgressContext.Provider>
   );

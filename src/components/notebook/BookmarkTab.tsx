@@ -23,6 +23,24 @@ export type TabLesson = {
 };
 export type TabSection = { id: string; title: string; lessons: TabLesson[] };
 
+// A rendered bookmark entry, independent of which navigation draws it: the
+// desktop rail stacks these as vertical tabs, the phone strip lays them out as
+// a scrolling row of chips with one expanding panel. Built by buildRailTabs in
+// program-ui, so the two navigations can never drift on what a course's kicker,
+// fraction, accent or lesson state says.
+export type RailTab = {
+  key: string;
+  trackId: string | null;
+  kicker: string;
+  label: string;
+  meta: string;
+  bg: string;
+  active: boolean;
+  href?: string;
+  sections?: TabSection[];
+  lessons?: TabLesson[];
+};
+
 const MARK: Record<TabLessonState, string> = { done: '✓', current: '◉', todo: '○' };
 const OPACITY: Record<TabLessonState, string> = { done: '0.9', current: '1', todo: '0.75' };
 
@@ -30,7 +48,7 @@ const isCurrent = (l: TabLesson) => Boolean(l.current) || l.state === 'current';
 
 export function BookmarkRail({ children }: { children: React.ReactNode }) {
   return (
-    <div className="sticky top-[26px] z-0 flex w-[268px] flex-none flex-col gap-[13px] pt-[118px]">
+    <div className="sticky top-[26px] z-0 hidden w-[268px] flex-none flex-col gap-[13px] pt-[118px] lg:flex">
       {children}
     </div>
   );
@@ -226,6 +244,105 @@ export function BookmarkTab({
   return (
     <div className={`${className} opacity-75`} style={{ background: bg }}>
       {headerText}
+    </div>
+  );
+}
+
+// The phone replacement for the rail (its complement: `lg:hidden` against the
+// rail's `lg:flex`). A 268px column costs 71% of a 375px viewport, so the tabs
+// become a horizontally scrolling row of chips; tapping a course opens its
+// lesson list in a panel underneath rather than a drawer, which keeps the
+// whole navigation in normal flow — no portal, focus trap, or scroll lock.
+//
+// `routeKey` closes the panel on navigation: tapping a lesson should reveal it,
+// not leave the list covering it. Reconciled at render (react.dev "adjusting
+// state when props change"), matching ProgramShell's rail-collapse handling.
+export function BookmarkStrip({ tabs, routeKey }: { tabs: RailTab[]; routeKey: string }) {
+  const [open, setOpen] = useState<{ forRoute: string; key: string | null }>({
+    forRoute: routeKey,
+    key: null,
+  });
+  if (open.forRoute !== routeKey) setOpen({ forRoute: routeKey, key: null });
+  const openKey = open.forRoute === routeKey ? open.key : null;
+  const panel = tabs.find((t) => t.key === openKey) ?? null;
+
+  return (
+    <div className="lg:hidden">
+      <div className="no-scrollbar -mx-1 flex gap-2.5 overflow-x-auto px-1 pb-3.5 pt-3">
+        {tabs.map((tab) => (
+          <StripChip
+            key={tab.key}
+            tab={tab}
+            open={tab.key === openKey}
+            onToggle={() => setOpen({ forRoute: routeKey, key: tab.key === openKey ? null : tab.key })}
+          />
+        ))}
+      </div>
+      {panel && (
+        <div
+          className="mb-3.5 rounded-[11px_4px_11px_4px] px-4 pb-3.5 pt-3 text-on-accent shadow-[0_4px_12px_rgba(0,0,0,.2)]"
+          style={{ background: panel.bg }}
+        >
+          {panel.href && (
+            <Link
+              href={panel.href}
+              className="mb-2 block font-script text-[12.5px] text-on-accent underline opacity-85"
+            >
+              Go to {panel.label} →
+            </Link>
+          )}
+          <div className="flex flex-col gap-1.5">
+            {panel.sections?.length
+              ? panel.sections.map((s) => <SectionGroup key={s.id} section={s} />)
+              : panel.lessons?.map((l) => <LessonRow key={l.id ?? l.title} lesson={l} />)}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// A chip is a toggle when the course has lessons to reveal, and a plain link
+// otherwise (the program overview, and courses still building have neither a
+// list nor — while unready — a destination).
+function StripChip({ tab, open, onToggle }: { tab: RailTab; open: boolean; onToggle: () => void }) {
+  const hasContent = Boolean(tab.sections?.length || tab.lessons?.length);
+  const className =
+    'min-h-[46px] min-w-[132px] max-w-[210px] flex-none rounded-[11px_4px_11px_4px] px-[13px] pb-[9px] pt-2 text-left text-on-accent no-underline';
+  const style = {
+    background: tab.bg,
+    boxShadow: tab.active ? '0 5px 12px rgba(0,0,0,.24)' : '0 3px 8px rgba(0,0,0,.14)',
+    opacity: tab.href || hasContent ? 1 : 0.75,
+  };
+  const inner = (
+    <>
+      <div className="font-script text-[9.5px] uppercase tracking-[1px] opacity-80">{tab.kicker}</div>
+      <div className="mt-px flex items-center gap-1.5">
+        <span className="min-w-0 flex-1 truncate font-hand text-[19px] font-bold leading-[1.05]">
+          {tab.label}
+        </span>
+        {hasContent && <span className="flex-none text-[10px] opacity-80">{open ? '▾' : '▸'}</span>}
+      </div>
+    </>
+  );
+
+  if (hasContent) {
+    return (
+      <button type="button" onClick={onToggle} className={className} style={style} aria-expanded={open}>
+        {inner}
+      </button>
+    );
+  }
+  if (tab.href) {
+    return (
+      <Link href={tab.href} className={className} style={style} aria-current={tab.active ? 'true' : undefined}>
+        {inner}
+      </Link>
+    );
+  }
+  return (
+    <div className={className} style={style}>
+      {inner}
     </div>
   );
 }

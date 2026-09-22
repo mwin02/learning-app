@@ -473,3 +473,12 @@ body {
     @apply bg-fill-soft font-semibold text-ink;
   }
 }
+
+/* Horizontal chip strips (the phone bookmark navigation) scroll by swipe, so the
+   bar is noise — and on desktop-with-mouse it would overlay the chips. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
