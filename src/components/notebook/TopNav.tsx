@@ -7,8 +7,10 @@
 import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { getViewer } from '@/lib/auth/viewer';
+import { isSupabaseConfigured } from '@/lib/supabase/server';
 import { NotebookBrand } from './NotebookBrand';
 import { ProfileMenu } from './ProfileMenu';
+import { AuthStateSync } from './AuthStateSync';
 
 export async function TopNav() {
   // getViewer() is request-cache()'d, so this shares the lookup with any page/
@@ -23,6 +25,9 @@ export async function TopNav() {
 
   return (
     <header className="sticky top-0 z-20 flex h-[var(--nav-h)] flex-none items-center gap-3 border-b-2 border-rule bg-paper px-[26px] shadow-[0_2px_8px_rgba(0,0,0,0.06)]">
+      {/* Root layouts don't re-render on client navigation, so this bar would
+          otherwise keep showing the auth state of the last full page load. */}
+      {isSupabaseConfigured() && <AuthStateSync signedIn={viewer.userId != null} />}
       <NotebookBrand href="/" />
       {viewer.userId && (
         <Link
