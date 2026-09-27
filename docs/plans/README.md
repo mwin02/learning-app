@@ -14,6 +14,7 @@ work — write a new plan instead.
 
 | Plan | Status | Open blocks |
 | --- | --- | --- |
+| [gemini-3-migration.md](gemini-3-migration.md) | active, not started | G1–G6 |
 | [library-quality.md](library-quality.md) | active, not started | Q1–Q8 |
 | [tutor-agent.md](tutor-agent.md) | active, not started | T1–T4 |
 
@@ -38,12 +39,13 @@ are in shipped PR titles and in source comments:
 | --- | --- | --- |
 | `A` `B` `C` `D` `E` | free-beta | `C` collides — see below |
 | `F` | resource-reports (review-fix chain) | |
+| `G` | gemini-3-migration | |
 | `Q` | library-quality | |
 | `R` | resource-reports, rung0-starvation | collision, pre-registry |
 | `S` | resource-serveability | its post-review follow-ups are `C1`–`C2`, colliding with free-beta's `C` |
 | `T` | topic-filing, tutor-agent | collision, pre-registry |
 
-New plans pick an unclaimed letter. `G`–`P`, `U`–`Z` are free.
+New plans pick an unclaimed letter. `H`–`P`, `U`–`Z` are free.
 
 **A prefix that isn't a block prefix doesn't belong here.** `library-quality.md` uses `P1`–`P7`
 and `B1`–`B6` for defects and backfill tasks — analysis, not blocks — and its blocks are
