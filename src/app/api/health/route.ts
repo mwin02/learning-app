@@ -56,11 +56,12 @@ export async function GET(request: Request) {
   }
 
   try {
-    const { model, modelId, temperature, maxOutputTokens } = getModel('health');
+    const { model, modelId, temperature, maxOutputTokens, providerOptions } = getModel('health');
     const { text, usage } = await generateText({
       model,
       temperature,
       maxOutputTokens,
+      providerOptions,
       prompt: 'Reply with the single word: pong',
     });
     log('health.ai-probe', { modelId, usage });

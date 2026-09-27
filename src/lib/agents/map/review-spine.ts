@@ -93,7 +93,7 @@ export type ReviewSpineArgs = {
 // never fails an otherwise-valid build — the spine is already structurally sound.
 export async function reviewSpine(args: ReviewSpineArgs): Promise<SpineReview> {
   const { topic, subject, spine, onTrace = () => {}, abortSignal } = args;
-  const { model, temperature, maxOutputTokens, modelId } = getModel('mapSpineReviewer');
+  const { model, temperature, maxOutputTokens, modelId, providerOptions } = getModel('mapSpineReviewer');
 
   onTrace({
     kind: 'stage',
@@ -105,6 +105,7 @@ export async function reviewSpine(args: ReviewSpineArgs): Promise<SpineReview> {
     model,
     temperature,
     maxOutputTokens,
+    providerOptions,
     output: Output.object({ schema: ReviewSchema }),
     system: SYSTEM_PROMPT,
     prompt: buildPrompt({ topic, subject, spine }),

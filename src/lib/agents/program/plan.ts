@@ -185,7 +185,7 @@ export async function decomposeProgram(
   input: ProgramPlanInput,
   opts: { model?: ReturnType<typeof getModel>; listTopics?: () => Promise<string[]> } = {},
 ): Promise<ProgramDecomposition> {
-  const { model, temperature, maxOutputTokens } = opts.model ?? getModel('programPlanner');
+  const { model, temperature, maxOutputTokens, providerOptions } = opts.model ?? getModel('programPlanner');
   const existingTopics = await (opts.listTopics ?? listLibraryTopics)();
   const prompt = buildDecomposePrompt(input, existingTopics);
 
@@ -196,6 +196,7 @@ export async function decomposeProgram(
         model,
         temperature,
         maxOutputTokens,
+        providerOptions,
         schema: DecompositionSchema,
         system: systemPrompt(MAX_PROGRAM_TOPICS),
         prompt,
@@ -264,7 +265,7 @@ export async function reconcileScopedTopic(
   opts: { model?: ReturnType<typeof getModel> } = {},
 ): Promise<string | null> {
   if (library.length === 0) return null;
-  const { model, temperature, maxOutputTokens } = opts.model ?? getModel('topicGate');
+  const { model, temperature, maxOutputTokens, providerOptions } = opts.model ?? getModel('topicGate');
   const prompt = [
     `Library topics: ${library.join(', ')}`,
     `Candidate topic: ${JSON.stringify(canonical)}`,
@@ -276,6 +277,7 @@ export async function reconcileScopedTopic(
         model,
         temperature,
         maxOutputTokens,
+        providerOptions,
         schema: ScopeVerdictSchema,
         system: RECONCILE_SYSTEM,
         prompt,

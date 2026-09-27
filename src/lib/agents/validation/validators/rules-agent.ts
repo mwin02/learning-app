@@ -32,7 +32,7 @@ export const rulesAgentValidator: Validator = {
   cost: 'expensive',
   async validate(rows: ValidatableResource[]): Promise<ValidatorVerdict[]> {
     if (rows.length === 0) return [];
-    const { model, temperature, maxOutputTokens } = getModel('validityAgent');
+    const { model, temperature, maxOutputTokens, providerOptions } = getModel('validityAgent');
 
     const input = rows.map((r) => ({ url: r.url, title: r.title, summary: r.summary, type: r.type }));
 
@@ -40,6 +40,7 @@ export const rulesAgentValidator: Validator = {
       model,
       temperature,
       maxOutputTokens,
+      providerOptions,
       schema: VerdictSchema,
       system: buildSystemPrompt(),
       prompt: [

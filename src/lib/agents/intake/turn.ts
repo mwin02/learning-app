@@ -125,7 +125,7 @@ export type IntakeExtractor = (prompt: string) => Promise<{
 // getModel is called lazily HERE (not at module-eval) so importing this module
 // stays secret-free for unit tests of the pure parts.
 const defaultExtract: IntakeExtractor = async (prompt) => {
-  const { model, temperature, maxOutputTokens } = getModel('intake');
+  const { model, temperature, maxOutputTokens, providerOptions } = getModel('intake');
   let result: Awaited<ReturnType<typeof generateObject<typeof ExtractionSchema>>> | undefined;
   let lastErr: unknown;
   // Retried once — Gemini structured output occasionally returns unparseable /
@@ -137,6 +137,7 @@ const defaultExtract: IntakeExtractor = async (prompt) => {
         model,
         temperature,
         maxOutputTokens,
+        providerOptions,
         schema: ExtractionSchema,
         system: INTAKE_SYSTEM_PROMPT,
         prompt,

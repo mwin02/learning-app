@@ -238,11 +238,12 @@ async function callDeriver(
   batch: DerivableItem[],
 ): Promise<Map<string, DerivedConcepts>> {
   const out = new Map<string, DerivedConcepts>();
-  const { model, temperature, maxOutputTokens } = getModel('conceptDeriver');
+  const { model, temperature, maxOutputTokens, providerOptions } = getModel('conceptDeriver');
   const result = await generateObject({
     model,
     temperature,
     maxOutputTokens,
+    providerOptions,
     schema: DerivedSchema,
     system: DERIVE_SYSTEM_PROMPT,
     prompt: [

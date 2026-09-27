@@ -68,7 +68,7 @@ const SpineSchema = z.object({
 
 export async function authorSpine(args: AuthorSpineArgs): Promise<AuthoredSpine> {
   const { topic, subject, repairFeedback, onTrace = () => {}, abortSignal } = args;
-  const { model, temperature, maxOutputTokens, modelId } = getModel('mapSpineAuthor');
+  const { model, temperature, maxOutputTokens, modelId, providerOptions } = getModel('mapSpineAuthor');
 
   onTrace({
     kind: 'stage',
@@ -80,6 +80,7 @@ export async function authorSpine(args: AuthorSpineArgs): Promise<AuthoredSpine>
     model,
     temperature,
     maxOutputTokens,
+    providerOptions,
     output: Output.object({ schema: SpineSchema }),
     system: SYSTEM_PROMPT,
     prompt: buildPrompt({ topic, subject, repairFeedback }),

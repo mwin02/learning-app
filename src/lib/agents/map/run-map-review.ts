@@ -113,11 +113,12 @@ async function callCritic(
   candidates: DuplicationCandidate[],
   abortSignal?: AbortSignal,
 ): Promise<MapReviewFinding[]> {
-  const { model, temperature, maxOutputTokens, modelId } = getModel('mapReviewer');
+  const { model, temperature, maxOutputTokens, modelId, providerOptions } = getModel('mapReviewer');
   const result = await generateText({
     model,
     temperature,
     maxOutputTokens,
+    providerOptions,
     abortSignal,
     output: Output.object({ schema: ReviewSchema }),
     system: SYSTEM_PROMPT,

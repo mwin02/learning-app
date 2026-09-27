@@ -95,7 +95,7 @@ export async function classifyDiscoveryTopics(
   // indistinguishable from the model failing, and the guardrail logs `no-evidence` for
   // what was actually a deliberate answer.
   const allowed = new Set([...candidates, fallback]);
-  const { model, temperature, maxOutputTokens } = getModel('topicClassifier');
+  const { model, temperature, maxOutputTokens, providerOptions } = getModel('topicClassifier');
 
   const input = resources.map((r) => ({
     url: r.url,
@@ -109,6 +109,7 @@ export async function classifyDiscoveryTopics(
       model,
       temperature,
       maxOutputTokens,
+      providerOptions,
       schema: ClassificationSchema,
       system: CLASSIFY_SYSTEM_PROMPT,
       prompt: [

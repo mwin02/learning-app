@@ -158,12 +158,13 @@ async function authorFrontier(args: {
   abortSignal?: AbortSignal;
 }): Promise<z.infer<typeof AuthorSchema>> {
   const { topic, request, concepts, abortSignal } = args;
-  const { model, temperature, maxOutputTokens, modelId } = getModel('mapSpineAuthor');
+  const { model, temperature, maxOutputTokens, modelId, providerOptions } = getModel('mapSpineAuthor');
 
   const result = await generateText({
     model,
     temperature,
     maxOutputTokens,
+    providerOptions,
     abortSignal,
     output: Output.object({ schema: AuthorSchema }),
     system: SYSTEM_PROMPT,
