@@ -8,7 +8,6 @@ vi.mock('@/lib/db', () => ({ prisma: {} }));
 vi.mock('@/lib/ai/vertex', () => ({
   vertex: Object.assign(() => ({}), { textEmbeddingModel: () => ({}) }),
   chatModel: () => ({}),
-  geminiFlash: {},
   vertexAnthropic: {},
   vertexGlobal: {},
 }));

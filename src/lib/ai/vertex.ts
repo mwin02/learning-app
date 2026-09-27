@@ -50,8 +50,6 @@ export const vertex = createVertex({
   googleAuthOptions,
 });
 
-export const geminiFlash = vertex('gemini-2.5-flash');
-
 // Anthropic's Claude models are first-party partner models in Vertex Model
 // Garden, billed through the same GCP project (so GCP credits apply) and
 // authenticated with the same service account. They are region-gated, though —

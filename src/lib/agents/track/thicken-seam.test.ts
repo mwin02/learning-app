@@ -8,7 +8,7 @@ import { describe, it, expect, vi } from 'vitest';
 vi.mock('@/lib/db', () => ({ prisma: {} }));
 vi.mock('@/lib/ai/vertex', () => ({
   vertex: Object.assign(() => ({}), { textEmbeddingModel: () => ({}) }),
-  chatModel: () => ({}), geminiFlash: {}, vertexAnthropic: {}, vertexGlobal: {},
+  chatModel: () => ({}), vertexAnthropic: {}, vertexGlobal: {},
 }));
 
 import { selectThickenTargets } from '@/lib/agents/track/thicken-seam';
