@@ -1,6 +1,10 @@
 // Tunable knobs that don't belong in env vars — small, code-reviewable
 // defaults imported by agents and routes. Phase 2 introduces this file;
 // later phases extend it rather than scattering magic numbers.
+// It is also the leaf module for the few env-derived settings (per the
+// env-access convention), e.g. CRAWLER_CONTACT_ORIGIN at the bottom.
+
+import { resolvePublicOrigin } from '@/lib/api/public-origin';
 
 // NOTE: the topic-level web-fallback knobs (PENDING_REVIEW_GATE_PER_TOPIC,
 // FALLBACK_THRESHOLD, FALLBACK_TARGET_COUNT, FALLBACK_DISCOVERY_OVERSAMPLE,
@@ -769,3 +773,24 @@ export const CLIENT_ERROR_MAX_BYTES = 8 * 1024;
 // is the right weak guarantee here rather than a DB round trip on the failure path).
 export const CLIENT_ERROR_BURST = 20;
 export const CLIENT_ERROR_REFILL_MS = 3_000;
+
+// The contact URL in the crawler User-Agent (doctoc.ts) — what a site owner sees in
+// their logs and follows to find out who is crawling them, so it has to resolve.
+// The worker has no request to derive an origin from, so this reads APP_ORIGIN
+// directly rather than going through the request-scoped publicOrigin. Until the
+// custom domain lands (app-deploy.md §6) it falls back to the Cloud Run service;
+// the cutover is then setting APP_ORIGIN, not a code change. An unparseable
+// APP_ORIGIN also falls back, so the header never carries a malformed URL.
+export const CLOUD_RUN_ORIGIN = 'https://learning-app-sau6bxtxta-uw.a.run.app';
+
+export function resolveCrawlerContactOrigin(appOrigin: string | undefined): string {
+  return resolvePublicOrigin({
+    appOrigin: appOrigin?.trim(),
+    forwardedHost: null,
+    forwardedProto: null,
+    host: null,
+    fallbackOrigin: CLOUD_RUN_ORIGIN,
+  });
+}
+
+export const CRAWLER_CONTACT_ORIGIN = resolveCrawlerContactOrigin(process.env.APP_ORIGIN);
