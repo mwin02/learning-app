@@ -70,16 +70,28 @@ const FLASH_MODEL_ID = 'gemini-3.7-flash';
 // generation, where a ceiling reached mid-thought returned no output at all, and
 // is untested against 3.x.
 //
-// `thinkingLevel: 'low'` is set only on the gate/classifier tier — agents that
-// apply rules rather than reason. On FLASH_MODEL_ID it cut a structured-output
-// call from 385 output tokens (343 thinking) to 31 (0 thinking). The authoring
-// agents keep the model default until there are production numbers to tune to.
+// `thinkingLevel: 'low'` is set on the gate/classifier tier — agents that apply
+// rules rather than reason — and on curriculumFallback (see its entry). On
+// FLASH_MODEL_ID it cut a structured-output call from 385 output tokens (343
+// thinking) to 31 (0 thinking). The authoring agents keep the model default
+// until there are production numbers to tune to.
 const REGISTRY: Record<AgentName, ModelConfig> = {
   curriculumFallback: {
     // Grounded Google Search discovery call. Pro because this is the
     // rare-but-important call that compounds the library; spending tokens here
     // saves them on every future request for the same topic.
+    //
+    // `low` thinking because a cold build runs one of these per remediation hole,
+    // serially, and at the default each took 45 s – 2.6 min, 80–95% of its output
+    // thinking — enough to push a cold topic past COURSE_JOB_DEADLINE_MS. The call
+    // picks pages out of search results, which is judgement, not deep reasoning.
+    // Measured 2026-09-29 on the real discovery call, same concept, same session:
+    // 17.5 s / 680 thinking at `low` against 48.3 s / 4,263 at the default, with
+    // 8 attested citations at both levels, so grounding is not traded away. An
+    // earlier discovery-shaped probe agreed (13.0 s / 774 against 24.8 s / 2,275;
+    // `medium` 21.9 s / 1,951 barely differs). Detail in `cold-build-deadline.md`.
     modelId: PRO_MODEL_ID,
+    thinkingLevel: 'low',
     maxOutputTokens: 32768,
   },
   discoveryDescriber: {
