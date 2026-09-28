@@ -51,6 +51,7 @@ describe('getModel — tiers', () => {
     'topicClassifier',
     'conceptDeriver',
     'mapCandidateJudge',
+    'curriculumFallback',
   ] as const;
 
   const isIn = (list: readonly string[], name: string) => list.includes(name);
@@ -73,7 +74,7 @@ describe('getModel — tiers', () => {
     expect(getModel(name).temperature).toBeUndefined();
   });
 
-  it.each(AGENT_NAMES)('%s has low thinking only if it is a gate/classifier', (name) => {
+  it.each(AGENT_NAMES)('%s has low thinking only if it is a gate/classifier or discovery', (name) => {
     const { providerOptions } = getModel(name);
     if (isIn(LOW_THINKING_AGENTS, name)) {
       expect(providerOptions).toEqual({
@@ -82,6 +83,28 @@ describe('getModel — tiers', () => {
     } else {
       expect(providerOptions).toBeUndefined();
     }
+  });
+});
+
+describe('getModel — curriculumFallback', () => {
+  it('runs grounded discovery on the Pro id at low thinking', () => {
+    const { modelId, providerOptions } = getModel('curriculumFallback');
+    expect(modelId).toBe(getModel('mapSpineAuthor').modelId);
+    expect(providerOptions).toEqual({
+      google: { thinkingConfig: { thinkingLevel: 'low' } },
+    });
+  });
+
+  it('leaves every other Pro agent at the model default', () => {
+    const otherPro = [
+      'mapSpineAuthor',
+      'mapSpineReviewer',
+      'onRampAuthor',
+      'onRampCritic',
+      'trackComposer',
+      'conceptBankAuthor',
+    ] as const;
+    for (const name of otherPro) expect(getModel(name).providerOptions).toBeUndefined();
   });
 });
 

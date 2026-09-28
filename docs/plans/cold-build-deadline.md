@@ -168,6 +168,25 @@ Answered 2026-09-28:
    deploy is the evidence.
 3. **K1 and K2 ship together and deploy** (app and worker) once both pass their gates.
 
+## K1 measured results (2026-09-29)
+
+The real discovery half (`discoverForConcept` → `runDiscovery` → `resolveAttestedUrls` →
+`describeCandidates`), topic `system design`, concept `Consistent hashing` (0 matching
+Resources and 0 matching Concepts in the dev DB), oversample 6, empty deny list. Both runs in
+one process, back to back. The default run is the identical call with `thinkingConfig` removed
+from the Pro `generateContent` request body at the fetch layer; nothing in `src/` was changed
+for the probe, and it wrote no DB rows. Latency is the Pro grounded request alone.
+
+| Level | Latency | Output tokens | Thinking tokens | Sources | Attested | Described rows |
+| --- | --- | --- | --- | --- | --- | --- |
+| `low` | 17.5 s | 1,523 | 680 | 8 | 8 | 5 |
+| default | 48.3 s | 4,903 | 4,263 | 8 | 8 | 5 |
+
+An earlier session's default run of the same call (its `low` row was lost to output
+truncation) measured 41.1 s / 3,637 out / 3,047 thinking / 4 sources / 4 attested, so the
+default's variance is wide. Grounding is not reduced at `low`: both levels attested the same
+number of citations, overlapping on three of the five described URLs.
+
 ## K1 — Run grounded discovery at a low thinking level (~25 LOC)
 
 **Base branch:** `main`
