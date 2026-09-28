@@ -19,7 +19,12 @@
 
 import { prisma } from '@/lib/db';
 import { authorConceptBank } from '@/lib/agents/content/author-concept-bank';
-import { CONCEPT_BANK_ATTEMPT_COOLDOWN_MS, CONCEPT_BANK_GEN_CONCURRENCY } from '@/lib/config';
+import {
+  BANK_BACKFILL_TAIL_RESERVE_MS,
+  CONCEPT_BANK_ATTEMPT_COOLDOWN_MS,
+  CONCEPT_BANK_GEN_CONCURRENCY,
+  COURSE_JOB_DEADLINE_MS,
+} from '@/lib/config';
 import type { OnTrace } from '@/lib/agents/agent-trace';
 import { logError } from '@/lib/log';
 
@@ -29,6 +34,18 @@ import { logError } from '@/lib/log';
 // direct "regenerate this concept" call is an explicit operator decision.
 export function isBankAttemptCooling(bankAttemptedAt: Date | null, now: Date = new Date()): boolean {
   return bankAttemptedAt !== null && now.getTime() - bankAttemptedAt.getTime() < CONCEPT_BANK_ATTEMPT_COOLDOWN_MS;
+}
+
+// Cold-build-deadline K2: how long the worker's bank backfill may run — what is
+// left of the job deadline after the tail reserve, measured from job start. ≤ 0
+// means the worker skips the backfill.
+export function bankBackfillBudgetMs(
+  jobStartedAtMs: number,
+  nowMs: number,
+  deadlineMs: number = COURSE_JOB_DEADLINE_MS,
+  reserveMs: number = BANK_BACKFILL_TAIL_RESERVE_MS,
+): number {
+  return deadlineMs - reserveMs - (nowMs - jobStartedAtMs);
 }
 
 export type GenerateConceptBankResult = {
@@ -95,9 +112,12 @@ export async function generateConceptBank(args: {
       abortSignal,
     });
   } catch (err) {
-    // A deadline/shutdown abort says nothing about the concept — don't burn its
-    // retry window on a worker that was told to stop.
-    if (!abortSignal?.aborted) await stampBankAttempt(conceptId);
+    // A deadline/shutdown/budget abort says nothing about the concept — don't burn
+    // its retry window on a worker that was told to stop. The typed error carries
+    // this one decision out, so callers classify from it rather than re-reading a
+    // signal that may have flipped during the stamp write.
+    if (abortSignal?.aborted) throw new ConceptBankAbortedError(err);
+    await stampBankAttempt(conceptId);
     throw err;
   }
 
@@ -136,6 +156,15 @@ export async function generateConceptBank(args: {
   return { conceptId, outcome: 'generated', generated: added };
 }
 
+// Thrown by generateConceptBank when the author call failed with its signal
+// aborted: the concept was NOT stamped and stays eligible for the next backfill.
+export class ConceptBankAbortedError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = 'ConceptBankAbortedError';
+  }
+}
+
 // Best-effort attempt stamp (audit 3.3): failing to record the attempt must never
 // replace or fail the outcome being reported — worst case is the pre-fix behavior
 // (the concept gets retried next request).
@@ -157,6 +186,7 @@ export type BackfillConceptBanksResult = {
   empty: number; // concepts the author returned nothing usable for
   failed: number; // concepts whose generation threw
   questions: number; // total questions persisted across the Path
+  notReached: number; // concepts never dispatched, or cut off in flight, because the budget ran out
 };
 
 // Generate banks for every concept in a Path that doesn't yet have one, fanned out
@@ -167,8 +197,9 @@ export async function backfillConceptBanks(args: {
   pathId: string;
   onTrace?: OnTrace;
   abortSignal?: AbortSignal; // H4: worker job-deadline signal
+  budgetMs?: number; // K2: stop dispatching (and abort in-flight calls) after this long
 }): Promise<BackfillConceptBanksResult> {
-  const { pathId, onTrace = () => {}, abortSignal } = args;
+  const { pathId, onTrace = () => {}, abortSignal, budgetMs } = args;
 
   // Only concepts with no questions — the idempotent + backfill filter. On-ramp
   // concepts are excluded by design (no bank for the broad orientation concept;
@@ -197,30 +228,42 @@ export async function backfillConceptBanks(args: {
     empty: 0,
     failed: 0,
     questions: 0,
+    notReached: 0,
   };
 
-  for (let i = 0; i < concepts.length; i += CONCEPT_BANK_GEN_CONCURRENCY) {
-    abortSignal?.throwIfAborted();
-    const chunk = concepts.slice(i, i + CONCEPT_BANK_GEN_CONCURRENCY);
-    const settled = await Promise.allSettled(
-      chunk.map((c) => generateConceptBank({ conceptId: c.id, onTrace, abortSignal })),
-    );
-    settled.forEach((s, j) => {
-      if (s.status === 'fulfilled') {
-        if (s.value.outcome === 'generated') {
-          result.generated++;
-          result.questions += s.value.generated;
-        } else if (s.value.outcome === 'empty') {
-          result.empty++;
-        }
-        return;
+  // The budget aborts in-flight calls through the signal they were handed, so
+  // generateConceptBank's abort path leaves a cut-off concept unstamped. A job
+  // abort is checked first everywhere and surfaces exactly as before.
+  const budget = new AbortController();
+  const budgetTimer =
+    budgetMs === undefined
+      ? undefined
+      : setTimeout(() => budget.abort(new Error(`concept-bank budget spent (${budgetMs}ms)`)), budgetMs);
+  const callSignal = abortSignal ? AbortSignal.any([abortSignal, budget.signal]) : budget.signal;
+  const budgetStopped = () => budget.signal.aborted && !abortSignal?.aborted;
+
+  try {
+    for (let i = 0; i < concepts.length; i += CONCEPT_BANK_GEN_CONCURRENCY) {
+      abortSignal?.throwIfAborted();
+      if (budgetStopped()) {
+        result.notReached += concepts.length - i;
+        break;
       }
-      result.failed++;
-      logError('concept-bank.generation-rejected', {
-        concept: chunk[j].slug,
-        error: s.reason instanceof Error ? s.reason.message : String(s.reason),
-      });
-    });
+      const chunk = concepts.slice(i, i + CONCEPT_BANK_GEN_CONCURRENCY);
+      const settled = await Promise.allSettled(
+        chunk.map((c) =>
+          generateConceptBank({ conceptId: c.id, onTrace, abortSignal: callSignal }).catch((err: unknown) => {
+            // Only an unstamped (aborted) call can be a cut-off; a stamped one is
+            // `failed` even if the budget ran out while its stamp was being written.
+            if (err instanceof ConceptBankAbortedError && budgetStopped()) return 'cut-off' as const;
+            throw err;
+          }),
+        ),
+      );
+      tallyChunk(result, chunk, settled);
+    }
+  } finally {
+    clearTimeout(budgetTimer);
   }
 
   onTrace({
@@ -231,4 +274,29 @@ export async function backfillConceptBanks(args: {
   console.log('[content-backfill-banks] done', { pathId, ...result });
 
   return result;
+}
+
+function tallyChunk(
+  result: BackfillConceptBanksResult,
+  chunk: { slug: string }[],
+  settled: PromiseSettledResult<GenerateConceptBankResult | 'cut-off'>[],
+): void {
+  settled.forEach((s, j) => {
+    if (s.status === 'fulfilled') {
+      if (s.value === 'cut-off') {
+        result.notReached++;
+      } else if (s.value.outcome === 'generated') {
+        result.generated++;
+        result.questions += s.value.generated;
+      } else if (s.value.outcome === 'empty') {
+        result.empty++;
+      }
+      return;
+    }
+    result.failed++;
+    logError('concept-bank.generation-rejected', {
+      concept: chunk[j].slug,
+      error: s.reason instanceof Error ? s.reason.message : String(s.reason),
+    });
+  });
 }

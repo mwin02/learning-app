@@ -21,7 +21,7 @@ import type { CourseRequest } from '@prisma/client';
 import { ensurePathMap } from '@/lib/agents/map/ensure-path-map';
 import { remediatePath } from '@/lib/agents/track/remediate-path';
 import { buildTrack } from '@/lib/agents/track/build-track';
-import { backfillConceptBanks } from '@/lib/agents/content/generate-concept-bank';
+import { backfillConceptBanks, bankBackfillBudgetMs } from '@/lib/agents/content/generate-concept-bank';
 import { addFrontierConcept } from '@/lib/agents/track/add-frontier-concept';
 import {
   COURSE_CONTENTION_REQUEUE_MS,
@@ -161,7 +161,7 @@ export async function processCourseRequest(cr: CourseRequest, opts: ProcessOpts 
     // settles so zombie accumulation — and how long each one outlived its job —
     // is visible in the worker logs.
     let pipelineSettled = false;
-    const pipeline = processRequestPipeline(cr, opts, controller.signal).finally(() => {
+    const pipeline = processRequestPipeline(cr, opts, controller.signal, Date.now()).finally(() => {
       pipelineSettled = true;
     });
 
@@ -220,6 +220,7 @@ async function processRequestPipeline(
   cr: CourseRequest,
   opts: ProcessOpts = {},
   signal?: AbortSignal,
+  jobStartedAtMs: number = Date.now(),
 ): Promise<ProcessOutcome> {
   const ensureMap = opts.ensureMap ?? ensurePathMap;
   const remediate = opts.remediate ?? remediatePath;
@@ -274,16 +275,23 @@ async function processRequestPipeline(
     // are sampled into per-Lesson exercises at build (2.5h-4). Idempotent across
     // Tracks of this Path; non-fatal — a generation failure must never block the
     // Track the learner is waiting on.
+    // K2: time-boxed so a slow bank pass can't lose the finished remediation to
+    // the job deadline; concepts it doesn't reach are banked by a later build.
     signal?.throwIfAborted();
-    try {
-      const banks = await backfillBanks({ pathId: map.pathId, abortSignal: signal });
-      log('course-worker.concept-banks', { id: cr.id, pathId: map.pathId, ...banks });
-    } catch (err) {
-      logWarn('course-worker.bank-backfill-failed', {
-        id: cr.id,
-        pathId: map.pathId,
-        err,
-      });
+    const budgetMs = bankBackfillBudgetMs(jobStartedAtMs, Date.now(), opts.deadlineMs ?? COURSE_JOB_DEADLINE_MS);
+    if (budgetMs <= 0) {
+      log('course-worker.concept-banks', { id: cr.id, pathId: map.pathId, skipped: 'budget-spent', budgetMs });
+    } else {
+      try {
+        const banks = await backfillBanks({ pathId: map.pathId, abortSignal: signal, budgetMs });
+        log('course-worker.concept-banks', { id: cr.id, pathId: map.pathId, budgetMs, ...banks });
+      } catch (err) {
+        logWarn('course-worker.bank-backfill-failed', {
+          id: cr.id,
+          pathId: map.pathId,
+          err,
+        });
+      }
     }
 
     // Best-effort: execute the request's recorded frontier-concept requests (the

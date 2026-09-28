@@ -7,13 +7,18 @@
 //
 // Self-cleaning: throwaway rows use a __verify_pipe__ marker, deleted in before/after.
 // Skips cleanly when DATABASE_URL is unset (describeDb). Run with the worker stopped.
-import { beforeAll, afterAll, it, expect } from 'vitest';
+import { beforeAll, afterAll, it, expect, vi } from 'vitest';
 import { PathStatus, TrackStatus, CourseRequestStatus } from '@prisma/client';
 import type { CourseRequest } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { processCourseRequest } from '@/lib/services/course-worker';
 import { finishCourseRequest } from '@/lib/services/course-request';
-import { COURSE_CONTENTION_REQUEUE_MS, COURSE_REQUEST_MAX_ATTEMPTS, MAX_FRONTIER_PER_TOPIC } from '@/lib/config';
+import {
+  BANK_BACKFILL_TAIL_RESERVE_MS,
+  COURSE_CONTENTION_REQUEUE_MS,
+  COURSE_REQUEST_MAX_ATTEMPTS,
+  MAX_FRONTIER_PER_TOPIC,
+} from '@/lib/config';
 import type { EnsurePathMapResult } from '@/lib/agents/map/ensure-path-map';
 import type { RemediateResult } from '@/lib/agents/track/remediate-path';
 import type { BuildTrackResult } from '@/lib/agents/track/build-track';
@@ -88,8 +93,31 @@ const buildResult = (trackId: string): BuildTrackResult => ({
   warnings: [],
 });
 
+// `@/lib/log` writes one JSON object per line through console.log/warn; capture the
+// worker's own events (parsed by `event`) while `fn` runs.
+async function captureEvents<T>(fn: () => Promise<T>): Promise<{ result: T; events: Record<string, unknown>[] }> {
+  const events: Record<string, unknown>[] = [];
+  const collect = (...args: unknown[]) => {
+    const text = String(args[0]);
+    // Skip unstructured prints (e.g. the COURSE READY banner, `[tag] {...}` lines).
+    if (!text.startsWith('{')) return;
+    const parsed: unknown = JSON.parse(text);
+    if (parsed && typeof parsed === 'object') events.push({ ...parsed });
+  };
+  const spies = [
+    vi.spyOn(console, 'log').mockImplementation(collect),
+    vi.spyOn(console, 'warn').mockImplementation(collect),
+  ];
+  try {
+    return { result: await fn(), events };
+  } finally {
+    for (const spy of spies) spy.mockRestore();
+  }
+}
+
 const bankResult = (): BackfillConceptBanksResult => ({
   candidates: 0,
+  notReached: 0,
   cooling: 0,
   generated: 0,
   empty: 0,
@@ -473,5 +501,62 @@ describeDb('course-worker pipeline branches', () => {
     // Backfill is best-effort: the pipeline continues to build → fulfilled.
     expect(outcome).toBe('fulfilled');
     expect((await getReq(cr.id)).status).toBe(CourseRequestStatus.fulfilled);
+  });
+
+  // --- K2: the concept-bank budget ------------------------------------------
+
+  it('a spent bank budget skips the backfill and still builds the Track', async () => {
+    const trackId = await makeTrack('bank-budget-spent');
+    const cr = await seedRunning('bank-budget-spent');
+    let backfillCalls = 0;
+    let built = false;
+    const { result: outcome, events } = await captureEvents(() =>
+      processCourseRequest(cr, {
+        ensureMap: ensureMapStub(PathStatus.spine_ready),
+        backfillBanks: async () => {
+          backfillCalls++;
+          return bankResult();
+        },
+        build: async () => {
+          built = true;
+          return buildResult(trackId);
+        },
+        // Deadline == reserve: the budget is ≤ 0 from the first millisecond.
+        deadlineMs: BANK_BACKFILL_TAIL_RESERVE_MS,
+      }),
+    );
+    expect(outcome).toBe('fulfilled');
+    expect(backfillCalls).toBe(0);
+    expect(built).toBe(true);
+    const banks = events.filter((e) => e.event === 'course-worker.concept-banks');
+    expect(banks).toHaveLength(1);
+    expect(banks[0].skipped).toBe('budget-spent');
+  });
+
+  it('a budget-stopped backfill logs its not-reached count and proceeds to build', async () => {
+    const trackId = await makeTrack('bank-budget-stop');
+    const cr = await seedRunning('bank-budget-stop');
+    let budgetSeen: number | undefined;
+    let built = false;
+    const { result: outcome, events } = await captureEvents(() =>
+      processCourseRequest(cr, {
+        ensureMap: ensureMapStub(PathStatus.spine_ready),
+        backfillBanks: async (args) => {
+          budgetSeen = args.budgetMs;
+          return { ...bankResult(), candidates: 6, generated: 4, notReached: 2 };
+        },
+        build: async () => {
+          built = true;
+          return buildResult(trackId);
+        },
+      }),
+    );
+    expect(outcome).toBe('fulfilled');
+    expect(built).toBe(true);
+    expect(budgetSeen).toBeGreaterThan(0);
+    const banks = events.filter((e) => e.event === 'course-worker.concept-banks');
+    expect(banks).toHaveLength(1);
+    expect(banks[0].notReached).toBe(2);
+    expect(events.some((e) => e.event === 'course-worker.bank-backfill-failed')).toBe(false);
   });
 });
