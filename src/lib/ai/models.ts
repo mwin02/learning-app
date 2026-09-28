@@ -1,79 +1,61 @@
+import type { GoogleLanguageModelOptions } from '@ai-sdk/google';
 import type { LanguageModel } from 'ai';
 import { vertex, chatModel } from '@/lib/ai/vertex';
 
-// Per-agent model configuration. Each call site declares its own sampling
-// params (temperature, maxOutputTokens) because those are call-site
-// decisions, not deployment knobs. Only `modelId` is overridable via env
-// (`MODEL_<AGENT>`), so a deployment can swap models without a redeploy
-// but can't silently change generation behavior.
+// Per-agent model configuration. Sampling params (temperature, thinkingLevel,
+// maxOutputTokens) are per-agent decisions, not deployment knobs. Only
+// `modelId` is overridable via env (`MODEL_<AGENT>`), so a deployment can swap
+// models without a redeploy but can't silently change generation behavior.
 
-type AgentName =
-  | 'curriculum'
-  | 'curriculumRetrieval'
-  | 'curriculumCritic'
-  | 'curriculumFallback'
-  | 'discoveryDescriber'
-  | 'mapSpineAuthor'
-  | 'mapSpineReviewer'
-  | 'mapReviewer'
-  | 'mapCandidateJudge'
-  | 'onRampAuthor'
-  | 'onRampCritic'
-  | 'trackComposer'
-  | 'trackSectioner'
-  | 'conceptBankAuthor'
-  | 'tagCanonicalizer'
-  | 'topicClassifier'
-  | 'conceptDeriver'
-  | 'docTocExtractor'
-  | 'validityAgent'
-  | 'topicGate'
-  | 'goalGate'
-  | 'programPlanner'
-  | 'programDecomposer'
-  | 'intake'
-  | 'health';
+export const AGENT_NAMES = [
+  'curriculumFallback',
+  'discoveryDescriber',
+  'mapSpineAuthor',
+  'mapSpineReviewer',
+  'mapReviewer',
+  'mapCandidateJudge',
+  'onRampAuthor',
+  'onRampCritic',
+  'trackComposer',
+  'trackSectioner',
+  'conceptBankAuthor',
+  'tagCanonicalizer',
+  'topicClassifier',
+  'conceptDeriver',
+  'docTocExtractor',
+  'validityAgent',
+  'topicGate',
+  'goalGate',
+  'programPlanner',
+  'programDecomposer',
+  'intake',
+  'health',
+] as const;
 
-type ModelConfig = {
+export type AgentName = (typeof AGENT_NAMES)[number];
+
+// Taken from the provider's own options type so the union tracks the SDK.
+// @ai-sdk/google is a transitive dependency via @ai-sdk/google-vertex, which
+// does not re-export its language-model options type; this import is type-only.
+export type ThinkingLevel = NonNullable<
+  NonNullable<GoogleLanguageModelOptions['thinkingConfig']>['thinkingLevel']
+>;
+
+export type ModelConfig = {
   modelId: string;
-  temperature: number;
+  // Omitted → the model's own default is used (nothing is sent).
+  temperature?: number;
+  thinkingLevel?: ThinkingLevel;
   maxOutputTokens: number;
 };
 
+// The Vertex provider reads its options under `vertex` and falls back to
+// `google`, so one key serves both the regional and global providers.
+export type GoogleThinkingProviderOptions = {
+  google: { thinkingConfig: { thinkingLevel: ThinkingLevel } };
+};
+
 const REGISTRY: Record<AgentName, ModelConfig> = {
-  curriculum: {
-    modelId: 'gemini-2.5-flash',
-    temperature: 0.4,
-    // Gemini 2.5 Flash consumes part of this budget on internal "thinking"
-    // before emitting the response, so 4k can finish mid-JSON on a path
-    // with many candidates. 16k leaves headroom for thinking + a path of
-    // ~10 items with verbose rationales.
-    maxOutputTokens: 16384,
-  },
-  curriculumRetrieval: {
-    // AR-3 retrieval loop: a tool-calling Flash agent that gathers candidate
-    // resources (searchResources / getResourceDetails / triggerWebFallback).
-    // Slightly above zero so successive searches vary their queries rather
-    // than repeating; output budget covers per-step thinking + tool-call args
-    // across several steps.
-    modelId: 'gemini-2.5-flash',
-    temperature: 0.3,
-    maxOutputTokens: 8192,
-  },
-  curriculumCritic: {
-    // AR-6 self-review: a separate no-tools call that scores the emitted path
-    // against an explicit rubric (prereq ordering, budget fit, redundancy,
-    // difficulty match, rationale specificity) and returns structured findings.
-    // Rule application, not creation — temperature 0 for a stable verdict.
-    // The findings themselves are small (five short notes + consolidated
-    // feedback), but Flash 2.5 spends the budget on internal thinking FIRST and
-    // emits nothing if it caps mid-thought (NoOutputGeneratedError). Observed
-    // ~2.2k reasoning tokens on the comparable select call, so a 2k budget
-    // starved the critic; 8k leaves ample headroom for thinking + the verdict.
-    modelId: 'gemini-2.5-flash',
-    temperature: 0,
-    maxOutputTokens: 8192,
-  },
   curriculumFallback: {
     // Grounded Google Search discovery call. Upgraded to Pro for 2c.5 — this
     // is the rare-but-important call that compounds the library; spending
@@ -140,7 +122,7 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // Phase 2.5d-2: scores a spine concept's candidate resources — assigns each
     // a role (teaches/uses/assesses) and a 0–1 coverageScore. Rule application
     // against the concept + each resource's own metadata, not open generation,
-    // so Flash at temperature 0 (like conceptDeriver / the curriculum critic).
+    // so Flash at temperature 0 (like conceptDeriver).
     // 8k output: the verdict array is small, but Flash 2.5 spends budget on
     // internal thinking first and caps mid-JSON on a tighter ceiling.
     modelId: 'gemini-2.5-flash',
@@ -352,21 +334,32 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
 export type ResolvedModel = {
   model: LanguageModel;
   modelId: string;
-  temperature: number;
+  temperature: number | undefined;
   maxOutputTokens: number;
+  providerOptions?: GoogleThinkingProviderOptions;
 };
 
-export function getModel(name: AgentName): ResolvedModel {
-  const cfg = REGISTRY[name];
-  const envKey = `MODEL_${name.toUpperCase()}`;
-  const override = process.env[envKey]?.trim();
+// `envOverride` is the raw `MODEL_<AGENT>` value; blank means "no override".
+export function resolveModel(
+  cfg: ModelConfig,
+  envOverride: string | undefined,
+): ResolvedModel {
+  const override = envOverride?.trim();
   const modelId = override && override.length > 0 ? override : cfg.modelId;
   return {
     model: chatModel(modelId),
     modelId,
     temperature: cfg.temperature,
     maxOutputTokens: cfg.maxOutputTokens,
+    providerOptions:
+      cfg.thinkingLevel === undefined
+        ? undefined
+        : { google: { thinkingConfig: { thinkingLevel: cfg.thinkingLevel } } },
   };
+}
+
+export function getModel(name: AgentName): ResolvedModel {
+  return resolveModel(REGISTRY[name], process.env[`MODEL_${name.toUpperCase()}`]);
 }
 
 // Embedding models are kept separate from the chat `REGISTRY` above: they have
