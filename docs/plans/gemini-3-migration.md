@@ -366,7 +366,8 @@ All three questions raised at the prose gate were answered on 2026-09-27 and are
 1. **A GA Pro id, if one appears before G3 lands, wins over `gemini-3.1-pro-preview`.** G3
    re-probes the ids at implementation time and takes the GA id if it is callable.
 2. **G4 runs against the dev DB only.** No production build before the worker deploy; the
-   post-deploy smoke check in `worker-deploy.md` is sufficient.
+   first-build check after the worker deploy (`worker-deploy.md` §11 step 1: a real request
+   the worker fulfils) is sufficient.
 3. **The crawler contact origin is fixed here**, as G6 — last in the stack, so it can be
    dropped without touching the migration if the window gets tight.
 

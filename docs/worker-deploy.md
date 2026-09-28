@@ -341,9 +341,11 @@ at its first model call, while the app — already on the new ids, with a green
 `/api/health` AI probe — looks healthy. The Gemini 3 migration (`gemini-3-migration.md`)
 is the case that made this sharp: Vertex retires every model the pre-migration image calls
 in October 2026, so a worker still on that image stops building courses on that date.
-After such a merge, run §9 as soon as the `deploy-main` build is green, and confirm the
-swap with the `docker inspect` check above — it is the only evidence that the new ids are
-live.
+After such a merge, run §9 as soon as the `deploy-main` build is green. The `docker inspect`
+check above proves only the image swap — it makes no model call, and a new id can route to
+an endpoint the worker's ADC identity has never called (every `gemini-3*` id goes to
+`global`) — so the proof is §11 step 1: a real request, enqueued from the deployed app,
+that the worker fulfils with its own `claimedBy`.
 
 ## 10. Operations
 
