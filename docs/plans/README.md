@@ -15,6 +15,7 @@ work — write a new plan instead.
 | Plan | Status | Open blocks |
 | --- | --- | --- |
 | [gemini-3-migration.md](gemini-3-migration.md) | active, G1–G4 in review (#381–#384) | G1–G6 |
+| [cold-build-deadline.md](cold-build-deadline.md) | active, K1–K2 in progress | K1–K2 (K3 held) |
 | [library-quality.md](library-quality.md) | active, not started | Q1–Q8 |
 | [tutor-agent.md](tutor-agent.md) | active, not started | T1–T4 |
 
@@ -40,6 +41,7 @@ are in shipped PR titles and in source comments:
 | `A` `B` `C` `D` `E` | free-beta | `C` collides — see below |
 | `F` | resource-reports (review-fix chain) | |
 | `G` | gemini-3-migration | |
+| `K` | cold-build-deadline | |
 | `Q` | library-quality | |
 | `R` | resource-reports, rung0-starvation | collision, pre-registry |
 | `S` | resource-serveability | its post-review follow-ups are `C1`–`C2`, colliding with free-beta's `C` |
