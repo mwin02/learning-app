@@ -48,8 +48,9 @@ restarting the service.
 | `NEXT_PUBLIC_SUPABASE_URL` | **build** | inlined into client JS |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | **build** | inlined into client JS; safe to expose by design |
 | `DATABASE_URL` | runtime | Supabase **transaction-pooler** URL (6543), Secret Manager |
-| `GOOGLE_VERTEX_PROJECT` / `GOOGLE_VERTEX_LOCATION` | runtime | plain env |
-| `GOOGLE_VERTEX_ANTHROPIC_LOCATION` / `GOOGLE_VERTEX_GEMINI3_LOCATION` | runtime | optional, both default `global` |
+| `GOOGLE_VERTEX_PROJECT` / `GOOGLE_VERTEX_LOCATION` | runtime | plain env. Since the Gemini 3 migration the regional `LOCATION` serves only the embedding model; no registry chat model resolves there |
+| `GOOGLE_VERTEX_GEMINI3_LOCATION` | runtime | optional, default `global`. Every registry chat model is a `gemini-3*` id, so this is the endpoint for **all** chat calls, app and worker. Leave it unset: `gemini-3.1-pro-preview` is served on `global` only, so pointing it at a region breaks the Pro-tier agents (and non-global Flash costs 10% more) |
+| `GOOGLE_VERTEX_ANTHROPIC_LOCATION` | runtime | optional, default `global`; used only if a `MODEL_<AGENT>` override points an agent at a `claude-*` id |
 | `YOUTUBE_API_KEY` | runtime | optional, Secret Manager |
 | `APP_ORIGIN` | runtime | optional; set once the custom domain is live if the proxy's forwarded host differs |
 | `GOOGLE_APPLICATION_CREDENTIALS_JSON` | — | **leave unset in cloud.** Its absence selects the ADC path (`src/lib/ai/vertex.ts`), authenticating as the runtime service account |
@@ -357,6 +358,12 @@ revision that can't reach Postgres from taking traffic, but an app-level bug tha
 boots cleanly goes straight to production on merge. Until Block B1 lands the
 severity mapping and Error Reporting alerting, nothing pages you — you find out
 by looking. That is an argument for doing B1 soon, not for deploying by hand.
+
+**Nor does it deploy the worker.** A merge that changes shared `src/lib` code — a model
+retarget in `models.ts` above all — reaches this service on merge and the course worker
+only when someone runs `worker-deploy.md` §9. After a retarget, the two call different
+model ids until then, and a green `/api/health` AI probe here says nothing about the
+worker. `worker-deploy.md` §9 names the failure this causes.
 
 ## 4. Service account & secrets (as built)
 

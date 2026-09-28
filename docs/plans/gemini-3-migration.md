@@ -1,6 +1,6 @@
 # Gemini 3 migration
 
-**Status:** active · **Blocks:** G1–G6; no PRs yet · **Block IDs:** `G` · **Started:** 2026-09-27
+**Status:** active · **Blocks:** G1–G6; G1–G4 open as #381–#384, none merged · **Block IDs:** `G` · **Started:** 2026-09-27
 
 ## Diagnosis
 
@@ -169,18 +169,73 @@ builds, 2 programs, 6 intake sessions since 2026-08-09):
   intake. Map building outside a build trace, library maintenance scripts, embeddings and
   health probes are not in it. The GCP billing report is the authority.
 
-`NEEDS VERIFICATION` (all raised to the user; none blocks G1–G4):
+`NEEDS VERIFICATION` — resolved in G5, read 2026-09-28 from Google's own Vertex pages.
+The Vertex docs now live under the "Gemini Enterprise Agent Platform" name, and the old
+`cloud.google.com/vertex-ai/...` URLs redirect there; the sources below are the redirect
+targets. All prices are per 1M tokens, standard tier, ≤200K-token prompts, **Global**
+endpoint (where every `gemini-3*` call goes, via `vertexGlobal`).
 
-- **Every price above is third-party sourced**, not read off Google's pricing page. The
-  direction (Pro +60% output, Flash +50% output) is consistent across sources; the exact
-  numbers are not confirmed.
-- **`gemini-3.8-flash`'s price.** If it is at or below 3.7's, the Flash target should be 3.8
-  (longer runway before its own retirement).
-- **Whether the 3.7-flash intro price applies on Vertex** or only on the Gemini API, and
-  whether the 2027-01-01 doubling is Vertex-wide.
-- **`text-embedding-005`'s own lifecycle.** It is absent from the 2.5 retirement
-  announcement and from the Vertex deprecations page, so this plan treats it as unaffected.
-- **Whether a GA Pro id lands before 2026-10-16.** If it does, G3 retargets to it instead.
+- **Per-token prices: confirmed, no correction.** Vertex pricing
+  (<https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing>) lists
+  Gemini 2.5 Pro $1.25 / $10.00, Gemini 2.5 Flash $0.30 / $2.50, Gemini 3.1 Pro Preview
+  $2.00 / $12.00 and Gemini 3.7 Flash $0.75 / $3.75 — exactly the figures in the cost
+  section, so the **+25% (~$7.44) and +37% (~$8.12) estimates stand unchanged**. Two things
+  the page adds: 3.1 Pro Preview jumps to $4 / $18 above 200K prompt tokens (no single call
+  of ours comes close; `composer-agent`'s 116K is a sum across 12 steps), and non-global
+  endpoints cost 10% more on the Flash models — irrelevant while `GOOGLE_VERTEX_GEMINI3_LOCATION`
+  stays `global`. Grounding on Gemini 3 is billed per search query, $14 per 1,000 after
+  5,000 free per month across all Gemini 3 models; the token estimate never included it.
+- **`gemini-3.8-flash`'s price: identical to 3.7's.** Same page: $0.75 / $3.75 through
+  2026-12-31, $1.50 / $7.50 from 2027-01-01. **Follow-up recommendation, not done here:**
+  consider retargeting the fifteen Flash agents to `gemini-3.8-flash`. It is newer and is
+  3.7's named replacement on the lifecycle page, but it carries the same short-term terms
+  (below), so it buys no longer guaranteed runway. The practical difference is only that 3.7
+  will likely receive its retirement notice first, with at least 45 days' warning. It is a
+  one-line change in `models.ts`, but it needs its own G4-style live run, since nothing in
+  this stack was verified on 3.8.
+- **The Flash intro price and its doubling: both apply on Vertex.** The pricing page's
+  banner states that Gemini 3.8, 3.7 and 3.6 Flash carry introductory pricing of $0.75 /
+  $3.75 through December 31, 2026, with standard pricing of $1.50 / $7.50 from January 1,
+  2027. It is a Vertex page, not a Gemini API page, and the global and non-global rows both
+  double.
+- **`text-embedding-005`: not affected by this deadline, but it has one of its own —
+  retirement 2027-04-01.** Vertex model versions and lifecycle
+  (<https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions>,
+  page last updated 2026-09-25) lists `text-embedding-005` (released 2024-11-18) retiring
+  April 1, 2027, alongside `text-embedding-004` and `text-multilingual-embedding-002`.
+  `gemini-embedding-001` is listed as available no sooner than May 20, 2028. So "Embeddings
+  are unaffected" in the diagnosis is true for 2026-10 and false for 2027-04: the
+  embedding-model migration deferred below is a **real deadline with a re-embed attached**,
+  and needs its own plan well before April.
+- **A GA Pro id: none exists.** The Gemini 3.1 Pro model page
+  (<https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-1-pro>,
+  last updated 2026-09-25) lists only `gemini-3.1-pro-preview` and
+  `gemini-3.1-pro-preview-customtools`, both "Public preview", global endpoint only, and the
+  lifecycle page has no `gemini-3*-pro` text model in any table. G3's target stands.
+
+Three lifecycle facts from the same lifecycle page bear on this plan's text; all are recorded
+here and nothing is retargeted:
+
+- **The 2.5 retirement date there is October 20, 2026**, not 2026-10-16 as the diagnosis
+  says (`gemini-2.5-pro`, `gemini-2.5-flash` and `gemini-2.5-flash-lite`). Keep 2026-10-16
+  as the operating deadline — whichever date is right, the worker must be on 3.x before the
+  earlier one.
+- **Every Flash id this stack could have picked at the 3.7 price is "short-term
+  availability", not 12-month.** The locked decision calls 3.7 "a GA id (no preview
+  exposure)". It is not a preview, but the page lists `gemini-3.6-flash` (2026-07-21),
+  `gemini-3.7-flash` (2026-08-13) and `gemini-3.8-flash` (2026-09-02) in a separate
+  short-term table, none with a retirement date announced. Such a model stays active until
+  Google announces a retirement date, with at least 45 days' notice once a replacement
+  exists; 3.6's and 3.7's listed replacement is `gemini-3.8-flash`. The only Flash ids with
+  12-month terms are `gemini-3.5-flash` (to May 19, 2027 or later) and
+  `gemini-3.5-flash-lite`. `gemini-3.5-flash` costs $1.50 / $9.00 on the Global endpoint
+  (pricing page above, re-read 2026-09-28), twice 3.7's intro price and above its
+  2027 price.
+- **The lifecycle page's official replacements for the retiring ids:** `gemini-2.5-pro` →
+  `gemini-3.5-flash`; `gemini-2.5-flash` → `gemini-3.5-flash-lite` or
+  `gemini-3.1-flash-lite`; `gemini-2.5-flash-lite` → `gemini-3.1-flash-lite` or Gemma 4.
+  Recorded as fact only; the locked decisions above are unchanged pending the user's call on
+  lifecycle.
 
 ## G4 measured results (2026-09-28)
 
@@ -295,8 +350,9 @@ G5 records the ordering; the operator runs it.
 - **`thinkingLevel` on the Pro tier.** G3 sets it only on the gate/classifier agents. The
   authoring agents keep the model default until we have production numbers to tune against.
 - **A move to `gemini-3.1-flash-lite`** for the cheapest agents — see Rejected alternatives.
-- **Embedding-model migration.** Out of scope by the fact above, and it would carry a
-  migration plus a full re-embed.
+- **Embedding-model migration.** Out of scope for this deadline, and it would carry a
+  migration plus a full re-embed. Not optional, though: G5 found `text-embedding-005`
+  retires 2027-04-01 (see the resolved verification list).
 - **Context caching** (`cachedContent`), which the provider also exposes. The Pro-tier prompts
   repeat a lot of map context across a build and are a plausible target; not now.
 - **Retiring `MODEL_<AGENT>` overrides** or wiring them into the worker's env file. The
@@ -310,12 +366,15 @@ All three questions raised at the prose gate were answered on 2026-09-27 and are
 1. **A GA Pro id, if one appears before G3 lands, wins over `gemini-3.1-pro-preview`.** G3
    re-probes the ids at implementation time and takes the GA id if it is callable.
 2. **G4 runs against the dev DB only.** No production build before the worker deploy; the
-   post-deploy smoke check in `worker-deploy.md` is sufficient.
+   first-build check after the worker deploy (`worker-deploy.md` §11 step 1: a real request
+   the worker fulfils) is sufficient.
 3. **The crawler contact origin is fixed here**, as G6 — last in the stack, so it can be
    dropped without touching the migration if the window gets tight.
 
-What remains open is the `NEEDS VERIFICATION` list above, all of it pricing or lifecycle
-facts external to the repo. None of it blocks G1–G4. G5 owns the checks.
+The `NEEDS VERIFICATION` list above was resolved in G5. What it leaves open are two
+follow-ups, neither of which blocks this stack: whether to retarget Flash to
+`gemini-3.8-flash` (same price, same short-term terms) or to a 12-month id, and the
+`text-embedding-005` migration before its 2027-04-01 retirement.
 
 ## G1 — Make the registry express optional temperature and a thinking level (~130 LOC)
 

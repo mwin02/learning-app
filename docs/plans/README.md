@@ -14,7 +14,7 @@ work — write a new plan instead.
 
 | Plan | Status | Open blocks |
 | --- | --- | --- |
-| [gemini-3-migration.md](gemini-3-migration.md) | active, not started | G1–G6 |
+| [gemini-3-migration.md](gemini-3-migration.md) | active, G1–G4 in review (#381–#384) | G1–G6 |
 | [library-quality.md](library-quality.md) | active, not started | Q1–Q8 |
 | [tutor-agent.md](tutor-agent.md) | active, not started | T1–T4 |
 

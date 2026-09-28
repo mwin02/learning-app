@@ -16,12 +16,12 @@ rate limits (Vertex, YouTube Data API).
 3. **Critic + revise** (rubric Flash call, bounded by `CRITIC_MAX_REVISIONS`)
 4. **Persist** (`Path` + N `PathItem` in one transaction)
 
-Web fallback = Gemini 2.5 **Pro** + Google Search grounding → validation
+Web fallback, at audit time = Gemini 2.5 **Pro** + Google Search grounding → validation
 (liveness + rules-agent) → decompose (YouTube / doc-TOC) → canonicalize → upsert.
 
 ## External limits (confirmed)
 
-- **Vertex Gemini 2.5** runs on [Dynamic Shared Quota](https://cloud.google.com/vertex-ai/generative-ai/docs/resources/dynamic-shared-quota): no fixed RPM, but bursty single-source spikes get deprioritized and can 429 under contention. Pro is the scarcer pool.
+- **Vertex Gemini 2.5** (the models in use at audit time) runs on [Dynamic Shared Quota](https://cloud.google.com/vertex-ai/generative-ai/docs/resources/dynamic-shared-quota): no fixed RPM, but bursty single-source spikes get deprioritized and can 429 under contention. Pro is the scarcer pool.
 - **YouTube Data API v3**: [10,000 units/day](https://developers.google.com/youtube/v3/determine_quota_cost), project-wide, resets midnight PT. `playlistItems.list` and `videos.list` = 1 unit each.
 
 ## Severity legend
@@ -114,7 +114,7 @@ set). hnsw index `Resource_embedding_idx` (cosine ops) exists.
 
 ## Section 5 — Web fallback
 
-Gemini 2.5 **Pro** + Google Search grounding → validate (liveness + rules-agent) →
+At audit time: Gemini 2.5 **Pro** + Google Search grounding → validate (liveness + rules-agent) →
 decompose → canonicalize → upsert. The app's most expensive operation. Triggered by
 `ensureFloor` (deterministic, `count < FALLBACK_THRESHOLD`) and the model's
 `triggerWebFallback` tool (budget 1/session).
