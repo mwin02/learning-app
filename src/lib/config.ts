@@ -570,6 +570,13 @@ export const DB_WRITE_TX_TIMEOUT_MS = 30 * 1000;
 // than COURSE_REQUEST_STALE_MS (below).
 export const COURSE_JOB_DEADLINE_MS = 30 * 60 * 1000;
 
+// Cold-build-deadline K2: the slice of COURSE_JOB_DEADLINE_MS held back from the
+// concept-bank backfill for what runs after it (frontier concepts, buildTrack).
+// The backfill gets whatever of the deadline is left beyond this, measured from
+// job start; a budget-cut concept stays unstamped and is banked by a later build.
+// MUST stay SHORTER than COURSE_JOB_DEADLINE_MS, or the backfill never runs.
+export const BANK_BACKFILL_TAIL_RESERVE_MS = 5 * 60 * 1000;
+
 // Audit 2.3: how long a shutdown (SIGTERM/SIGINT) waits for the in-flight
 // pipeline to observe its abort before the worker requeues the claim ITSELF.
 // The D7 graceful release used to depend on the running stage noticing the
