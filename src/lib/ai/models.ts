@@ -55,16 +55,31 @@ export type GoogleThinkingProviderOptions = {
   google: { thinkingConfig: { thinkingLevel: ThinkingLevel } };
 };
 
+// The only callable Pro-tier id: the GA ids `gemini-3-pro` and `gemini-3.1-pro`
+// both 404 against this project (re-probed 2026-09-27). Retarget when one lands.
+const PRO_MODEL_ID = 'gemini-3.1-pro-preview';
+const FLASH_MODEL_ID = 'gemini-3.7-flash';
+
+// No entry sets `temperature`. Gemini 3 is tuned for its default (1.0), and
+// Google warns of looping and degraded reasoning below it; one structured-output
+// probe on the Pro id at temperature 0 took 112s against 4.5s at the default.
+//
+// Thinking tokens count against `maxOutputTokens` (recorded outputTokens include
+// them), so each ceiling has to cover thinking plus the answer. Unless an entry
+// says otherwise, its number is inherited from tuning against the previous model
+// generation, where a ceiling reached mid-thought returned no output at all, and
+// is untested against 3.x.
+//
+// `thinkingLevel: 'low'` is set only on the gate/classifier tier — agents that
+// apply rules rather than reason. On FLASH_MODEL_ID it cut a structured-output
+// call from 385 output tokens (343 thinking) to 31 (0 thinking). The authoring
+// agents keep the model default until there are production numbers to tune to.
 const REGISTRY: Record<AgentName, ModelConfig> = {
   curriculumFallback: {
-    // Grounded Google Search discovery call. Upgraded to Pro for 2c.5 — this
-    // is the rare-but-important call that compounds the library; spending
-    // tokens here saves them on every future request for the same topic.
-    // Temperature low-ish so the model sticks to authoritative URLs from the
-    // search citations instead of free-styling, but not zero — we want
-    // variety across deny-list retries inside one fallback loop.
-    modelId: 'gemini-2.5-pro',
-    temperature: 0.3,
+    // Grounded Google Search discovery call. Pro because this is the
+    // rare-but-important call that compounds the library; spending tokens here
+    // saves them on every future request for the same topic.
+    modelId: PRO_MODEL_ID,
     maxOutputTokens: 32768,
   },
   discoveryDescriber: {
@@ -73,9 +88,8 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // attested URL set (tools/grounding.ts). No search tool and no URL field —
     // asking a grounded call for JSON is what disabled grounding in the first
     // place, and this call must never be in a position to write a URL at all.
-    // Flash at temperature 0: restructuring text it was handed, not judging.
-    modelId: 'gemini-2.5-flash',
-    temperature: 0,
+    // Flash: restructuring text it was handed, not judging.
+    modelId: FLASH_MODEL_ID,
     maxOutputTokens: 16384,
   },
   mapSpineAuthor: {
@@ -83,12 +97,9 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // edges). Pro, not Flash — this is the infrequent, cached-forever curriculum
     // backbone every future Track for the topic traverses; quality of the concept
     // decomposition and prerequisite structure outweighs the per-call cost (same
-    // reasoning as curriculumFallback). Temperature low so the structure is
-    // stable and defensible, not zero so a repair pass can vary a bad edge set.
-    // 32k output: a ~15-concept spine plus its edge list plus Pro's internal
-    // thinking; matches the Pro fallback budget.
-    modelId: 'gemini-2.5-pro',
-    temperature: 0.2,
+    // reasoning as curriculumFallback). 32k output: a ~15-concept spine plus its
+    // edge list plus thinking; matches the Pro fallback budget.
+    modelId: PRO_MODEL_ID,
     maxOutputTokens: 32768,
   },
   mapSpineReviewer: {
@@ -97,10 +108,9 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // and connectivity, emitting advisory findings that drive one bounded author
     // revision. Pro, same tier + reasoning as the author it critiques: catching a
     // missing on-ramp or an assumed-but-absent foundation is judgment, not rule
-    // application. Temperature low for stable findings. 16k output: the findings
-    // array is small, but Pro spends budget on internal thinking first.
-    modelId: 'gemini-2.5-pro',
-    temperature: 0.2,
+    // application. 16k output: the findings array is small; the rest is thinking
+    // headroom.
+    modelId: PRO_MODEL_ID,
     maxOutputTokens: 16384,
   },
   mapReviewer: {
@@ -112,21 +122,19 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // resource). Flash, not Pro: this is rule-ish application over a pre-filtered
     // candidate set (the pure detector already found the similar pairs; the model
     // confirms/rejects), not open authoring — cheaper tier like mapCandidateJudge /
-    // trackSectioner. Temperature 0 for a stable verdict. 8k output: the findings
-    // array is small, but Flash 2.5 spends budget on internal thinking first.
-    modelId: 'gemini-2.5-flash',
-    temperature: 0,
+    // trackSectioner. 8k output: the findings array is small; the rest is thinking
+    // headroom.
+    modelId: FLASH_MODEL_ID,
     maxOutputTokens: 8192,
   },
   mapCandidateJudge: {
     // Phase 2.5d-2: scores a spine concept's candidate resources — assigns each
     // a role (teaches/uses/assesses) and a 0–1 coverageScore. Rule application
-    // against the concept + each resource's own metadata, not open generation,
-    // so Flash at temperature 0 (like conceptDeriver).
-    // 8k output: the verdict array is small, but Flash 2.5 spends budget on
-    // internal thinking first and caps mid-JSON on a tighter ceiling.
-    modelId: 'gemini-2.5-flash',
-    temperature: 0,
+    // against the concept + each resource's own metadata, not open generation
+    // (like conceptDeriver). 8k output: the verdict array is small; a tighter
+    // ceiling capped mid-JSON under the previous model's thinking.
+    modelId: FLASH_MODEL_ID,
+    thinkingLevel: 'low',
     maxOutputTokens: 8192,
   },
   onRampAuthor: {
@@ -135,14 +143,11 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // notation, prerequisite review, the very first steps. Pro, not Flash: this is a
     // learner-facing artifact authored ONCE per topic and cached forever (same
     // reasoning as mapSpineAuthor / trackComposer), and orientation prose that is
-    // subtly wrong about a subject's fundamentals is worse than none. Temperature
-    // mid so the prose is warm and readable, not robotic. 32k output (matches the
-    // other Pro authors): the lesson itself is only ~600–900 words, but at 16k Pro
-    // intermittently spent the whole budget on internal thinking and emitted nothing
-    // (NoOutputGeneratedError → "No output generated"), failing the generation; the
-    // larger ceiling leaves ample headroom for thinking + the lesson so that's rare.
-    modelId: 'gemini-2.5-pro',
-    temperature: 0.4,
+    // subtly wrong about a subject's fundamentals is worse than none. 32k output
+    // (matches the other Pro authors): the lesson itself is only ~600–900 words,
+    // but at 16k the previous Pro model intermittently thought through the whole
+    // budget and emitted nothing (NoOutputGeneratedError).
+    modelId: PRO_MODEL_ID,
     maxOutputTokens: 32768,
   },
   onRampCritic: {
@@ -151,12 +156,9 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // outdated setup instruction) while preserving the lesson's scope and structure,
     // returning the corrected lesson (unchanged when already accurate). Pro, same
     // tier as the author: catching a subtle factual slip in math/programming
-    // fundamentals is judgment. Temperature low for careful, conservative
-    // correction. 32k output (matches the author): it re-emits the full corrected
-    // lesson after thinking, so it needs the same headroom against the
-    // spend-budget-on-thinking-then-emit-nothing failure (NoOutputGeneratedError).
-    modelId: 'gemini-2.5-pro',
-    temperature: 0.1,
+    // fundamentals is judgment. 32k output (matches the author): it re-emits the
+    // full corrected lesson after thinking.
+    modelId: PRO_MODEL_ID,
     maxOutputTokens: 32768,
   },
   trackComposer: {
@@ -165,12 +167,10 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // lesson's primary (difficulty-matched), writes lesson + track framing, and
     // judges per-concept resource sufficiency. Pro, not Flash: this is the
     // judgment-heavy, learner-facing artifact (same reasoning as mapSpineAuthor),
-    // and it reasons over the whole map at once. Temperature low-ish so structure
-    // and selection stay stable but the prose framing isn't robotic. 32k output:
-    // a lesson object per concept across a (frontier-thickened) map plus the
-    // model's internal thinking; matches the spine-author budget.
-    modelId: 'gemini-2.5-pro',
-    temperature: 0.3,
+    // and it reasons over the whole map at once. 32k output: a lesson object per
+    // concept across a (frontier-thickened) map plus thinking; matches the
+    // spine-author budget.
+    modelId: PRO_MODEL_ID,
     maxOutputTokens: 32768,
   },
   trackSectioner: {
@@ -179,11 +179,9 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // Pro — far lighter than the composer: it sees only lesson titles/summaries (no
     // map, edges, or candidates) and just draws chapter boundaries + writes short
     // intros. Best-effort (a failure leaves the Track flat), so the cheap tier is
-    // right. Temperature low-ish so chaptering is stable but intros aren't robotic.
-    // 8k output: the boundaries array is small, but Flash 2.5 spends budget on
-    // internal thinking first and caps mid-JSON on a tighter ceiling.
-    modelId: 'gemini-2.5-flash',
-    temperature: 0.2,
+    // right. 8k output: the boundaries array is small; a tighter ceiling capped
+    // mid-JSON under the previous model's thinking.
+    modelId: FLASH_MODEL_ID,
     maxOutputTokens: 8192,
   },
   conceptBankAuthor: {
@@ -195,33 +193,29 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // plausibly cover and NOT over-reach into deep specifics they don't establish.
     // Flash over-reached at 8 questions; Pro authors a tighter, better-calibrated
     // set of 5. Off-the-hot-path (best-effort, once per concept), so the Pro cost is
-    // fine. Temperature mid for variety across the small set without drifting
-    // off-concept. 32k output (matches the other Pro authors): the question array is
-    // small, but Pro spends budget on internal thinking first and the larger ceiling
-    // avoids the spend-then-emit-nothing failure (NoOutputGeneratedError).
-    modelId: 'gemini-2.5-pro',
-    temperature: 0.4,
+    // fine. 32k output (matches the other Pro authors): the question array is
+    // small; the rest is thinking headroom.
+    modelId: PRO_MODEL_ID,
     maxOutputTokens: 32768,
   },
   tagCanonicalizer: {
     // Plain JSON shape, no grounding. Deterministic mapping job, but the input
     // is the whole atomic survivor batch (oversampled discovery), so the
-    // results array scales with batch size. At 4k, Flash 2.5 (which spends
-    // output budget on thinking first) capped mid-JSON on realistic batches,
-    // throwing AI_JSONParseError; canonicalizeTags now degrades to raw tags on
-    // that failure, but 8k keeps the degradation rare rather than routine.
-    modelId: 'gemini-2.5-flash',
-    temperature: 0,
+    // results array scales with batch size. At 4k the previous model capped
+    // mid-JSON on realistic batches, throwing AI_JSONParseError;
+    // canonicalizeTags degrades to raw tags on that failure, and 8k keeps the
+    // degradation rare rather than routine.
+    modelId: FLASH_MODEL_ID,
+    thinkingLevel: 'low',
     maxOutputTokens: 8192,
   },
   topicClassifier: {
     // Phase 2.5-Block2a: files each discovered resource under its home topic,
     // chosen from a small closed set (the request topic ∪ its related topics).
-    // Short closed-choice output (one slug per resource), but Flash 2.5 spends
-    // budget on thinking first, so keep headroom like the canonicalizer; the
-    // caller degrades to the request topic on any failure.
-    modelId: 'gemini-2.5-flash',
-    temperature: 0,
+    // Short closed-choice output (one slug per resource), with the canonicalizer's
+    // headroom; the caller degrades to the request topic on any failure.
+    modelId: FLASH_MODEL_ID,
+    thinkingLevel: 'low',
     maxOutputTokens: 8192,
   },
   conceptDeriver: {
@@ -229,9 +223,9 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // the videos of a decomposed playlist from each video's own title +
     // description, canonicalized against the topic's existing vocab. Rule
     // application like tagCanonicalizer, but over more rows (chunked) and a
-    // little freer output, so a larger budget than the 4k canonicalizer.
-    modelId: 'gemini-2.5-flash',
-    temperature: 0,
+    // little freer output.
+    modelId: FLASH_MODEL_ID,
+    thinkingLevel: 'low',
     maxOutputTokens: 8192,
   },
   docTocExtractor: {
@@ -240,30 +234,26 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // (atomic) or an index of lessons, and SELECTS/orders the section links
     // (it never invents URLs — it picks from the provided set). 16k, not 8k:
     // large tables of contents (javascript.info, MDN Learn, Paul's Calc) starved
-    // an 8k budget — Flash 2.5 spends output tokens on thinking first and caps
-    // mid-object (NoObjectGeneratedError → the row parks as 'pending'). 16k
-    // leaves room for thinking + a long sections array.
-    modelId: 'gemini-2.5-flash',
-    temperature: 0,
+    // an 8k budget under the previous model, capping mid-object
+    // (NoObjectGeneratedError → the row parks as 'pending').
+    modelId: FLASH_MODEL_ID,
     maxOutputTokens: 16384,
   },
   validityAgent: {
     // Content-rule check over a batch of ~12 URLs at a time. Flash + a sharp
     // prompt is the right tier — this is rule application, not reasoning.
-    modelId: 'gemini-2.5-flash',
-    temperature: 0,
+    modelId: FLASH_MODEL_ID,
+    thinkingLevel: 'low',
     maxOutputTokens: 4096,
   },
   topicGate: {
     // One-shot subject-domain classifier ({math, science, cs} or reject).
     // Cheap, deterministic; runs at the HTTP boundary for off-library topics.
-    // The verdict object itself is tiny, but Flash 2.5 spends output tokens on
-    // internal thinking FIRST — a 512 ceiling could cap mid-object before the
-    // JSON is emitted (NoObjectGeneratedError → an unhandled throw that fails
-    // the generate-program plan pass). 2048 leaves ample thinking headroom for a
-    // one-shot classification while staying far cheaper than the decomposer tier.
-    modelId: 'gemini-2.5-flash',
-    temperature: 0,
+    // The verdict object is tiny; the 2048 ceiling is thinking headroom — at 512
+    // the previous model could cap mid-object (NoObjectGeneratedError → an
+    // unhandled throw that fails the generate-program plan pass).
+    modelId: FLASH_MODEL_ID,
+    thinkingLevel: 'low',
     maxOutputTokens: 2048,
   },
   goalGate: {
@@ -271,12 +261,9 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // a legitimate learnable objective within {math, natural science, cs} — the
     // goal-level analog of topicGate, run as Stage 0 of the plan pass so an
     // off-domain / nonsense goal is rejected BEFORE the decomposer rescues it into
-    // plausible in-domain topics. Same tier + budget rationale as topicGate: the
-    // verdict object is tiny, but Flash 2.5 spends output tokens on internal thinking
-    // FIRST, so a 512 ceiling could cap mid-object (NoObjectGeneratedError); 2048
-    // leaves thinking headroom while staying far cheaper than the decomposer tier.
-    modelId: 'gemini-2.5-flash',
-    temperature: 0,
+    // plausible in-domain topics. Same tier + budget rationale as topicGate.
+    modelId: FLASH_MODEL_ID,
+    thinkingLevel: 'low',
     maxOutputTokens: 2048,
   },
   programPlanner: {
@@ -284,14 +271,11 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // learning topics with per-topic importance/gap weights, priority tier, phase
     // grouping, and cross-topic order. Flash, not Pro: the roadmap frames this as a
     // "cheap synchronous plan pass", and it's judgment over a short goal, not the
-    // deep spine-authoring of mapSpineAuthor. Temperature low for a stable, defensible
-    // decomposition, not zero so a re-run can vary a marginal topic. 16k output (not
-    // 8k): Flash 2.5 spends the budget on internal thinking FIRST, and an 8k ceiling
-    // occasionally capped mid-JSON → a `No object generated: could not parse` throw
-    // that sank the whole plan pass (seen once in the 2.75 full e2e). 16k leaves ample
-    // headroom for thinking + ~6 topics with rationales, matching mapSpineReviewer.
-    modelId: 'gemini-2.5-flash',
-    temperature: 0.2,
+    // deep spine-authoring of mapSpineAuthor. 16k output (not 8k): under the
+    // previous model an 8k ceiling occasionally capped mid-JSON → a `No object
+    // generated: could not parse` throw that sank the whole plan pass (seen once
+    // in the 2.75 full e2e).
+    modelId: FLASH_MODEL_ID,
     maxOutputTokens: 16384,
   },
   programDecomposer: {
@@ -301,32 +285,26 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // generateObject call, and additionally deciding per-topic frontier-concept
     // requests. Starts on programPlanner's tier per the plan's ambiguity #6 default
     // (Flash; the reasoning is still judgment over a short goal, now spread across
-    // steps) — bump only if tool-loop quality is weak in the Block 5 live run.
-    // Same 16k budget: per-step output is small (tool args), but Flash 2.5 spends
-    // output tokens on internal thinking first.
-    modelId: 'gemini-2.5-flash',
-    temperature: 0.2,
+    // steps) — bump only if tool-loop quality is weak in a live run. Same 16k
+    // budget: per-step output is small (tool args); the rest is thinking headroom.
+    modelId: FLASH_MODEL_ID,
     maxOutputTokens: 16384,
   },
   intake: {
     // Chat intake (Block 2): one non-streaming structured call per /programs/new
     // chat turn — conversation + field extraction over a short fenced transcript.
     // Extraction + chitchat, not judgment (plan-pass reasoning stays in
-    // programDecomposer), so Flash; overridable via MODEL_INTAKE. Temperature
-    // above zero so replies read conversational rather than canned, low enough
-    // that extraction stays literal. 4k output: the reply is a couple of
-    // sentences + a small draft object, but Flash 2.5 spends output budget on
-    // internal thinking first.
-    modelId: 'gemini-2.5-flash',
-    temperature: 0.4,
+    // programDecomposer), so Flash; overridable via MODEL_INTAKE. 4k output: the
+    // reply is a couple of sentences + a small draft object; the rest is thinking
+    // headroom.
+    modelId: FLASH_MODEL_ID,
     maxOutputTokens: 4096,
   },
   health: {
-    modelId: 'gemini-2.5-flash',
-    temperature: 0,
-    // The reply is one token ("pong"), but Gemini 2.5 burns part of the
-    // output budget on internal thinking first. 32 was enough for Flash
-    // and zero for Pro. 512 covers thinking for any 2.5-tier model.
+    modelId: FLASH_MODEL_ID,
+    // The reply is one token ("pong"); the rest is thinking. Measured 2026-09-27,
+    // a one-word reply spent at most 96 thinking tokens on any callable 3.x id,
+    // so 512 also covers a MODEL_HEALTH override to another 3.x model.
     maxOutputTokens: 512,
   },
 };

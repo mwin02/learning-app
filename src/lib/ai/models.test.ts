@@ -32,6 +32,59 @@ describe('getModel — registry', () => {
   });
 });
 
+describe('getModel — tiers', () => {
+  const PRO_AGENTS = [
+    'curriculumFallback',
+    'mapSpineAuthor',
+    'mapSpineReviewer',
+    'onRampAuthor',
+    'onRampCritic',
+    'trackComposer',
+    'conceptBankAuthor',
+  ] as const;
+
+  const LOW_THINKING_AGENTS = [
+    'topicGate',
+    'goalGate',
+    'validityAgent',
+    'tagCanonicalizer',
+    'topicClassifier',
+    'conceptDeriver',
+    'mapCandidateJudge',
+  ] as const;
+
+  const isIn = (list: readonly string[], name: string) => list.includes(name);
+
+  // chatModel routes by prefix, and only `gemini-3*` goes to the global provider.
+  it.each(AGENT_NAMES)('%s resolves to a gemini-3 id', (name) => {
+    expect(getModel(name).modelId.startsWith('gemini-3')).toBe(true);
+  });
+
+  it('puts every Pro-tier agent on one id that no other agent uses', () => {
+    const proIds = new Set(PRO_AGENTS.map((name) => getModel(name).modelId));
+    expect(proIds.size).toBe(1);
+    const [proId] = proIds;
+    const others = AGENT_NAMES.filter((name) => !isIn(PRO_AGENTS, name));
+    expect(others).toHaveLength(15);
+    for (const name of others) expect(getModel(name).modelId).not.toBe(proId);
+  });
+
+  it.each(AGENT_NAMES)('%s sets no temperature', (name) => {
+    expect(getModel(name).temperature).toBeUndefined();
+  });
+
+  it.each(AGENT_NAMES)('%s has low thinking only if it is a gate/classifier', (name) => {
+    const { providerOptions } = getModel(name);
+    if (isIn(LOW_THINKING_AGENTS, name)) {
+      expect(providerOptions).toEqual({
+        google: { thinkingConfig: { thinkingLevel: 'low' } },
+      });
+    } else {
+      expect(providerOptions).toBeUndefined();
+    }
+  });
+});
+
 describe('resolveModel — thinkingLevel', () => {
   it('leaves providerOptions undefined when no thinkingLevel is set', () => {
     expect(resolveModel(base, undefined).providerOptions).toBeUndefined();
