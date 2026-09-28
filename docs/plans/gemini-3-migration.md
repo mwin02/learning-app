@@ -182,6 +182,88 @@ builds, 2 programs, 6 intake sessions since 2026-08-09):
   announcement and from the Vertex deprecations page, so this plan treats it as unaffected.
 - **Whether a GA Pro id lands before 2026-10-16.** If it does, G3 retargets to it instead.
 
+## G4 measured results (2026-09-28)
+
+One run of `scripts/verify-gemini3.ts` against the **local dev DB**
+(`localhost:55432/learning_app`, confirmed local by `target-guard.ts`'s `resolveTarget`
+before any call), on the G3 registry. Exit 0; every probe `ok: true`; no warn or error
+log line anywhere in the run; every AI call in the log finished `stop`.
+
+**Per-agent probes** (usage is thinking-inclusive; `in / out` tokens):
+
+| Agent | Model | ok | Usage | Notes |
+| --- | --- | --- | --- | --- |
+| `validityAgent` | `gemini-3.7-flash` (`low`) | yes | 898 / 158 | 3 rows → verdicts `[valid, valid, invalid]`; the listicle was rejected |
+| `curriculumFallback` | `gemini-3.1-pro-preview` | yes | 366 / 3,490 | grounded: 3 sources, **3 attested** by `resolveAttestedUrls`, 1 described row (an openstax.org page), 0 unresolved redirect hosts |
+| `onRampAuthor` | `gemini-3.1-pro-preview` | yes | 184 / 3,763 | 2,729 thinking + 1,034 text; 4,197-char lesson; `finishReason: stop`, far under the 32,768 cap. Direct call with the registry config — `generateOnRampResource` records no usage and swallows failures |
+| `trackComposer` (`composer-agent`) | `gemini-3.1-pro-preview` | yes | 116,442 / 6,257 | **`finishReason: stop`, 12 steps, 39 tool calls**, 7 lessons |
+| `programDecomposer` (`decompose-agent`) | `gemini-3.7-flash` | yes | 16,689 / 2,048 | **`finishReason: stop`, 5 steps, 10 tool calls**, no failed attempt (read from the real plan pass) |
+
+**The intermittent `finishReason: 'error'` did not reproduce**: both real tool loops ran
+once each and finished `stop`, and `decompose-agent`'s retry never fired. One clean run
+is not evidence the fault is gone — the earlier probe hit it on one of two runs.
+
+`composer-agent`'s input is ~11x the single-pass composer's because the SDK resends the
+growing history every step. It is not on the production path (`TRACK_COMPOSER_MODE` is
+`'single'`), but switching it on would multiply composer input cost accordingly.
+
+**Course build** — `processCourseRequest` on a marker `CourseRequest` for `calculus` (an
+existing `spine_ready` Path, so no map-building stages ran). Request `fulfilled`, Track
+`ready`, `buildUsage` non-null. The composer judged resources thin, so one thicken cycle
+ran (web discovery, describe, classify, judge, validate) and a second compose followed.
+
+| Stage | Calls | G4 on 3.x (in / out) | Pre-migration, dev DB, 2.5 (in / out) |
+| --- | --- | --- | --- |
+| `track.composer` (Pro) | 2 | 22,701 / 15,619 | 20,955 / 20,317 (calculus 2026-07-31, also 2 calls) |
+| `track.sectioner` (Flash) | 1 | 1,039 / 1,195 | 920–1,455 / 1,865–4,844 (4 calculus builds) |
+| `map.candidate-judge` (Flash, `low`) | 3 | 2,213 / 326 | 794 / 1,069 for 1 call |
+| `validate.rules-agent` (Flash, `low`) | 2 | 1,519 / 193 | 737–842 / 785–1,087 per call |
+| `web-fallback.discovery` (Pro) | 3 | 1,893 / 14,701 | 684–688 / 3,087–5,834 per call |
+| `web-fallback.describe` (Flash) | 3 | 4,348 / 4,211 | — (stage postdates the dev-DB history) |
+| `topic-classifier` (Flash, `low`) | 3 | 2,832 / 257 | — (same) |
+| **Total** | 17 | **36,545 / 36,502** | — |
+
+Discovery inside the build attested 3/3, 1/1, 6/8 and 2/3 of its grounding sources (four
+discovery calls including the probe); none fell back to a model-written URL.
+
+**Program plan** — `enqueueProgram` inside a trace (a goal needing ML plus math): plan
+completed, 4 topics fanned out, Program `building`, `planUsage` non-null.
+
+| Stage | G4 on 3.x (in / out) | Pre-migration, dev DB, 2.5 (3 programs) |
+| --- | --- | --- |
+| `goal-gate` (Flash, `low`) | 444 / 43 | 363–406 / 48–75 |
+| `plan.decompose-agent` (Flash) | 16,689 / 2,048 | 4,642–13,685 / 569–2,317 |
+
+Decomposer input tracks library size (the prompt lists every library topic), so the
+spread there is not a model effect.
+
+**Against the +25% estimate.** One build is not comparable to the nine-build production
+aggregate the estimate came from, which is where most Pro output in that aggregate went.
+Four Pro registry agents were **not exercised at all** by this run: `mapSpineAuthor`,
+`mapSpineReviewer`, `onRampCritic` and `conceptBankAuthor`. `onRampAuthor` was probed only
+with a same-shaped prompt under its registry config, not its real system prompt. What the
+run does show:
+
+- **Like-for-like stages are flat.** The composer + sectioner + judge stages of the
+  2026-07-31 calculus build cost ~$0.245 at 2.5 prices; the same stages here cost
+  ~$0.241 at 3.x prices (−2%), because composer output fell 23% and the Flash stages'
+  output fell sharply, offsetting the price rise.
+- **The gate tier's `thinkingLevel: 'low'` lands in production code paths:** candidate
+  judge ~109 output tokens per call against ~1,069, rules agent ~97 against ~785–1,087.
+- **Pro discovery did not get cheaper**: ~4,900 output tokens per grounded call against
+  3,087–5,834 on 2.5. It is Pro with no `thinkingLevel` (deferred by decision), so it pays
+  the full +20% output price.
+- The whole build: ~$0.445 at 3.x prices; the same tokens at 2.5 prices would be ~$0.353
+  (+26%, price effect alone). The program plan: ~$0.021, all Flash.
+
+Rows created (marker `__verify_gemini3__` in `CourseRequest.claimedBy` and
+`Program.inputHash`, plus the Track matched by its unique goal): 1 Track, 1 CourseRequest,
+1 Program (its 4 child requests cascade), all deleted in the driver's `finally`; a
+post-run count found 0 left, and the `CourseRequest` status counts matched the pre-run
+counts. The real seams also grew the library on their own: 1 `pending_review` agent
+Resource from the thicken cycle, plus any concept-bank and `TopicAlias` writes. That is
+the same growth a real build causes, and the driver leaves it in place.
+
 ## Sequencing
 
 G1 → G2 → G3 → G4 → G5, each stacked on the previous. The split exists so that the
