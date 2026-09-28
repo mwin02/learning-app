@@ -71,11 +71,12 @@ export async function judgeCandidates(args: {
   const byHandle = new Map<string, SearchResult>();
   candidates.forEach((c, i) => byHandle.set(`r${i + 1}`, c));
 
-  const { model, temperature, maxOutputTokens, modelId } = getModel('mapCandidateJudge');
+  const { model, temperature, maxOutputTokens, modelId, providerOptions } = getModel('mapCandidateJudge');
   const result = await generateText({
     model,
     temperature,
     maxOutputTokens,
+    providerOptions,
     output: Output.object({ schema: VerdictSchema }),
     system: isOnRamp ? `${SYSTEM_PROMPT}\n\n${ON_RAMP_RUBRIC}` : SYSTEM_PROMPT,
     prompt: buildPrompt(conceptTitle, byHandle),

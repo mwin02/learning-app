@@ -86,7 +86,7 @@ export async function decomposeProgramAgent(
     getPathMap?: (topic: string) => Promise<PathMapView>;
   } = {},
 ): Promise<AgentDecomposition> {
-  const { model, temperature, maxOutputTokens, modelId } = opts.model ?? getModel('programDecomposer');
+  const { model, temperature, maxOutputTokens, modelId, providerOptions } = opts.model ?? getModel('programDecomposer');
   const getPathMap = opts.getPathMap ?? fetchPathMap;
   const existingTopics = await (opts.listTopics ?? listLibraryTopics)();
   const librarySet = new Set(existingTopics);
@@ -207,6 +207,7 @@ export async function decomposeProgramAgent(
       model,
       temperature,
       maxOutputTokens,
+      providerOptions,
       tools,
       stopWhen: stepCountIs(DECOMPOSE_AGENT_MAX_STEPS),
       system: systemPrompt(MAX_PROGRAM_TOPICS),
@@ -272,11 +273,12 @@ async function generateFallbackFraming(
   topicNames: string[],
   fallbackModel?: ResolvedModel,
 ): Promise<{ title: string; description: string }> {
-  const { model, temperature, maxOutputTokens } = fallbackModel ?? getModel('programPlanner');
+  const { model, temperature, maxOutputTokens, providerOptions } = fallbackModel ?? getModel('programPlanner');
   const result = await generateObject({
     model,
     temperature,
     maxOutputTokens,
+    providerOptions,
     schema: z.object({
       title: z.string().min(1).max(120),
       description: z.string().min(1).max(600),

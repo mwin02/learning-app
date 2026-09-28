@@ -220,12 +220,13 @@ async function authorSplit(args: {
   abortSignal?: AbortSignal;
 }): Promise<z.infer<typeof SplitSchema>> {
   const { concept, subject, evidence, abortSignal } = args;
-  const { model, temperature, maxOutputTokens, modelId } = getModel('mapSpineAuthor');
+  const { model, temperature, maxOutputTokens, modelId, providerOptions } = getModel('mapSpineAuthor');
 
   const result = await generateText({
     model,
     temperature,
     maxOutputTokens,
+    providerOptions,
     abortSignal,
     output: Output.object({ schema: SplitSchema }),
     system: SPLIT_SYSTEM_PROMPT,

@@ -319,11 +319,12 @@ async function extractToc(
   bodySnippet: string,
   candidates: CandidateLink[],
 ): Promise<z.infer<typeof ExtractionSchema>> {
-  const { model, temperature, maxOutputTokens } = getModel('docTocExtractor');
+  const { model, temperature, maxOutputTokens, providerOptions } = getModel('docTocExtractor');
   const result = await generateObject({
     model,
     temperature,
     maxOutputTokens,
+    providerOptions,
     schema: ExtractionSchema,
     system: EXTRACT_SYSTEM_PROMPT,
     prompt: [

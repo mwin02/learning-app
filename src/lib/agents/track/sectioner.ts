@@ -68,11 +68,12 @@ export async function sectionLessons(args: {
     detail: { trackTitle, lessons: lessons.length, intent, targetMastery },
   });
 
-  const { model, temperature, maxOutputTokens, modelId } = getModel('trackSectioner');
+  const { model, temperature, maxOutputTokens, modelId, providerOptions } = getModel('trackSectioner');
   const result = await generateText({
     model,
     temperature,
     maxOutputTokens,
+    providerOptions,
     abortSignal,
     output: Output.object({ schema: BoundariesSchema }),
     system: SYSTEM_PROMPT,

@@ -264,11 +264,12 @@ export async function composeTrackAgent(args: {
 
   onTrace({ kind: 'stage', label: 'composer-agent started', detail: { topic, concepts: concepts.length, candidates: n, targetMastery, budgetMinutes } });
 
-  const { model, temperature, maxOutputTokens, modelId } = getModel('trackComposer');
+  const { model, temperature, maxOutputTokens, modelId, providerOptions } = getModel('trackComposer');
   const result = await generateText({
     model,
     temperature,
     maxOutputTokens,
+    providerOptions,
     abortSignal,
     tools,
     stopWhen: stepCountIs(TRACK_COMPOSER_MAX_STEPS),
@@ -368,11 +369,12 @@ export async function generateFallbackFraming(args: {
   lessonTitles: string[];
 }): Promise<{ intent: TrackIntent; trackTitle: string; trackSummary: string }> {
   const { topic, goal, priorKnowledge, lessonTitles } = args;
-  const { model, temperature, maxOutputTokens } = getModel('trackSectioner');
+  const { model, temperature, maxOutputTokens, providerOptions } = getModel('trackSectioner');
   const result = await generateText({
     model,
     temperature,
     maxOutputTokens,
+    providerOptions,
     output: Output.object({
       schema: z.object({
         intent: z.nativeEnum(TrackIntent),

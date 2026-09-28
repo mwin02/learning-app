@@ -87,7 +87,7 @@ const SYSTEM_PROMPT = [
 // hard-fail the caller (a single flaky response would otherwise fail a whole
 // generate-program plan pass). A second failure propagates. (Mirrors decomposeProgram.)
 const defaultClassify: TopicClassifier = async (normalized, canonicals) => {
-  const { model, temperature, maxOutputTokens } = getModel('topicGate');
+  const { model, temperature, maxOutputTokens, providerOptions } = getModel('topicGate');
   const prompt = [
     `Canonical slugs already in use: ${canonicals.length > 0 ? canonicals.join(', ') : '(none yet)'}`,
     `Topic: ${JSON.stringify(normalized)}`,
@@ -100,6 +100,7 @@ const defaultClassify: TopicClassifier = async (normalized, canonicals) => {
         model,
         temperature,
         maxOutputTokens,
+        providerOptions,
         schema: VerdictSchema,
         system: SYSTEM_PROMPT,
         prompt,

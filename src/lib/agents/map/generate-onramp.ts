@@ -171,11 +171,12 @@ async function authorAndCritique(topic: string, conceptTitle: string, abortSigna
 }
 
 async function authorLesson(topic: string, conceptTitle: string, abortSignal?: AbortSignal): Promise<Lesson> {
-  const { model, temperature, maxOutputTokens } = getModel('onRampAuthor');
+  const { model, temperature, maxOutputTokens, providerOptions } = getModel('onRampAuthor');
   const result = await generateText({
     model,
     temperature,
     maxOutputTokens,
+    providerOptions,
     abortSignal,
     output: Output.object({ schema: LessonSchema }),
     system: AUTHOR_SYSTEM,
@@ -185,11 +186,12 @@ async function authorLesson(topic: string, conceptTitle: string, abortSignal?: A
 }
 
 async function critiqueLesson(topic: string, conceptTitle: string, draft: Lesson, abortSignal?: AbortSignal): Promise<Lesson> {
-  const { model, temperature, maxOutputTokens } = getModel('onRampCritic');
+  const { model, temperature, maxOutputTokens, providerOptions } = getModel('onRampCritic');
   const result = await generateText({
     model,
     temperature,
     maxOutputTokens,
+    providerOptions,
     abortSignal,
     output: Output.object({ schema: LessonSchema }),
     system: CRITIC_SYSTEM,

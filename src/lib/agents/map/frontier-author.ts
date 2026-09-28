@@ -62,7 +62,7 @@ const FrontierSchema = z.object({
 
 export async function authorFrontier(args: AuthorFrontierArgs): Promise<{ concepts: AuthoredFrontierConcept[] }> {
   const { topic, subject, existing, repairFeedback, onTrace = () => {} } = args;
-  const { model, temperature, maxOutputTokens, modelId } = getModel('mapSpineAuthor');
+  const { model, temperature, maxOutputTokens, modelId, providerOptions } = getModel('mapSpineAuthor');
 
   onTrace({
     kind: 'stage',
@@ -91,6 +91,7 @@ export async function authorFrontier(args: AuthorFrontierArgs): Promise<{ concep
     model,
     temperature,
     maxOutputTokens,
+    providerOptions,
     output: Output.object({ schema: FrontierSchema }),
     system: SYSTEM_PROMPT,
     prompt: lines.join('\n'),

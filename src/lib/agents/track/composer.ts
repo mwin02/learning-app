@@ -214,11 +214,12 @@ export async function composeTrack(args: {
     detail: { topic, concepts: concepts.length, candidates: n, targetMastery, budgetMinutes, depthTier },
   });
 
-  const { model, temperature, maxOutputTokens, modelId } = getModel('trackComposer');
+  const { model, temperature, maxOutputTokens, modelId, providerOptions } = getModel('trackComposer');
   const result = await generateText({
     model,
     temperature,
     maxOutputTokens,
+    providerOptions,
     abortSignal,
     output: Output.object({ schema: CompositionSchema }),
     system: SYSTEM_PROMPT,

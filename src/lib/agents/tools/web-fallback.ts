@@ -831,12 +831,13 @@ async function runDiscovery(args: {
   denyList?: string[];
   abortSignal?: AbortSignal;
 }): Promise<DiscoveredResource[]> {
-  const { model, temperature, maxOutputTokens } = getModel('curriculumFallback');
+  const { model, temperature, maxOutputTokens, providerOptions } = getModel('curriculumFallback');
 
   const result = await generateText({
     model,
     temperature,
     maxOutputTokens,
+    providerOptions,
     tools: { google_search: vertex.tools.googleSearch({}) },
     system: args.system,
     prompt: args.prompt,
@@ -918,13 +919,14 @@ async function describeCandidates(
   groundedProse: string,
   abortSignal?: AbortSignal,
 ): Promise<DiscoveredResource[]> {
-  const { model, temperature, maxOutputTokens } = getModel('discoveryDescriber');
+  const { model, temperature, maxOutputTokens, providerOptions } = getModel('discoveryDescriber');
 
   const listing = candidates.map((c, i) => `${i}. ${c.url}`).join('\n');
   const result = await generateObject({
     model,
     temperature,
     maxOutputTokens,
+    providerOptions,
     schema: DescribedResourceSchema,
     system: DESCRIBE_SYSTEM_PROMPT,
     prompt: [
@@ -1068,7 +1070,7 @@ async function canonicalizeTags(
   abortSignal?: AbortSignal,
 ): Promise<Map<string, { prerequisiteConcepts: string[]; conceptsTaught: string[] }>> {
   if (discovered.length === 0) return new Map();
-  const { model, temperature, maxOutputTokens } = getModel('tagCanonicalizer');
+  const { model, temperature, maxOutputTokens, providerOptions } = getModel('tagCanonicalizer');
 
   const input = discovered.map((d) => ({
     url: d.url,
@@ -1092,6 +1094,7 @@ async function canonicalizeTags(
       model,
       temperature,
       maxOutputTokens,
+      providerOptions,
       abortSignal,
       schema: CanonicalizedTagsSchema,
       system: CANON_SYSTEM_PROMPT,

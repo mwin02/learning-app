@@ -81,11 +81,12 @@ export async function authorConceptBank(args: {
     detail: { topic, conceptSlug, resources: resources.length, targetCount },
   });
 
-  const { model, temperature, maxOutputTokens, modelId } = getModel('conceptBankAuthor');
+  const { model, temperature, maxOutputTokens, modelId, providerOptions } = getModel('conceptBankAuthor');
   const result = await generateText({
     model,
     temperature,
     maxOutputTokens,
+    providerOptions,
     abortSignal,
     output: Output.object({ schema: QuestionsSchema }),
     system: SYSTEM_PROMPT,

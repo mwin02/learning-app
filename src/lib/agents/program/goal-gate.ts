@@ -71,7 +71,7 @@ const SYSTEM_PROMPT = [
 // propagates. getModel is called lazily HERE (not at module-eval), so importing this
 // module stays secret-free for the unit tests that inject a stub classifier.
 const defaultClassify: GoalClassifier = async (goal, background) => {
-  const { model, temperature, maxOutputTokens } = getModel('goalGate');
+  const { model, temperature, maxOutputTokens, providerOptions } = getModel('goalGate');
   const prompt = [
     `GOAL: ${JSON.stringify(goal)}`,
     `BACKGROUND: ${JSON.stringify(background ?? '(none given)')}`,
@@ -84,6 +84,7 @@ const defaultClassify: GoalClassifier = async (goal, background) => {
         model,
         temperature,
         maxOutputTokens,
+        providerOptions,
         schema: VerdictSchema,
         system: SYSTEM_PROMPT,
         prompt,
