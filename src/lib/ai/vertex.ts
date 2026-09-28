@@ -83,7 +83,8 @@ export const vertexGlobal = createVertex({
 // Resolve a chat model id to the right Vertex provider:
 //   claude-*    → Anthropic partner provider (own region)
 //   gemini-3*   → global-endpoint Gemini provider (3.x isn't regional)
-//   otherwise   → default regional Gemini provider (2.5 and earlier)
+//   otherwise   → default regional Gemini provider (no registry chat model since
+//                 the Gemini 3 retarget; only a pre-3 MODEL_<AGENT> override lands here)
 // Lets the per-agent REGISTRY in models.ts mix model families by id alone.
 export function chatModel(modelId: string): LanguageModel {
   if (modelId.startsWith('claude-')) return vertexAnthropic(modelId);
