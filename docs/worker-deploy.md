@@ -325,6 +325,26 @@ is green. Between the merge and the reset the button is live and wrong, so keep 
 short and do not merge such a stack half-way (see the per-feature merge checklist —
 `resource-reports.md` § "Merge checklist" for this one).
 
+### A model retarget reaches the worker only through §9
+
+Model ids live in code (`src/lib/ai/models.ts`), and the app and the worker each run
+whatever `models.ts` was baked into their image. So **a merge that retargets models
+changes the app's models on merge and the worker's only when §9 is run.** An env
+override cannot close the gap: the worker's env file is written by
+`worker-vm-startup.sh` from instance metadata and has no `MODEL_*` passthrough.
+
+Most model calls run here, not in the app: every course-build stage, including the
+web-fallback discovery a thin build triggers. The app runs the request-time ones (program
+plan pass, chat intake, `/api/health`). The failure this prevents is **the worker still
+calling a retired model**: when Vertex retires an id, every build the worker claims fails
+at its first model call, while the app — already on the new ids, with a green
+`/api/health` AI probe — looks healthy. The Gemini 3 migration (`gemini-3-migration.md`)
+is the case that made this sharp: Vertex retires every model the pre-migration image calls
+in October 2026, so a worker still on that image stops building courses on that date.
+After such a merge, run §9 as soon as the `deploy-main` build is green, and confirm the
+swap with the `docker inspect` check above — it is the only evidence that the new ids are
+live.
+
 ## 10. Operations
 
 | Task | Command |
