@@ -15,7 +15,6 @@ work — write a new plan instead.
 | Plan | Status | Open blocks |
 | --- | --- | --- |
 | [gemini-3-migration.md](gemini-3-migration.md) | active, G1–G4 in review (#381–#384) | G1–G6 |
-| [cold-build-deadline.md](cold-build-deadline.md) | active, K1–K2 in progress | K1–K2 (K3 held) |
 | [library-quality.md](library-quality.md) | active, not started | Q1–Q8 |
 | [tutor-agent.md](tutor-agent.md) | active, not started | T1–T4 |
 
@@ -23,6 +22,7 @@ work — write a new plan instead.
 
 | Plan | Shipped | Blocks |
 | --- | --- | --- |
+| [archive/cold-build-deadline.md](archive/cold-build-deadline.md) | 2026-09-28 | K1–K2 (#387–#388); K3 held |
 | [archive/resource-serveability.md](archive/resource-serveability.md) | 2026-08-18 | S1–S9 (#350–#358), C1–C2 (#359–#360) |
 | [archive/resource-reports.md](archive/resource-reports.md) | 2026-08-09 | R1–R8 (#310–#317), F1–F7 (#320–#326) |
 | [archive/free-beta.md](archive/free-beta.md) | 2026-08-04 | A1–A4, B1, C1–C2, D1–D4, E1–E2 |

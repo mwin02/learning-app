@@ -198,11 +198,20 @@ measured rather than assumed, against the local compose worker on 2026-07-31:
 | Idle (polling only) | 229 MiB |
 | Warm build — `calculus`, 0 spine holes, 444-resource library, no web sourcing (fulfilled in 216s) | **253 MiB** |
 | Cold build — `data-structures-algorithms`, no Path, spine authoring + sourcing ladder + track build (fulfilled in 1346s) | **273 MiB** |
+| Production, 2026-09-30 — container `memory.peak` across two back-to-back Gemini 3 builds (`database-systems`, then cold remediation of `distributed-systems`), no OOM events | **302 MiB** |
 
 The worker is one sequential pipeline that streams model responses and writes
 rows, so it does not accumulate a large working set: a 22-minute cold build costs
 **44 MiB over idle**, not a multiple of it. Peak plus COS's ~150 MiB is under half
 the ~960 MiB usable, so 1 GB is comfortable rather than marginal.
+
+**The rest of the VM is heavier than "COS ~150 MiB" suggests.** On the production VM on
+2026-09-30, `free -m` reported 598 MiB used with the container at ~302 MiB, so COS,
+fluent-bit and docker together held **~297 MiB**. A single worker still leaves more than
+a third of RAM free, but that is the number to use before putting a second build on
+this machine. Two containers at the measured peak come to about 900 of 963 MiB with no swap.
+Running two builds inside one worker process shares the runtime and is the cheaper way to get
+concurrency here.
 
 Re-measure with the same method if the pipeline ever starts holding whole
 documents in memory (bulk embedding, PDF parsing) — that is the change that would

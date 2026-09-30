@@ -1,6 +1,6 @@
 # Cold-topic builds within the job deadline on Gemini 3
 
-**Status:** active · **Blocks:** K1–K2; no PRs yet (K3 held) · **Block IDs:** `K` · **Started:** 2026-09-28
+**Status:** shipped 2026-09-28 · **Blocks:** K1 ([#387](https://github.com/mwin02/learning-app/pull/387)), K2 ([#388](https://github.com/mwin02/learning-app/pull/388)); K3 held and not built · **Block IDs:** `K` · **Started:** 2026-09-28
 
 ## Diagnosis
 
@@ -186,6 +186,37 @@ An earlier session's default run of the same call (its `low` row was lost to out
 truncation) measured 41.1 s / 3,637 out / 3,047 thinking / 4 sources / 4 attested, so the
 default's variance is wide. Grounding is not reduced at `low`: both levels attested the same
 number of citations, overlapping on three of the five described URLs.
+
+## Production results (2026-09-30)
+
+App and worker deployed at `7b058a2` on 2026-09-28 (Cloud Run revision `learning-app-00051-ssf`;
+worker container `course-worker:7b058a2`). The two system design courses that failed on
+2026-09-28 were requeued from the admin `/playground/failed-builds` page and both **fulfilled**:
+
+| Course | Total | Stages |
+| --- | --- | --- |
+| `database-systems` (map already `spine_ready`) | 14.6 min | banks 1 min (`notReached` 0) · Track build **13.5 min** |
+| `distributed-systems` (Path `building`, 10 holes) | 13.8 min | remediation 2.5 min · banks 3 min (`notReached` 0) · 2 frontier concepts ~2 min · Track build 6 min |
+
+Remediation fell from past 30 minutes to 2.5, though this rerun kept sources the failed run had
+already attached, so it is not a clean comparison. Discovery calls took 10–40 s each, against
+45 s – 2.6 min before K1. K2's budget never cut: both runs report `notReached: 0`.
+
+What this run showed, carried into the follow-up build-speed plan rather than fixed here:
+
+- **K2's 5-minute tail reserve is smaller than a real Track build.** `database-systems`' Track
+  build took 13.5 minutes because the composer judged it thin and ran a thicken cycle: 6 serial
+  sourcing rounds (`thicken-seam.ts`, one concept at a time), with unexplained idle gaps of
+  3.75 min (16:04:02 → 16:07:47) and 2 min (16:08:25 → 16:10:22) where no model call
+  completed. A build that spends long in remediation and then thickens can still hit the
+  deadline, just in `buildTrack` instead.
+- **`low` discovery sometimes attests nothing.** 2 of 5 discovery calls in that build logged
+  `no attested candidates`. The rounds still filed resources via YouTube and the judge, so
+  nothing failed, but K1's live check had attested 8 of 8. Worth watching.
+- **Only admins can retry a course that failed before it got a Track.** The user rebuild route
+  needs an existing Track (`regenerate-track.ts:211, 333`).
+- The admin retry page's RSC refresh returned 503 after each retry POST (the POSTs returned
+  200). The 503s are not in the Cloud Run request logs. Not investigated.
 
 ## K1 — Run grounded discovery at a low thinking level (~25 LOC)
 
