@@ -9,6 +9,7 @@ import {
   recordUsage,
   serviceContext,
   takeStack,
+  timeStage,
   runWithTrace,
   traceUsageSnapshot,
   type UsageSnapshot,
@@ -346,5 +347,61 @@ describe('addUsageToSnapshot (persisted cross-request accumulation)', () => {
     const prev = addUsageToSnapshot(null, 's', { totalTokens: 1 });
     expect(addUsageToSnapshot(prev, 's', undefined)).toBe(prev);
     expect(addUsageToSnapshot(null, 's', undefined)).toBeNull();
+  });
+});
+
+describe('timeStage', () => {
+  const timingLines = (spy: ReturnType<typeof vi.spyOn>): Record<string, unknown>[] =>
+    spy.mock.calls
+      .map((c: unknown[]): Record<string, unknown> => JSON.parse(String(c[0])))
+      .filter((l: Record<string, unknown>) => l.event === 'stage.timing');
+
+  it("resolves to fn's value and emits one ok line with the extra fields", async () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const value = await timeStage('track.compose', async () => 42, { slug: 'limits' });
+    expect(value).toBe(42);
+    const lines = timingLines(spy);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ level: 'info', stage: 'track.compose', outcome: 'ok', slug: 'limits' });
+    expect(typeof lines[0].durationMs).toBe('number');
+  });
+
+  it('rethrows the same error object and logs outcome threw', async () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const boom = new Error('boom');
+    const thrown = await timeStage('worker.track-build', async () => {
+      throw boom;
+    }).catch((err: unknown) => err);
+    expect(thrown).toBe(boom);
+    const lines = timingLines(spy);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ stage: 'worker.track-build', outcome: 'threw' });
+  });
+
+  it('extra fields cannot overwrite the stage, duration or outcome', async () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await timeStage('a', async () => null, { stage: 'b', outcome: 'x', durationMs: -1 });
+    const [line] = timingLines(spy);
+    expect(line.stage).toBe('a');
+    expect(line.outcome).toBe('ok');
+    expect(line.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('accumulates into the trace timings, whether fn resolves or throws', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    await runWithTrace('t-stage', async () => {
+      await timeStage('worker.map', async () => 1);
+      await timeStage('worker.map', async () => {
+        throw new Error('x');
+      }).catch(() => {});
+      expect(traceUsageSnapshot()?.timings?.['worker.map'].count).toBe(2);
+    });
+  });
+
+  it('still emits the line outside a trace (recordTiming is a no-op there)', async () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await timeStage('s', async () => 1);
+    expect(timingLines(spy)).toHaveLength(1);
+    expect(traceUsageSnapshot()).toBeNull();
   });
 });

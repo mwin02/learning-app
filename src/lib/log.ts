@@ -102,6 +102,33 @@ export function recordTiming(key: string, ms: number): void {
 }
 
 /**
+ * Await `fn`, record its wall time under `stage` (into the trace, via recordTiming)
+ * and emit one `stage.timing` line. Returns `fn`'s value or rethrows its error
+ * untouched. A throw is logged at info: the timing line is telemetry, and whoever
+ * catches the error owns reporting it.
+ */
+export async function timeStage<T>(
+  stage: string,
+  fn: () => Promise<T>,
+  fields?: Record<string, unknown>,
+): Promise<T> {
+  const start = performance.now();
+  const finish = (outcome: 'ok' | 'threw') => {
+    const durationMs = Math.round(performance.now() - start);
+    recordTiming(stage, durationMs);
+    log('stage.timing', { ...fields, stage, durationMs, outcome });
+  };
+  try {
+    const value = await fn();
+    finish('ok');
+    return value;
+  } catch (err) {
+    finish('threw');
+    throw err;
+  }
+}
+
+/**
  * The current trace's accumulated usage and timings, JSON-ready for persistence.
  * Null outside a trace or when nothing was recorded (persist as DB NULL —
  * "not measured", distinct from an all-zero measurement).

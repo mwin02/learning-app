@@ -23,6 +23,7 @@ import type { EnsurePathMapResult } from '@/lib/agents/map/ensure-path-map';
 import type { RemediateResult } from '@/lib/agents/track/remediate-path';
 import type { BuildTrackResult } from '@/lib/agents/track/build-track';
 import type { BackfillConceptBanksResult } from '@/lib/agents/content/generate-concept-bank';
+import { z } from 'zod';
 import { describeDb } from './db';
 
 const MARK = '__verify_pipe__';
@@ -114,6 +115,16 @@ async function captureEvents<T>(fn: () => Promise<T>): Promise<{ result: T; even
     for (const spy of spies) spy.mockRestore();
   }
 }
+
+// V2: the `stage.timing` lines a run emitted, as [stage, outcome] in emission order.
+const stageLines = (events: Record<string, unknown>[]) =>
+  events.filter((e) => e.event === 'stage.timing').map((e) => [e.stage, e.outcome]);
+
+const persistedTimings = async (id: string) => {
+  const row = await prisma.courseRequest.findUniqueOrThrow({ where: { id }, select: { buildUsage: true } });
+  const stat = z.object({ count: z.number(), totalMs: z.number(), maxMs: z.number() });
+  return z.object({ timings: z.record(z.string(), stat) }).parse(row.buildUsage).timings;
+};
 
 const bankResult = (): BackfillConceptBanksResult => ({
   candidates: 0,
@@ -531,6 +542,10 @@ describeDb('course-worker pipeline branches', () => {
     const banks = events.filter((e) => e.event === 'course-worker.concept-banks');
     expect(banks).toHaveLength(1);
     expect(banks[0].skipped).toBe('budget-spent');
+    expect(stageLines(events)).toEqual([
+      ['worker.map', 'ok'],
+      ['worker.track-build', 'ok'],
+    ]);
   });
 
   it('a budget-stopped backfill logs its not-reached count and proceeds to build', async () => {
@@ -558,5 +573,92 @@ describeDb('course-worker pipeline branches', () => {
     expect(banks).toHaveLength(1);
     expect(banks[0].notReached).toBe(2);
     expect(events.some((e) => e.event === 'course-worker.bank-backfill-failed')).toBe(false);
+  });
+
+  // --- V2: per-stage wall time ----------------------------------------------
+
+  it('a spine_ready run times map → banks → track-build and persists them in buildUsage', async () => {
+    const trackId = await makeTrack('timing-ok');
+    const cr = await seedRunning('timing-ok');
+    const { result: outcome, events } = await captureEvents(() =>
+      processCourseRequest(cr, {
+        ensureMap: ensureMapStub(PathStatus.spine_ready),
+        backfillBanks: async () => bankResult(),
+        build: async () => buildResult(trackId),
+      }),
+    );
+    expect(outcome).toBe('fulfilled');
+    // No frontier concepts recorded → no worker.frontier line.
+    expect(stageLines(events)).toEqual([
+      ['worker.map', 'ok'],
+      ['worker.banks', 'ok'],
+      ['worker.track-build', 'ok'],
+    ]);
+    const timings = await persistedTimings(cr.id);
+    expect(Object.keys(timings).sort()).toEqual(['worker.banks', 'worker.map', 'worker.track-build']);
+    for (const t of Object.values(timings)) expect(t.count).toBe(1);
+  });
+
+  it('a building map also times remediation, and recorded frontier requests time the frontier loop', async () => {
+    const trackId = await makeTrack('timing-building');
+    const cr = await seedRunning('timing-building', { frontierConcepts: ['bad one', 'good one'] });
+    const { result: outcome, events } = await captureEvents(() =>
+      processCourseRequest(cr, {
+        ensureMap: ensureMapStub(PathStatus.building),
+        remediate: async () => remResult('succeeded', PathStatus.spine_ready),
+        backfillBanks: async () => bankResult(),
+        addFrontier: async ({ request }) => {
+          if (request === 'bad one') throw new Error('frontier boom');
+          return { outcome: 'exists', conceptSlug: 'good-one' };
+        },
+        build: async () => buildResult(trackId),
+      }),
+    );
+    expect(outcome).toBe('fulfilled');
+    // One line for the whole frontier loop; a request's caught throw stays inside it.
+    expect(stageLines(events)).toEqual([
+      ['worker.map', 'ok'],
+      ['worker.remediation', 'ok'],
+      ['worker.banks', 'ok'],
+      ['worker.frontier', 'ok'],
+      ['worker.track-build', 'ok'],
+    ]);
+    expect((await persistedTimings(cr.id))['worker.remediation'].count).toBe(1);
+  });
+
+  it('a throwing backfill still logs worker.banks (threw) and the existing failure warning', async () => {
+    const trackId = await makeTrack('timing-bankfail');
+    const cr = await seedRunning('timing-bankfail');
+    const { result: outcome, events } = await captureEvents(() =>
+      processCourseRequest(cr, {
+        ensureMap: ensureMapStub(PathStatus.spine_ready),
+        backfillBanks: async () => {
+          throw new Error('bank boom');
+        },
+        build: async () => buildResult(trackId),
+      }),
+    );
+    expect(outcome).toBe('fulfilled');
+    expect(stageLines(events)).toContainEqual(['worker.banks', 'threw']);
+    expect(events.some((e) => e.event === 'course-worker.bank-backfill-failed')).toBe(true);
+  });
+
+  it('a throwing build logs worker.track-build as threw and fails with the bare message', async () => {
+    const cr = await seedRunning('timing-buildfail');
+    const { result: outcome, events } = await captureEvents(() =>
+      processCourseRequest(cr, {
+        ensureMap: ensureMapStub(PathStatus.spine_ready),
+        backfillBanks: async () => bankResult(),
+        build: async () => {
+          throw new Error('compose exploded');
+        },
+      }),
+    );
+    expect(outcome).toBe('failed');
+    expect(stageLines(events).at(-1)).toEqual(['worker.track-build', 'threw']);
+    const row = await getReq(cr.id);
+    expect(row.status).toBe(CourseRequestStatus.failed);
+    expect(row.error).toBe('compose exploded');
+    expect((await persistedTimings(cr.id))['worker.track-build'].count).toBe(1);
   });
 });

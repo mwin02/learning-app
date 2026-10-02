@@ -29,7 +29,7 @@ import {
   COURSE_SHUTDOWN_GRACE_MS,
   MAX_FRONTIER_PER_TOPIC,
 } from '@/lib/config';
-import { log, logError, logWarn, runWithTrace, traceUsageSnapshot } from '@/lib/log';
+import { log, logError, logWarn, runWithTrace, timeStage, traceUsageSnapshot } from '@/lib/log';
 import { describeError } from '@/lib/ai/describe-error';
 import { reclaimStaleRemediationJobs } from '@/lib/agents/track/remediation-job';
 import {
@@ -230,7 +230,7 @@ async function processRequestPipeline(
 
   log('course-worker.processing', { id: cr.id, topic: cr.topic });
   try {
-    const map = await ensureMap({ topic: cr.topic, abortSignal: signal });
+    const map = await timeStage('worker.map', () => ensureMap({ topic: cr.topic, abortSignal: signal }));
     let status = map.status;
     log('course-worker.map-ready', { id: cr.id, pathId: map.pathId, status, reclaimed: map.reclaimed, inFlight: map.inFlight });
 
@@ -247,7 +247,7 @@ async function processRequestPipeline(
     // escalate the leftovers. remediatePath single-flights via RemediationJob.
     if (status === PathStatus.building) {
       signal?.throwIfAborted();
-      const rem = await remediate(map.pathId, { abortSignal: signal });
+      const rem = await timeStage('worker.remediation', () => remediate(map.pathId, { abortSignal: signal }));
       log('course-worker.remediation', { id: cr.id, outcome: rem.outcome, status: rem.status, escalated: rem.escalatedConceptSlugs });
       if (rem.outcome === 'busy') {
         // Workers-A2 (D2): under N workers this is EXPECTED contention — another
@@ -283,7 +283,9 @@ async function processRequestPipeline(
       log('course-worker.concept-banks', { id: cr.id, pathId: map.pathId, skipped: 'budget-spent', budgetMs });
     } else {
       try {
-        const banks = await backfillBanks({ pathId: map.pathId, abortSignal: signal, budgetMs });
+        const banks = await timeStage('worker.banks', () =>
+          backfillBanks({ pathId: map.pathId, abortSignal: signal, budgetMs }),
+        );
         log('course-worker.concept-banks', { id: cr.id, pathId: map.pathId, budgetMs, ...banks });
       } catch (err) {
         logWarn('course-worker.bank-backfill-failed', {
@@ -308,32 +310,36 @@ async function processRequestPipeline(
           cap: MAX_FRONTIER_PER_TOPIC,
         });
       }
-      for (const request of cr.frontierConcepts.slice(0, MAX_FRONTIER_PER_TOPIC)) {
-        signal?.throwIfAborted();
-        try {
-          const res = await addFrontier({ pathId: map.pathId, request, abortSignal: signal });
-          log('course-worker.frontier-request', { id: cr.id, pathId: map.pathId, request, ...res });
-        } catch (err) {
-          logWarn('course-worker.frontier-request-failed', {
-            id: cr.id,
-            pathId: map.pathId,
-            request,
-            err,
-          });
+      await timeStage('worker.frontier', async () => {
+        for (const request of cr.frontierConcepts.slice(0, MAX_FRONTIER_PER_TOPIC)) {
+          signal?.throwIfAborted();
+          try {
+            const res = await addFrontier({ pathId: map.pathId, request, abortSignal: signal });
+            log('course-worker.frontier-request', { id: cr.id, pathId: map.pathId, request, ...res });
+          } catch (err) {
+            logWarn('course-worker.frontier-request-failed', {
+              id: cr.id,
+              pathId: map.pathId,
+              request,
+              err,
+            });
+          }
         }
-      }
+      });
     }
 
     signal?.throwIfAborted();
-    const track = await build({
-      pathId: map.pathId,
-      priorKnowledge: cr.priorKnowledge,
-      goal: cr.goal,
-      timeframeWeeks: cr.timeframeWeeks,
-      hoursPerWeek: cr.hoursPerWeek,
-      targetMastery: cr.targetMastery,
-      abortSignal: signal,
-    });
+    const track = await timeStage('worker.track-build', () =>
+      build({
+        pathId: map.pathId,
+        priorKnowledge: cr.priorKnowledge,
+        goal: cr.goal,
+        timeframeWeeks: cr.timeframeWeeks,
+        hoursPerWeek: cr.hoursPerWeek,
+        targetMastery: cr.targetMastery,
+        abortSignal: signal,
+      }),
+    );
 
     await logBuiltTrack(cr, track.trackId);
     const buildUsage = traceUsageSnapshot();
