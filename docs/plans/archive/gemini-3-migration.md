@@ -1,6 +1,6 @@
 # Gemini 3 migration
 
-**Status:** active · **Blocks:** G1–G6; G1–G4 open as #381–#384, none merged · **Block IDs:** `G` · **Started:** 2026-09-27
+**Status:** shipped 2026-09-28 · **Blocks:** G1–G6 ([#381](https://github.com/mwin02/learning-app/pull/381)–[#386](https://github.com/mwin02/learning-app/pull/386)), plan [#380](https://github.com/mwin02/learning-app/pull/380); app and worker deployed at `5176c60` the same day · **Block IDs:** `G` · **Started:** 2026-09-27
 
 ## Diagnosis
 
