@@ -102,6 +102,22 @@ describe('getModel — tiers', () => {
   });
 });
 
+describe('getModel — call timeout', () => {
+  const TIMED_AGENTS = [
+    'mapCandidateJudge',
+    'conceptDeriver',
+    'discoveryDescriber',
+    'tagCanonicalizer',
+    'topicClassifier',
+    'validityAgent',
+  ] as const;
+
+  it.each(AGENT_NAMES)('%s has a 90 s call timeout only if it is a background Flash agent', (name) => {
+    const expected = (TIMED_AGENTS as readonly string[]).includes(name) ? 90_000 : undefined;
+    expect(getModel(name).callTimeoutMs).toBe(expected);
+  });
+});
+
 describe('getModel — curriculumFallback', () => {
   it('runs grounded discovery on the Pro id at low thinking', () => {
     const { modelId, providerOptions } = getModel('curriculumFallback');

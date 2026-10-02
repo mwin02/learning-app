@@ -18,6 +18,7 @@ import { z } from 'zod';
 import type { ConceptOrigin } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { getModel } from '@/lib/ai/models';
+import { isCallTimeoutError } from '@/lib/ai/call-middleware';
 import { logWarn } from '@/lib/log';
 import { describeError } from '@/lib/ai/describe-error';
 import {
@@ -109,8 +110,9 @@ export async function deriveChildConcepts(args: {
   topic: string;
   parentConcepts: string[];
   items: DerivableItem[];
+  abortSignal?: AbortSignal;
 }): Promise<Map<string, DerivedConcepts>> {
-  const { topic, parentConcepts, items } = args;
+  const { topic, parentConcepts, items, abortSignal } = args;
   const out = new Map<string, DerivedConcepts>();
   if (items.length === 0) return out;
 
@@ -126,7 +128,10 @@ export async function deriveChildConcepts(args: {
   const batches = chunk(items, CONCEPT_DERIVATION_CHUNK_SIZE);
   const batchResults = await Promise.all(
     batches.map((batch) =>
-      deriveWithBisect(batch, (b) => callDeriver(topic, grounding, b), { topic }),
+      deriveWithBisect(batch, (b) => callDeriver(topic, grounding, b, abortSignal), {
+        topic,
+        abortSignal,
+      }),
     ),
   );
   for (const result of batchResults) {
@@ -167,6 +172,11 @@ export async function deriveChildConcepts(args: {
 // recovery heuristic, and once its one-poison-item premise is visibly false,
 // continuing to split buys nothing.
 //
+// A call timeout (already retried once inside the model middleware) or an abort
+// ends the batch instead: bisection assumes one poisoned item, and neither says
+// anything about any item — splitting on a stall would only multiply it by the
+// budget.
+//
 // `run` and `budget` are injected so the bisection is testable without the model.
 //
 // Exported for the same reason: the budget floor is a property of the recursion's
@@ -179,7 +189,7 @@ export function bisectBudgetFor(batchSize: number): number {
 export async function deriveWithBisect(
   batch: DerivableItem[],
   run: (b: DerivableItem[]) => Promise<Map<string, DerivedConcepts>>,
-  ctx: { topic: string },
+  ctx: { topic: string; abortSignal?: AbortSignal },
   budget: { remaining: number } = { remaining: bisectBudgetFor(batch.length) },
 ): Promise<Map<string, DerivedConcepts>> {
   if (batch.length === 0) return new Map();
@@ -194,6 +204,15 @@ export async function deriveWithBisect(
     try {
       return await run(batch);
     } catch (err) {
+      if (ctx.abortSignal?.aborted || isCallTimeoutError(err)) {
+        logWarn('concepts.derive_batch_stopped', {
+          topic: ctx.topic,
+          batchSize: batch.length,
+          reason: ctx.abortSignal?.aborted ? 'aborted' : 'timeout',
+          ...describeError(err),
+        });
+        return new Map();
+      }
       // finishReason/schemaIssues are what separate "the response was truncated"
       // from "the schema rejected it" — the two have opposite fixes, and
       // err.message alone reads identically for both.
@@ -236,6 +255,7 @@ async function callDeriver(
   topic: string,
   grounding: string[],
   batch: DerivableItem[],
+  abortSignal: AbortSignal | undefined,
 ): Promise<Map<string, DerivedConcepts>> {
   const out = new Map<string, DerivedConcepts>();
   const { model, temperature, maxOutputTokens, providerOptions } = getModel('conceptDeriver');
@@ -244,6 +264,7 @@ async function callDeriver(
     temperature,
     maxOutputTokens,
     providerOptions,
+    abortSignal,
     schema: DerivedSchema,
     system: DERIVE_SYSTEM_PROMPT,
     prompt: [

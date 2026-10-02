@@ -2,10 +2,19 @@
 // owe once rung 0's candidates have been judged and attached. source-concept's
 // module graph pulls in env-validating leaves (@/lib/db, @/lib/ai/vertex,
 // @/lib/ai/models) via the sourcing/judge chain, so those are stubbed per the
-// CLAUDE.md module-eval note — the function under test is pure.
-import { describe, it, expect, vi } from 'vitest';
+// CLAUDE.md module-eval note. The timeout-containment tests at the bottom also
+// stub the judge and the sourcing rungs, and give the prisma stub the two reads
+// that run before the judge.
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
-vi.mock('@/lib/db', () => ({ prisma: {} }));
+const resourceFindMany = vi.fn();
+const conceptResourceFindMany = vi.fn();
+vi.mock('@/lib/db', () => ({
+  prisma: {
+    resource: { findMany: (...a: unknown[]) => resourceFindMany(...a) },
+    conceptResource: { findMany: (...a: unknown[]) => conceptResourceFindMany(...a) },
+  },
+}));
 vi.mock('@/lib/ai/vertex', () => ({
   vertex: Object.assign(() => ({}), { textEmbeddingModel: () => ({}) }),
   chatModel: () => ({}),
@@ -16,7 +25,20 @@ vi.mock('@/lib/ai/models', () => ({
   getModel: () => ({ model: {}, temperature: 0, maxOutputTokens: 0 }),
 }));
 
-import { webBudgetAfterLibrary, rejectedCandidates } from './source-concept';
+const judgeCandidates = vi.fn();
+vi.mock('@/lib/agents/map/candidate-judge', () => ({
+  judgeCandidates: (...a: unknown[]) => judgeCandidates(...a),
+}));
+const libraryRungCandidates = vi.fn();
+const sourceFromWeb = vi.fn();
+vi.mock('@/lib/agents/tools/web-fallback', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/agents/tools/web-fallback')>()),
+  libraryRungCandidates: (...a: unknown[]) => libraryRungCandidates(...a),
+  sourceFromWeb: (...a: unknown[]) => sourceFromWeb(...a),
+}));
+
+import { CallTimeoutError } from '@/lib/ai/call-middleware';
+import { webBudgetAfterLibrary, rejectedCandidates, sourceAndAttachConcept } from './source-concept';
 
 const TARGET = 3;
 
@@ -115,5 +137,86 @@ describe('rejectedCandidates — what R2 writes to the rejection memory', () => 
 
   it('is empty for an empty judge pass', () => {
     expect(rejectedCandidates([], [])).toEqual([]);
+  });
+});
+
+// A timed-out model call must cost one concept, not the thicken cycle or the
+// remediation pass that called it. Anything else still propagates.
+describe('sourceAndAttachConcept — call timeout containment', () => {
+  const args = { pathId: 'p1', topic: 'databases', conceptId: 'c1', slug: 'sql-joins', title: 'SQL joins' };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.resetAllMocks();
+  });
+
+  function timeoutWarnLines(spy: { mock: { calls: unknown[][] } }): Record<string, unknown>[] {
+    return spy.mock.calls
+      .map((call) => JSON.parse(String(call[0])))
+      .filter((line: Record<string, unknown>) => line.event === 'source-concept.call-timeout');
+  }
+
+  // Rung 0 offers one library row, so the first model call is the judge's.
+  function withLibraryCandidate() {
+    libraryRungCandidates.mockResolvedValue([{ id: 'r1' }]);
+    conceptResourceFindMany.mockResolvedValue([]);
+    resourceFindMany.mockResolvedValue([{ id: 'r1', title: 'Joins explained' }]);
+  }
+
+  it('attaches nothing and warns once when the judge times out', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    withLibraryCandidate();
+    judgeCandidates.mockRejectedValue(new CallTimeoutError('mapCandidateJudge', 90_000));
+
+    await expect(sourceAndAttachConcept(args)).resolves.toBe(0);
+
+    const lines = timeoutWarnLines(warn);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      pathId: 'p1',
+      concept: 'sql-joins',
+      agent: 'mapCandidateJudge',
+      timeoutMs: 90_000,
+      attached: 0,
+    });
+    expect(sourceFromWeb).not.toHaveBeenCalled();
+  });
+
+  it('attaches nothing and warns once when the web rung times out', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    libraryRungCandidates.mockResolvedValue([]);
+    sourceFromWeb.mockRejectedValue(new CallTimeoutError('discoveryDescriber', 90_000));
+
+    await expect(sourceAndAttachConcept(args)).resolves.toBe(0);
+    expect(timeoutWarnLines(warn)).toHaveLength(1);
+    expect(timeoutWarnLines(warn)[0].agent).toBe('discoveryDescriber');
+  });
+
+  it('still rejects on a job abort', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    withLibraryCandidate();
+    const controller = new AbortController();
+    judgeCandidates.mockImplementation(async () => {
+      controller.abort();
+      throw new Error('request cancelled');
+    });
+
+    await expect(
+      sourceAndAttachConcept({ ...args, abortSignal: controller.signal }),
+    ).rejects.toThrow('request cancelled');
+    expect(timeoutWarnLines(warn)).toHaveLength(0);
+  });
+
+  it('still rejects on any other error', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    withLibraryCandidate();
+    judgeCandidates.mockRejectedValue(new Error('quota exhausted'));
+
+    await expect(sourceAndAttachConcept(args)).rejects.toThrow('quota exhausted');
+    expect(timeoutWarnLines(warn)).toHaveLength(0);
   });
 });

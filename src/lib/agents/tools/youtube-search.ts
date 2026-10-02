@@ -116,6 +116,7 @@ export async function searchYouTubeForConcept(args: {
     topic,
     parentConcepts: [conceptTitle],
     items: kept.map((d) => ({ ref: d.videoId, title: d.title, description: d.description })),
+    abortSignal,
   });
 
   const rows = kept.map((d): YoutubeSourcedResource => {

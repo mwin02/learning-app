@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { generateText } from 'ai';
+import { generateText, RetryError } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3GenerateResult } from '@ai-sdk/provider';
-import { callOutcome, withCallTiming } from '@/lib/ai/call-middleware';
+import {
+  CallTimeoutError,
+  callOutcome,
+  isCallTimeoutError,
+  withCallTiming,
+} from '@/lib/ai/call-middleware';
 import { runWithTrace, traceUsageSnapshot } from '@/lib/log';
 
 const okResult: LanguageModelV3GenerateResult = {
@@ -125,6 +130,122 @@ describe('withCallTiming', () => {
   });
 });
 
+describe('withCallTiming — per-attempt timeout', () => {
+  const TIMEOUT_MS = 20;
+
+  // Resolves only through its signal, the way a stalled request ends once fetch is aborted.
+  function hangUntilAborted(abortSignal: AbortSignal | undefined): Promise<never> {
+    return new Promise((_, reject) => {
+      abortSignal?.addEventListener('abort', () => reject(new Error('request cancelled')));
+    });
+  }
+
+  it('retries a timed-out attempt once and returns the second result', async () => {
+    const { info, warn } = spies();
+    let calls = 0;
+    const model = withCallTiming(
+      new MockLanguageModelV3({
+        doGenerate: async ({ abortSignal }) => {
+          calls += 1;
+          if (calls === 1) return hangUntilAborted(abortSignal);
+          return okResult;
+        },
+      }),
+      'conceptDeriver',
+      { timeoutMs: TIMEOUT_MS },
+    );
+    const result = await generateText({ model, prompt: 'hi' });
+
+    expect(result.text).toBe('hello');
+    expect(calls).toBe(2);
+    const lines = [...aiCallLines(warn), ...aiCallLines(info)];
+    expect(lines.map((l) => l.outcome)).toEqual(['timeout', 'ok']);
+  });
+
+  it('gives up after two timed-out attempts with a CallTimeoutError naming agent and limit', async () => {
+    const { warn } = spies();
+    let calls = 0;
+    const model = withCallTiming(
+      new MockLanguageModelV3({
+        doGenerate: async ({ abortSignal }) => {
+          calls += 1;
+          return hangUntilAborted(abortSignal);
+        },
+      }),
+      'conceptDeriver',
+      { timeoutMs: TIMEOUT_MS },
+    );
+    const err = await generateText({ model, prompt: 'hi' }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(CallTimeoutError);
+    expect(isCallTimeoutError(err)).toBe(true);
+    expect(String(err)).toContain('conceptDeriver');
+    expect(String(err)).toContain(String(TIMEOUT_MS));
+    expect(calls).toBe(2);
+    expect(aiCallLines(warn).map((l) => l.outcome)).toEqual(['timeout', 'timeout']);
+  });
+
+  it('never retries a caller abort, and logs it as aborted', async () => {
+    const { warn } = spies();
+    const controller = new AbortController();
+    let calls = 0;
+    const model = withCallTiming(
+      new MockLanguageModelV3({
+        doGenerate: async ({ abortSignal }) => {
+          calls += 1;
+          const pending = hangUntilAborted(abortSignal);
+          controller.abort();
+          return pending;
+        },
+      }),
+      'conceptDeriver',
+      { timeoutMs: 10_000 },
+    );
+    const err = await generateText({
+      model,
+      prompt: 'hi',
+      abortSignal: controller.signal,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    expect(isCallTimeoutError(err)).toBe(false);
+    expect(calls).toBe(1);
+    const lines = aiCallLines(warn);
+    expect(lines).toHaveLength(1);
+    expect(lines[0].outcome).toBe('aborted');
+  });
+
+  it('does not cut off an agent without a timeout', async () => {
+    const { info } = spies();
+    const model = withCallTiming(
+      new MockLanguageModelV3({
+        doGenerate: async ({ abortSignal }) => {
+          await new Promise((resolve) => setTimeout(resolve, TIMEOUT_MS * 3));
+          expect(abortSignal?.aborted ?? false).toBe(false);
+          return okResult;
+        },
+      }),
+      'trackComposer',
+    );
+    const result = await generateText({ model, prompt: 'hi' });
+
+    expect(result.text).toBe('hello');
+    expect(aiCallLines(info).map((l) => l.outcome)).toEqual(['ok']);
+  });
+});
+
+describe('isCallTimeoutError', () => {
+  it('sees a CallTimeoutError the SDK wrapped in a RetryError', () => {
+    const wrapped = new RetryError({
+      message: 'Failed after 2 attempts',
+      reason: 'errorNotRetryable',
+      errors: [new Error('503'), new CallTimeoutError('conceptDeriver', 90_000)],
+    });
+    expect(isCallTimeoutError(wrapped)).toBe(true);
+    expect(isCallTimeoutError(new Error('x'))).toBe(false);
+  });
+});
+
 describe('callOutcome', () => {
   it('is aborted when the signal fired, whatever the error', () => {
     const controller = new AbortController();
@@ -132,10 +253,30 @@ describe('callOutcome', () => {
     expect(callOutcome(new Error('x'), controller.signal)).toBe('aborted');
   });
 
-  it.each(['AbortError', 'TimeoutError'])('is aborted for a %s without a signal', (name) => {
+  it('prefers the caller abort over the timeout when both fired', () => {
+    const caller = new AbortController();
+    const timeout = new AbortController();
+    caller.abort();
+    timeout.abort();
+    expect(callOutcome(new Error('x'), caller.signal, timeout.signal)).toBe('aborted');
+  });
+
+  it('is timeout when only the timeout signal fired', () => {
+    const timeout = new AbortController();
+    timeout.abort();
+    expect(callOutcome(new Error('x'), new AbortController().signal, timeout.signal)).toBe('timeout');
+  });
+
+  it('is aborted for an AbortError without a signal', () => {
     const err = new Error('x');
-    err.name = name;
+    err.name = 'AbortError';
     expect(callOutcome(err, undefined)).toBe('aborted');
+  });
+
+  it('is error for a TimeoutError raised by neither signal', () => {
+    const err = new Error('x');
+    err.name = 'TimeoutError';
+    expect(callOutcome(err, new AbortController().signal, new AbortController().signal)).toBe('error');
   });
 
   it('is error otherwise', () => {

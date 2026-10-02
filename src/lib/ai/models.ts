@@ -48,6 +48,8 @@ export type ModelConfig = {
   temperature?: number;
   thinkingLevel?: ThinkingLevel;
   maxOutputTokens: number;
+  // Per-attempt bound; a timed-out attempt is retried once. Omitted → unbounded.
+  callTimeoutMs?: number;
 };
 
 // The Vertex provider reads its options under `vertex` and falls back to
@@ -60,6 +62,12 @@ export type GoogleThinkingProviderOptions = {
 // both 404 against this project (re-probed 2026-09-27). Retarget when one lands.
 const PRO_MODEL_ID = 'gemini-3.1-pro-preview';
 const FLASH_MODEL_ID = 'gemini-3.7-flash';
+
+// The background Flash agents normally answer in seconds, but single calls have
+// stalled silently for 2–3.75 min and held up a whole serial build behind them
+// (`build-speed.md`, Diagnosis). 90 s cuts only the stalls. Pro agents and the
+// request-path Flash agents get none until there are measured latencies to set it from.
+const FLASH_CALL_TIMEOUT_MS = 90_000;
 
 // No entry sets `temperature`. Gemini 3 is tuned for its default (1.0), and
 // Google warns of looping and degraded reasoning below it; one structured-output
@@ -104,6 +112,7 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // Flash: restructuring text it was handed, not judging.
     modelId: FLASH_MODEL_ID,
     maxOutputTokens: 16384,
+    callTimeoutMs: FLASH_CALL_TIMEOUT_MS,
   },
   mapSpineAuthor: {
     // Phase 2.5d-1: authors a topic's spine concept DAG (nodes + directed prereq
@@ -149,6 +158,7 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     modelId: FLASH_MODEL_ID,
     thinkingLevel: 'low',
     maxOutputTokens: 8192,
+    callTimeoutMs: FLASH_CALL_TIMEOUT_MS,
   },
   onRampAuthor: {
     // Phase 2g-3: writes the orientation on-ramp lesson (markdown) for a topic's
@@ -221,6 +231,7 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     modelId: FLASH_MODEL_ID,
     thinkingLevel: 'low',
     maxOutputTokens: 8192,
+    callTimeoutMs: FLASH_CALL_TIMEOUT_MS,
   },
   topicClassifier: {
     // Phase 2.5-Block2a: files each discovered resource under its home topic,
@@ -230,6 +241,7 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     modelId: FLASH_MODEL_ID,
     thinkingLevel: 'low',
     maxOutputTokens: 8192,
+    callTimeoutMs: FLASH_CALL_TIMEOUT_MS,
   },
   conceptDeriver: {
     // Phase 2.5b-2: re-derives per-child conceptsTaught/prerequisiteConcepts for
@@ -240,6 +252,7 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     modelId: FLASH_MODEL_ID,
     thinkingLevel: 'low',
     maxOutputTokens: 8192,
+    callTimeoutMs: FLASH_CALL_TIMEOUT_MS,
   },
   docTocExtractor: {
     // Phase 2.5b-3: given a doc-course page's title + body snippet + the real
@@ -258,6 +271,7 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     modelId: FLASH_MODEL_ID,
     thinkingLevel: 'low',
     maxOutputTokens: 4096,
+    callTimeoutMs: FLASH_CALL_TIMEOUT_MS,
   },
   topicGate: {
     // One-shot subject-domain classifier ({math, science, cs} or reject).
@@ -327,6 +341,7 @@ export type ResolvedModel = {
   modelId: string;
   temperature: number | undefined;
   maxOutputTokens: number;
+  callTimeoutMs?: number;
   providerOptions?: GoogleThinkingProviderOptions;
 };
 
@@ -339,10 +354,11 @@ export function resolveModel(
   const override = envOverride?.trim();
   const modelId = override && override.length > 0 ? override : cfg.modelId;
   return {
-    model: withCallTiming(chatModel(modelId), agent),
+    model: withCallTiming(chatModel(modelId), agent, { timeoutMs: cfg.callTimeoutMs }),
     modelId,
     temperature: cfg.temperature,
     maxOutputTokens: cfg.maxOutputTokens,
+    callTimeoutMs: cfg.callTimeoutMs,
     providerOptions:
       cfg.thinkingLevel === undefined
         ? undefined
