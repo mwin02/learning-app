@@ -1,6 +1,7 @@
 import type { GoogleLanguageModelOptions } from '@ai-sdk/google';
 import type { LanguageModel } from 'ai';
 import { vertex, chatModel } from '@/lib/ai/vertex';
+import { withCallTiming } from '@/lib/ai/call-middleware';
 
 // Per-agent model configuration. Sampling params (temperature, thinkingLevel,
 // maxOutputTokens) are per-agent decisions, not deployment knobs. Only
@@ -333,11 +334,12 @@ export type ResolvedModel = {
 export function resolveModel(
   cfg: ModelConfig,
   envOverride: string | undefined,
+  agent: AgentName,
 ): ResolvedModel {
   const override = envOverride?.trim();
   const modelId = override && override.length > 0 ? override : cfg.modelId;
   return {
-    model: chatModel(modelId),
+    model: withCallTiming(chatModel(modelId), agent),
     modelId,
     temperature: cfg.temperature,
     maxOutputTokens: cfg.maxOutputTokens,
@@ -349,7 +351,7 @@ export function resolveModel(
 }
 
 export function getModel(name: AgentName): ResolvedModel {
-  return resolveModel(REGISTRY[name], process.env[`MODEL_${name.toUpperCase()}`]);
+  return resolveModel(REGISTRY[name], process.env[`MODEL_${name.toUpperCase()}`], name);
 }
 
 // Embedding models are kept separate from the chat `REGISTRY` above: they have

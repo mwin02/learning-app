@@ -5,6 +5,7 @@ import {
   logWarn,
   addUsageToSnapshot,
   currentTraceId,
+  recordTiming,
   recordUsage,
   serviceContext,
   takeStack,
@@ -250,6 +251,55 @@ describe('trace usage accounting', () => {
       }),
     ]);
     expect(snapshots).toEqual({ a: 1, b: 100 });
+  });
+});
+
+describe('trace timing accounting', () => {
+  it('recordTiming outside a trace neither throws nor records', async () => {
+    expect(() => recordTiming('ai.x', 5)).not.toThrow();
+    expect(traceUsageSnapshot()).toBeNull();
+    await runWithTrace('t-fresh', async () => {
+      expect(traceUsageSnapshot()).toBeNull();
+    });
+  });
+
+  it('accumulates count, totalMs and maxMs per key', async () => {
+    await runWithTrace('t-time', async () => {
+      recordTiming('ai.a', 30);
+      recordTiming('ai.a', 70);
+      recordTiming('ai.b', 5);
+      expect(traceUsageSnapshot()?.timings).toEqual({
+        'ai.a': { count: 2, totalMs: 100, maxMs: 70 },
+        'ai.b': { count: 1, totalMs: 5, maxMs: 5 },
+      });
+    });
+  });
+
+  it('a timings-only trace yields a snapshot with empty stages and zero totals', async () => {
+    await runWithTrace('t-time-only', async () => {
+      recordTiming('ai.a', 1);
+      expect(traceUsageSnapshot()).toEqual({
+        stages: {},
+        totals: { calls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        timings: { 'ai.a': { count: 1, totalMs: 1, maxMs: 1 } },
+      });
+    });
+  });
+
+  it('a usage-only trace has no timings key', async () => {
+    await runWithTrace('t-usage-only', async () => {
+      recordUsage('s', { totalTokens: 1 });
+      expect(Object.keys(traceUsageSnapshot() ?? {})).toEqual(['stages', 'totals']);
+    });
+  });
+
+  it('the snapshot is a copy, not a live view', async () => {
+    await runWithTrace('t-copy', async () => {
+      recordTiming('ai.a', 1);
+      const snap = traceUsageSnapshot();
+      recordTiming('ai.a', 1);
+      expect(snap?.timings?.['ai.a'].count).toBe(1);
+    });
   });
 });
 

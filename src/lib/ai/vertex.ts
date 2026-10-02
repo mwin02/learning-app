@@ -1,6 +1,6 @@
 import { createVertex } from '@ai-sdk/google-vertex';
 import { createVertexAnthropic } from '@ai-sdk/google-vertex/anthropic';
-import type { LanguageModel } from 'ai';
+import type { WrappableModel } from '@/lib/ai/call-middleware';
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -86,7 +86,7 @@ export const vertexGlobal = createVertex({
 //   otherwise   → default regional Gemini provider (no registry chat model since
 //                 the Gemini 3 retarget; only a pre-3 MODEL_<AGENT> override lands here)
 // Lets the per-agent REGISTRY in models.ts mix model families by id alone.
-export function chatModel(modelId: string): LanguageModel {
+export function chatModel(modelId: string): WrappableModel {
   if (modelId.startsWith('claude-')) return vertexAnthropic(modelId);
   if (modelId.startsWith('gemini-3')) return vertexGlobal(modelId);
   return vertex(modelId);
