@@ -1,13 +1,29 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { generateText } from 'ai';
 
 // models.ts imports the vertex leaf, which throws at module-eval without
 // GOOGLE_VERTEX_PROJECT; resolution itself never calls the provider.
-vi.mock('@/lib/ai/vertex', () => ({
-  vertex: Object.assign(() => ({}), { textEmbeddingModel: () => ({}) }),
-  chatModel: () => ({}),
-  vertexAnthropic: {},
-  vertexGlobal: {},
-}));
+vi.mock('@/lib/ai/vertex', async () => {
+  const { MockLanguageModelV3 } = await import('ai/test');
+  return {
+    vertex: Object.assign(() => ({}), { textEmbeddingModel: () => ({}) }),
+    chatModel: (modelId: string) =>
+      new MockLanguageModelV3({
+        modelId,
+        doGenerate: async () => ({
+          content: [{ type: 'text', text: 'ok' }],
+          finishReason: { unified: 'stop', raw: undefined },
+          usage: {
+            inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+            outputTokens: { total: 1, text: 1, reasoning: 0 },
+          },
+          warnings: [],
+        }),
+      }),
+    vertexAnthropic: {},
+    vertexGlobal: {},
+  };
+});
 
 import {
   AGENT_NAMES,
@@ -110,11 +126,11 @@ describe('getModel — curriculumFallback', () => {
 
 describe('resolveModel — thinkingLevel', () => {
   it('leaves providerOptions undefined when no thinkingLevel is set', () => {
-    expect(resolveModel(base, undefined).providerOptions).toBeUndefined();
+    expect(resolveModel(base, undefined, 'health').providerOptions).toBeUndefined();
   });
 
   it('builds the google thinkingConfig when thinkingLevel is set', () => {
-    expect(resolveModel({ ...base, thinkingLevel: 'low' }, undefined).providerOptions).toEqual({
+    expect(resolveModel({ ...base, thinkingLevel: 'low' }, undefined, 'health').providerOptions).toEqual({
       google: { thinkingConfig: { thinkingLevel: 'low' } },
     });
   });
@@ -122,12 +138,12 @@ describe('resolveModel — thinkingLevel', () => {
 
 describe('resolveModel — temperature', () => {
   it('passes a configured temperature through', () => {
-    expect(resolveModel(base, undefined).temperature).toBe(0.2);
+    expect(resolveModel(base, undefined, 'health').temperature).toBe(0.2);
   });
 
   it('returns undefined when the config omits temperature', () => {
     const noTemp: ModelConfig = { modelId: 'gemini-test', maxOutputTokens: 1024 };
-    expect(resolveModel(noTemp, undefined).temperature).toBeUndefined();
+    expect(resolveModel(noTemp, undefined, 'health').temperature).toBeUndefined();
   });
 });
 
@@ -151,5 +167,33 @@ describe('getModel — MODEL_<AGENT> override', () => {
     vi.stubEnv('MODEL_HEALTH', value);
     expect(getModel('health').modelId).toBe(registryId);
     expect(registryId).not.toBe(value);
+  });
+});
+
+describe('getModel — call timing', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  async function aiCallLine(): Promise<Record<string, unknown>> {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await generateText({ model: getModel('conceptDeriver').model, prompt: 'hi' });
+    const lines = spy.mock.calls
+      .map((call) => JSON.parse(String(call[0])))
+      .filter((line: Record<string, unknown>) => line.event === 'ai.call');
+    expect(lines).toHaveLength(1);
+    return lines[0];
+  }
+
+  it('logs each call under its agent name and registry model id', async () => {
+    const line = await aiCallLine();
+    expect(line.agent).toBe('conceptDeriver');
+    expect(line.modelId).toBe(getModel('conceptDeriver').modelId);
+  });
+
+  it('reports the MODEL_<AGENT> override id', async () => {
+    vi.stubEnv('MODEL_CONCEPTDERIVER', 'gemini-override');
+    expect((await aiCallLine()).modelId).toBe('gemini-override');
   });
 });

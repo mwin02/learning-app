@@ -43,22 +43,31 @@ export type StageUsage = {
   totalTokens: number;
 };
 
+export type TimingStat = {
+  count: number;
+  totalMs: number;
+  maxMs: number;
+};
+
 // The persisted shape (Program.planUsage / CourseRequest.buildUsage).
+// `timings` is optional so snapshots written before it existed still parse.
 export type UsageSnapshot = {
   stages: Record<string, StageUsage>;
   totals: StageUsage;
+  timings?: Record<string, TimingStat>;
 };
 
 type TraceContext = {
   traceId: string;
   usage: Map<string, StageUsage>;
+  timings: Map<string, TimingStat>;
 };
 
 const storage = new AsyncLocalStorage<TraceContext>();
 
 /** Run `fn` inside a trace: logs carry `traceId`, recordUsage accumulates. */
 export function runWithTrace<T>(traceId: string, fn: () => Promise<T>): Promise<T> {
-  return storage.run({ traceId, usage: new Map() }, fn);
+  return storage.run({ traceId, usage: new Map(), timings: new Map() }, fn);
 }
 
 export function currentTraceId(): string | null {
@@ -81,14 +90,25 @@ export function recordUsage(stage: string, usage: UsageLike | undefined): void {
   ctx.usage.set(stage, entry);
 }
 
+/** Accumulate one duration under a key ("ai.trackComposer", …). No-op outside a trace. */
+export function recordTiming(key: string, ms: number): void {
+  const ctx = storage.getStore();
+  if (!ctx) return;
+  const entry = ctx.timings.get(key) ?? { count: 0, totalMs: 0, maxMs: 0 };
+  entry.count += 1;
+  entry.totalMs += ms;
+  entry.maxMs = Math.max(entry.maxMs, ms);
+  ctx.timings.set(key, entry);
+}
+
 /**
- * The current trace's accumulated usage, JSON-ready for persistence.
+ * The current trace's accumulated usage and timings, JSON-ready for persistence.
  * Null outside a trace or when nothing was recorded (persist as DB NULL —
  * "not measured", distinct from an all-zero measurement).
  */
 export function traceUsageSnapshot(): UsageSnapshot | null {
   const ctx = storage.getStore();
-  if (!ctx || ctx.usage.size === 0) return null;
+  if (!ctx || (ctx.usage.size === 0 && ctx.timings.size === 0)) return null;
   const stages: Record<string, StageUsage> = {};
   const totals: StageUsage = { calls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
   for (const [stage, u] of ctx.usage) {
@@ -98,7 +118,10 @@ export function traceUsageSnapshot(): UsageSnapshot | null {
     totals.outputTokens += u.outputTokens;
     totals.totalTokens += u.totalTokens;
   }
-  return { stages, totals };
+  if (ctx.timings.size === 0) return { stages, totals };
+  const timings: Record<string, TimingStat> = {};
+  for (const [key, t] of ctx.timings) timings[key] = { ...t };
+  return { stages, totals, timings };
 }
 
 /**
