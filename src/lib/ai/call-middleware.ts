@@ -27,9 +27,14 @@ export class CallTimeoutError extends Error {
 
 // After an earlier retryable failure the SDK wraps a later non-retryable error,
 // ours included, in a RetryError.
+export function callTimeoutErrorOf(err: unknown): CallTimeoutError | undefined {
+  if (err instanceof CallTimeoutError) return err;
+  if (RetryError.isInstance(err) && err.lastError instanceof CallTimeoutError) return err.lastError;
+  return undefined;
+}
+
 export function isCallTimeoutError(err: unknown): boolean {
-  if (err instanceof CallTimeoutError) return true;
-  return RetryError.isInstance(err) && err.lastError instanceof CallTimeoutError;
+  return callTimeoutErrorOf(err) !== undefined;
 }
 
 // The signals are the truth, not error names: a provider surfaces an abort as an

@@ -36,6 +36,8 @@
 
 import { Difficulty, BankStaleReason } from '@prisma/client';
 import { prisma } from '@/lib/db';
+import { logWarn } from '@/lib/log';
+import { callTimeoutErrorOf } from '@/lib/ai/call-middleware';
 import { recomputeReadiness } from '@/lib/agents/map/recompute-readiness';
 import { judgeCandidates } from '@/lib/agents/map/candidate-judge';
 import { selectAttachable, capCandidates } from '@/lib/agents/map/attach-candidates';
@@ -55,7 +57,7 @@ export type JudgeAttachResult = {
 
 const NOTHING_ATTACHED: JudgeAttachResult = { attached: 0, primaryAttached: false };
 
-export async function sourceAndAttachConcept(args: {
+type SourceConceptArgs = {
   pathId: string;
   topic: string;
   conceptId: string;
@@ -82,7 +84,35 @@ export async function sourceAndAttachConcept(args: {
   // the sourcing ladder's AI/web calls and the judge — remediation's per-hole
   // loop is the single most expensive unthreaded stretch without it.
   abortSignal?: AbortSignal;
-}): Promise<number> {
+};
+
+// A model call that timed out twice (V3's per-call timeout) ends this concept's
+// sourcing with whatever already committed, instead of failing the whole thicken
+// cycle or remediation pass above it. Every attach is its own transaction with no
+// model call inside, so stopping between them leaves nothing half-written. Any
+// other error, a job abort included, propagates.
+export async function sourceAndAttachConcept(args: SourceConceptArgs): Promise<number> {
+  const progress = { attached: 0 };
+  try {
+    return await sourceAndAttachConceptUnguarded(args, progress);
+  } catch (err) {
+    const timeout = callTimeoutErrorOf(err);
+    if (!timeout) throw err;
+    logWarn('source-concept.call-timeout', {
+      pathId: args.pathId,
+      concept: args.slug,
+      agent: timeout.agent,
+      timeoutMs: timeout.timeoutMs,
+      attached: progress.attached,
+    });
+    return progress.attached;
+  }
+}
+
+async function sourceAndAttachConceptUnguarded(
+  args: SourceConceptArgs,
+  progress: { attached: number },
+): Promise<number> {
   const {
     pathId, topic, conceptId, slug, title, targetMastery,
     isOnRamp = false, preferSubstantial = false, requirePrimary = false, abortSignal,
@@ -119,6 +149,7 @@ export async function sourceAndAttachConcept(args: {
     reason: 'source-concept-library',
     abortSignal,
   });
+  progress.attached = library.attached;
 
   const webBudget = webBudgetAfterLibrary({
     targetCount,
