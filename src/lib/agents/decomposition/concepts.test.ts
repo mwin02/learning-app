@@ -5,7 +5,8 @@
 // array as if it had been derived. Both halves are tested here — that bisecting
 // recovers the other 24, and that whatever still fails is STAMPED.
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { CallTimeoutError } from '@/lib/ai/call-middleware';
 
 // concepts.ts imports @/lib/db and @/lib/ai/models, which validate env at
 // module-eval. findMany is captured so the vocab query's filter is assertable.
@@ -180,6 +181,63 @@ describe('deriveWithBisect call budget', () => {
     const { run, calls } = alwaysFails();
     await deriveWithBisect(items(25), run, ctx, { remaining: 7 });
     expect(calls).toHaveLength(7);
+  });
+});
+
+// A stall or an abort says nothing about any item, so bisecting on one would only
+// multiply the stall by the budget.
+describe('deriveWithBisect — timeouts and aborts', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function warnEvents(spy: { mock: { calls: unknown[][] } }): string[] {
+    return spy.mock.calls.map((call) => String(JSON.parse(String(call[0])).event));
+  }
+
+  it('ends the batch on a call timeout: one call, no retry, no split', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const calls: number[] = [];
+    const run = async (batch: DerivableItem[]): Promise<Map<string, DerivedConcepts>> => {
+      calls.push(batch.length);
+      throw new CallTimeoutError('conceptDeriver', 90_000);
+    };
+    const out = await deriveWithBisect(items(25), run, ctx);
+
+    expect(calls).toEqual([25]);
+    expect(out.size).toBe(0);
+    expect(warnEvents(warn)).not.toContain('concepts.derive_batch_failed');
+    expect(warnEvents(warn)).toContain('concepts.derive_batch_stopped');
+  });
+
+  it('ends the batch on an abort: one call, no retry, no split', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const controller = new AbortController();
+    const calls: number[] = [];
+    const run = async (batch: DerivableItem[]): Promise<Map<string, DerivedConcepts>> => {
+      calls.push(batch.length);
+      controller.abort();
+      throw new Error('request cancelled');
+    };
+    const out = await deriveWithBisect(items(25), run, { ...ctx, abortSignal: controller.signal });
+
+    expect(calls).toEqual([25]);
+    expect(out.size).toBe(0);
+    expect(warnEvents(warn)).not.toContain('concepts.derive_batch_failed');
+  });
+
+  it('still retries then bisects a schema failure when a signal is passed but not aborted', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { run, calls } = poisonedRunner('r7');
+    const out = await deriveWithBisect(items(25), run, {
+      ...ctx,
+      abortSignal: new AbortController().signal,
+    });
+
+    expect(calls[0]).toHaveLength(25);
+    expect(calls[1]).toHaveLength(25);
+    expect(calls.length).toBeGreaterThan(2);
+    expect(out.size).toBe(24);
   });
 });
 
