@@ -55,6 +55,7 @@ import {
   TRACK_FILL_BAND,
 } from '@/lib/config';
 import type { OnTrace } from '@/lib/agents/agent-trace';
+import { timeStage } from '@/lib/log';
 
 export type BuildTrackInput = {
   pathId: string;
@@ -152,31 +153,35 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
       // per-concept budget). Recomputed per attempt — thickening doesn't change the
       // concept count, but the recompute is free and keeps the loop self-contained.
       const tier = depthTier(budgetMinutes, loaded.concepts.length);
-      composition =
-        TRACK_COMPOSER_MODE === 'agent'
-          ? await composeTrackAgent({
-              topic: path.topic,
-              concepts: loaded.concepts,
-              edges: loaded.edges,
-              priorKnowledge,
-              goal,
-              targetMastery,
-              budgetMinutes,
-              depthTier: tier,
-              onTrace,
-              abortSignal,
-            })
-          : await composeTrack({
-              topic: path.topic,
-              concepts: loaded.concepts,
-              priorKnowledge,
-              goal,
-              targetMastery,
-              budgetMinutes,
-              depthTier: tier,
-              onTrace,
-              abortSignal,
-            });
+      composition = await timeStage(
+        'track.compose',
+        () =>
+          TRACK_COMPOSER_MODE === 'agent'
+            ? composeTrackAgent({
+                topic: path.topic,
+                concepts: loaded.concepts,
+                edges: loaded.edges,
+                priorKnowledge,
+                goal,
+                targetMastery,
+                budgetMinutes,
+                depthTier: tier,
+                onTrace,
+                abortSignal,
+              })
+            : composeTrack({
+                topic: path.topic,
+                concepts: loaded.concepts,
+                priorKnowledge,
+                goal,
+                targetMastery,
+                budgetMinutes,
+                depthTier: tier,
+                onTrace,
+                abortSignal,
+              }),
+        { attempt },
+      );
       const validation = validateComposition({
         composition,
         concepts: loaded.concepts,
@@ -196,12 +201,10 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
       const thinForBudget = composition.resourceSufficiency.thinForBudget;
       const needsThicken = !composition.resourceSufficiency.enough || thinForBudget.length > 0;
       if (!needsThicken || attempt >= TRACK_MAX_THICKEN_ATTEMPTS) break;
-      const thicken = await thickenSpine({
-        pathId,
-        underResourced: composition.resourceSufficiency.underResourced,
-        thinForBudget,
-        targetMastery,
-      });
+      const underResourced = composition.resourceSufficiency.underResourced;
+      const thicken = await timeStage('track.thicken', () =>
+        thickenSpine({ pathId, underResourced, thinForBudget, targetMastery }),
+      );
       onTrace({ kind: 'stage', label: 'thicken attempt', detail: { attempt, ...thicken } });
       if (!thicken.thickened) break; // best-effort weaker Track
     }
@@ -303,59 +306,61 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
       embeddableById.get(resourceId) ? DeliveryMode.embed : DeliveryMode.newtab;
 
     // --- persist + freeze (one transaction) --------------------------------
-    await prisma.$transaction(async (tx) => {
-      for (let i = 0; i < cleaned.lessons.length; i++) {
-        const a = cleaned.lessons[i];
-        const v = byKey.get(a.key)!;
-        const lesson = await tx.lesson.create({
+    await timeStage('track.persist', () =>
+      prisma.$transaction(async (tx) => {
+        for (let i = 0; i < cleaned.lessons.length; i++) {
+          const a = cleaned.lessons[i];
+          const v = byKey.get(a.key)!;
+          const lesson = await tx.lesson.create({
+            data: {
+              trackId: track.id,
+              orderInTrack: i + 1,
+              title: v.title,
+              summary: v.summary,
+              conceptsTaught: v.conceptSlugs,
+              estMinutes: a.estMinutes,
+            },
+            select: { id: true },
+          });
+          // One ordered sequence (orderInLesson): the mandatory core (multiple
+          // role=primary) first, then the frozen optional/alternate substitute pool.
+          // Invalidation policy (future): when the mandatory set degrades below viable
+          // — a core resource goes hard-dead — promote the highest-graded optional into
+          // the core; multi-primary also degrades gracefully (the other mandatory
+          // resources still teach the concept).
+          let order = 0;
+          await tx.lessonResource.createMany({
+            data: [
+              ...a.primaries.map((p) => ({
+                lessonId: lesson.id,
+                resourceId: p.resourceId,
+                role: LessonResourceRole.primary,
+                deliveryMode: deliveryModeFor(p.resourceId),
+                orderInLesson: ++order,
+              })),
+              ...a.alternates.map((alt) => ({
+                lessonId: lesson.id,
+                resourceId: alt.resourceId,
+                role: LessonResourceRole.alternate,
+                deliveryMode: deliveryModeFor(alt.resourceId),
+                orderInLesson: ++order,
+              })),
+            ],
+          });
+        }
+        await tx.track.update({
+          where: { id: track.id },
           data: {
-            trackId: track.id,
-            orderInTrack: i + 1,
-            title: v.title,
-            summary: v.summary,
-            conceptsTaught: v.conceptSlugs,
-            estMinutes: a.estMinutes,
+            status: TrackStatus.ready,
+            title: composition.trackTitle,
+            summary: composition.trackSummary,
+            // Inferred by the composer from the learner's goal (2.5e-6); recorded on
+            // the frozen Track for downstream stages + analytics.
+            intent: composition.intent,
           },
-          select: { id: true },
         });
-        // One ordered sequence (orderInLesson): the mandatory core (multiple
-        // role=primary) first, then the frozen optional/alternate substitute pool.
-        // Invalidation policy (future): when the mandatory set degrades below viable
-        // — a core resource goes hard-dead — promote the highest-graded optional into
-        // the core; multi-primary also degrades gracefully (the other mandatory
-        // resources still teach the concept).
-        let order = 0;
-        await tx.lessonResource.createMany({
-          data: [
-            ...a.primaries.map((p) => ({
-              lessonId: lesson.id,
-              resourceId: p.resourceId,
-              role: LessonResourceRole.primary,
-              deliveryMode: deliveryModeFor(p.resourceId),
-              orderInLesson: ++order,
-            })),
-            ...a.alternates.map((alt) => ({
-              lessonId: lesson.id,
-              resourceId: alt.resourceId,
-              role: LessonResourceRole.alternate,
-              deliveryMode: deliveryModeFor(alt.resourceId),
-              orderInLesson: ++order,
-            })),
-          ],
-        });
-      }
-      await tx.track.update({
-        where: { id: track.id },
-        data: {
-          status: TrackStatus.ready,
-          title: composition.trackTitle,
-          summary: composition.trackSummary,
-          // Inferred by the composer from the learner's goal (2.5e-6); recorded on
-          // the frozen Track for downstream stages + analytics.
-          intent: composition.intent,
-        },
-      });
-    }, { timeout: DB_WRITE_TX_TIMEOUT_MS });
+      }, { timeout: DB_WRITE_TX_TIMEOUT_MS }),
+    );
 
     // --- best-effort sectioning: group the frozen lessons into chapters --------
     // A separate Flash pass over the just-persisted lessons (section-track.ts).
@@ -363,7 +368,7 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
     // sectioning never costs the learner a build. Runs after the freeze so it sees
     // the final, trimmed lesson order.
     try {
-      const sectioning = await sectionTrack({ trackId: track.id, onTrace, abortSignal });
+      const sectioning = await timeStage('track.section', () => sectionTrack({ trackId: track.id, onTrace, abortSignal }));
       warnings.push(...sectioning.warnings);
     } catch (err) {
       console.warn('[track-build-track] sectioning failed (non-fatal)', { trackId: track.id, err });
@@ -376,7 +381,7 @@ export async function buildTrack(input: BuildTrackInput): Promise<BuildTrackResu
     // like sectioning — a Path with no banks yet (or a failure here) leaves the Track
     // exercise-less but `ready`, never costing the learner a build.
     try {
-      const exercises = await exerciseTrack({ trackId: track.id, onTrace });
+      const exercises = await timeStage('track.exercises', () => exerciseTrack({ trackId: track.id, onTrace }));
       warnings.push(...exercises.warnings);
     } catch (err) {
       console.warn('[track-build-track] exercise selection failed (non-fatal)', { trackId: track.id, err });

@@ -30,7 +30,7 @@ import { z } from 'zod';
 import type { Difficulty } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { getModel } from '@/lib/ai/models';
-import { log, recordUsage } from '@/lib/log';
+import { log, recordUsage, timeStage } from '@/lib/log';
 import { vertex } from '@/lib/ai/vertex';
 import {
   REMEDIATION_SOURCE_TARGET_COUNT,
@@ -333,7 +333,11 @@ async function collectSurvivors(args: {
     iterations += 1;
     const need = targetCount - survivors.size;
 
-    const discovered = await discover(oversample, [...denyList], iterations);
+    const discovered = await timeStage(
+      'sourcing.discover',
+      () => discover(oversample, [...denyList], iterations),
+      { label, iteration: iterations },
+    );
     totalDiscovered += discovered.length;
 
     // Always block URLs we've already seen this run from re-discovery, even
@@ -355,7 +359,11 @@ async function collectSurvivors(args: {
     // run the pipeline.
     const preValidated = fresh.filter((r) => r.preValidated);
     const needValidation = fresh.filter((r) => !r.preValidated);
-    const { valid, quarantined: held, rejected } = await runValidationPipeline<SourcedResource>(needValidation, VALIDATORS);
+    const { valid, quarantined: held, rejected } = await timeStage(
+      'sourcing.validate',
+      () => runValidationPipeline<SourcedResource>(needValidation, VALIDATORS),
+      { label, iteration: iterations },
+    );
 
     for (const r of rejected) {
       console.log('[web-fallback] rejected', { url: r.row.url, validator: r.validator, reason: r.reason });
@@ -443,20 +451,25 @@ async function persistDiscovered(
   // discover → validate → decompose → upsert). Atomic stays atomic; a YouTube
   // playlist is exploded into atomic children here; other containers park as
   // pending/human_review until their router ships.
-  const decomposed = await Promise.all(
-    finalRows.map(async (row) => ({
-      row,
-      result: await decompose({
-        url: row.url,
-        title: row.title,
-        type: row.type,
-        topic,
-        difficulty: row.difficulty,
-        summary: row.summary,
-        conceptsTaught: row.rawConceptsTaught,
-        durationMin: row.durationMin,
-      }),
-    })),
+  const decomposed = await timeStage(
+    'sourcing.decompose',
+    () =>
+      Promise.all(
+        finalRows.map(async (row) => ({
+          row,
+          result: await decompose({
+            url: row.url,
+            title: row.title,
+            type: row.type,
+            topic,
+            difficulty: row.difficulty,
+            summary: row.summary,
+            conceptsTaught: row.rawConceptsTaught,
+            durationMin: row.durationMin,
+          }),
+        })),
+      ),
+    { label },
   );
 
   // The title each row is actually persisted with. Discovery's `title` is free text
@@ -487,75 +500,82 @@ async function persistDiscovered(
   // unpickable, so their own concepts don't drive selection or dedup — per
   // decision A, canonicalization for a container's children happens inside the
   // router (concepts.ts), not here.
-  const atomicRows = decomposed
-    .filter((d) => d.result.status === 'atomic')
-    .map((d) => d.row);
-  abortSignal?.throwIfAborted();
-  const vocab = await loadTopicVocab(topic);
-  const canonical = await canonicalizeTags(atomicRows, vocab, abortSignal);
+  const { proposalsByUrl, tagsByUrl, embeddings, pools, neighbourhoods } = await timeStage(
+    'sourcing.file',
+    async () => {
+      const atomicRows = decomposed
+        .filter((d) => d.result.status === 'atomic')
+        .map((d) => d.row);
+      abortSignal?.throwIfAborted();
+      const vocab = await loadTopicVocab(topic);
+      const canonical = await canonicalizeTags(atomicRows, vocab, abortSignal);
 
-  // File each survivor under its home topic rather than blindly stamping the request
-  // topic. Topic filing T2b: the vocabulary is now every canonical, not
-  // relatedTopics(topic) — and the caller-side skip that made this a no-op for topics
-  // with no edges (60% of the library) is gone with it. The classifier only PROPOSES;
-  // decideFiling tests each proposal against the resource's embedding neighbourhood
-  // below. Q4: decomposed children are no longer stamped with the parent's filing —
-  // upsertResource classifies each child on its own content through this same guardrail,
-  // with the parent's topic as the prior and the fallback.
-  // T3: the classifier may also name a subject the vocabulary LACKS (`newTopic`), which
-  // the topic gate turns into a canonical below. That is the only way a discovery can
-  // widen the vocabulary — pre-T3 a new canonical could only be born from a learner
-  // request, so a resource whose real subject we had no slug for was unfilable forever.
-  const vocabulary = await listCanonicals();
-  const proposalsByUrl = await classifyDiscoveryTopics(
-    finalRows.map((r) => ({
-      url: r.url,
-      title: titleByUrl.get(r.url) ?? r.title,
-      summary: r.summary,
-      conceptsTaught: r.rawConceptsTaught,
-    })),
-    vocabulary,
-    topic,
-  );
+      // File each survivor under its home topic rather than blindly stamping the request
+      // topic. Topic filing T2b: the vocabulary is now every canonical, not
+      // relatedTopics(topic) — and the caller-side skip that made this a no-op for topics
+      // with no edges (60% of the library) is gone with it. The classifier only PROPOSES;
+      // decideFiling tests each proposal against the resource's embedding neighbourhood
+      // below. Q4: decomposed children are no longer stamped with the parent's filing —
+      // upsertResource classifies each child on its own content through this same guardrail,
+      // with the parent's topic as the prior and the fallback.
+      // T3: the classifier may also name a subject the vocabulary LACKS (`newTopic`), which
+      // the topic gate turns into a canonical below. That is the only way a discovery can
+      // widen the vocabulary — pre-T3 a new canonical could only be born from a learner
+      // request, so a resource whose real subject we had no slug for was unfilable forever.
+      const vocabulary = await listCanonicals();
+      const proposalsByUrl = await classifyDiscoveryTopics(
+        finalRows.map((r) => ({
+          url: r.url,
+          title: titleByUrl.get(r.url) ?? r.title,
+          summary: r.summary,
+          conceptsTaught: r.rawConceptsTaught,
+        })),
+        vocabulary,
+        topic,
+      );
 
-  // The tags each row is actually persisted with: canonicalized for atomic survivors,
-  // raw for containers (canonicalizeTags only covers the atomic set). Hoisted out of the
-  // upsert loop because the embedding below must be built from the SAME text the row
-  // carries — embed the raw tags and the vector wouldn't match what a re-embed produces.
-  const tagsByUrl = new Map(
-    decomposed.map(({ row }) => [
-      row.url,
-      canonical.get(row.url) ?? {
-        prerequisiteConcepts: row.rawPrerequisiteConcepts,
-        conceptsTaught: row.rawConceptsTaught,
-      },
-    ]),
-  );
+      // The tags each row is actually persisted with: canonicalized for atomic survivors,
+      // raw for containers (canonicalizeTags only covers the atomic set). Hoisted out of the
+      // upsert loop because the embedding below must be built from the SAME text the row
+      // carries — embed the raw tags and the vector wouldn't match what a re-embed produces.
+      const tagsByUrl = new Map(
+        decomposed.map(({ row }) => [
+          row.url,
+          canonical.get(row.url) ?? {
+            prerequisiteConcepts: row.rawPrerequisiteConcepts,
+            conceptsTaught: row.rawConceptsTaught,
+          },
+        ]),
+      );
 
-  // Topic filing T2a: embed the batch BEFORE inserting anything, so the row is written
-  // already embedded and the T2b filing guardrail has its input at filing time — embeds
-  // used to run post-commit, which would leave every fresh find on the "no embedding
-  // yet" degradation path at the guardrail's primary application point. One batched
-  // call; best-effort, so a failure just returns nulls and the post-commit embed in
-  // upsertResource still covers the atomic rows.
-  abortSignal?.throwIfAborted();
-  const embeddings = await safeEmbedBatch(
-    decomposed.map(({ row }) => ({
-      title: titleByUrl.get(row.url)!,
-      summary: row.summary,
-      conceptsTaught: tagsByUrl.get(row.url)!.conceptsTaught,
-    })),
-  );
+      // Topic filing T2a: embed the batch BEFORE inserting anything, so the row is written
+      // already embedded and the T2b filing guardrail has its input at filing time — embeds
+      // used to run post-commit, which would leave every fresh find on the "no embedding
+      // yet" degradation path at the guardrail's primary application point. One batched
+      // call; best-effort, so a failure just returns nulls and the post-commit embed in
+      // upsertResource still covers the atomic rows.
+      abortSignal?.throwIfAborted();
+      const embeddings = await safeEmbedBatch(
+        decomposed.map(({ row }) => ({
+          title: titleByUrl.get(row.url)!,
+          summary: row.summary,
+          conceptsTaught: tagsByUrl.get(row.url)!.conceptsTaught,
+        })),
+      );
 
-  // Guardrail evidence, gathered for the WHOLE BATCH BEFORE the first insert. Doing this
-  // inside the upsert loop instead would make filing order-dependent: each inserted row
-  // joins the library and becomes a neighbour for the rows after it, so a batch could
-  // bootstrap its own evidence (measured 2026-07-25 on a cold `rust` run — the request
-  // topic's purity climbed 0.0 → 0.1 → 0.2 across three inserts of the same batch).
-  // A snapshot makes the batch's decisions independent of each other and of their order.
-  const pools = await topicPools();
-  const neighbourhoods = await Promise.all(
-    embeddings.map((vector) => (vector ? knnNeighbourTopics(vector) : Promise.resolve([]))),
+      // Guardrail evidence, gathered for the WHOLE BATCH BEFORE the first insert. Doing this
+      // inside the upsert loop instead would make filing order-dependent: each inserted row
+      // joins the library and becomes a neighbour for the rows after it, so a batch could
+      // bootstrap its own evidence (measured 2026-07-25 on a cold `rust` run — the request
+      // topic's purity climbed 0.0 → 0.1 → 0.2 across three inserts of the same batch).
+      // A snapshot makes the batch's decisions independent of each other and of their order.
+      const pools = await topicPools();
+      const neighbourhoods = await Promise.all(
+        embeddings.map((vector) => (vector ? knnNeighbourTopics(vector) : Promise.resolve([]))),
+      );
+      return { proposalsByUrl, tagsByUrl, embeddings, pools, neighbourhoods };
+    },
+    { label },
   );
 
   // One minter for the whole batch: several rows commonly propose the same missing
@@ -570,77 +590,83 @@ async function persistDiscovered(
   let mintedCount = 0;
   const insertedIds: string[] = [];
   const upsertedRows: SourcedForRow[] = [];
-  for (const [i, { row, result }] of decomposed.entries()) {
-    const tags = tagsByUrl.get(row.url)!;
-    // The guardrail: a proposal only becomes a membership if the resource's embedding
-    // actually sits among that topic's resources. No embedding (the batch embed failed)
-    // means no evidence — decideFiling degrades to the request topic on an empty
-    // neighbour list, which is the pre-T2b behaviour.
-    const vector = embeddings[i];
-    const proposal = proposalsByUrl.get(row.url);
-    const evidence = {
-      proposals: proposal?.topics ?? [],
-      requestTopic: topic,
-      neighbourTopics: neighbourhoods[i],
-      pools,
-    };
-    let filing = decideFiling(evidence);
-    // T3 minting: only when NO existing canonical cleared the guardrail. An accepted
-    // proposal is evidence about a topic we already have, and evidence beats a mint —
-    // otherwise a model that volunteers `newTopic` too eagerly could fragment a healthy
-    // shelf. The gate may still resolve the label onto an existing canonical (tier 1/2,
-    // or T1.5's snap), in which case this is a lookup, not a mint.
-    if ((filing.reason === 'rejected' || filing.reason === 'no-evidence') && proposal?.newTopic) {
-      const minted = await mintTopic(proposal.newTopic);
-      if (minted) {
-        filing = decideMintedFiling(evidence, minted);
-        mintedCount += 1;
+  await timeStage(
+    'sourcing.upsert',
+    async () => {
+      for (const [i, { row, result }] of decomposed.entries()) {
+        const tags = tagsByUrl.get(row.url)!;
+        // The guardrail: a proposal only becomes a membership if the resource's embedding
+        // actually sits among that topic's resources. No embedding (the batch embed failed)
+        // means no evidence — decideFiling degrades to the request topic on an empty
+        // neighbour list, which is the pre-T2b behaviour.
+        const vector = embeddings[i];
+        const proposal = proposalsByUrl.get(row.url);
+        const evidence = {
+          proposals: proposal?.topics ?? [],
+          requestTopic: topic,
+          neighbourTopics: neighbourhoods[i],
+          pools,
+        };
+        let filing = decideFiling(evidence);
+        // T3 minting: only when NO existing canonical cleared the guardrail. An accepted
+        // proposal is evidence about a topic we already have, and evidence beats a mint —
+        // otherwise a model that volunteers `newTopic` too eagerly could fragment a healthy
+        // shelf. The gate may still resolve the label onto an existing canonical (tier 1/2,
+        // or T1.5's snap), in which case this is a lookup, not a mint.
+        if ((filing.reason === 'rejected' || filing.reason === 'no-evidence') && proposal?.newTopic) {
+          const minted = await mintTopic(proposal.newTopic);
+          if (minted) {
+            filing = decideMintedFiling(evidence, minted);
+            mintedCount += 1;
+          }
+        }
+        const filedTopic = filing.primary.topic;
+        if (filedTopic !== topic) reclassifiedCount += 1;
+        if (filing.primary.contested) contestedCount += 1;
+        const { outcome, atomicIds, resourceId, decompositionStatus } = await upsertResource(
+          filedTopic,
+          {
+            url: row.url,
+            title: titleByUrl.get(row.url)!,
+            type: row.type,
+            difficulty: row.difficulty,
+            ...sourcedDuration(row),
+            summary: row.summary,
+            prerequisiteConcepts: tags.prerequisiteConcepts,
+            conceptsTaught: tags.conceptsTaught,
+            // Present only for YouTube-prong rows — drives channel source resolution +
+            // engagement trust in upsertResource.
+            youtube: row.youtube,
+          },
+          result,
+          vector,
+          filing,
+        );
+        console.log('[web-fallback] filed', {
+          url: row.url,
+          requestTopic: topic,
+          filedTopic,
+          reason: filing.reason,
+          relevance: Number(filing.primary.relevance.toFixed(2)),
+          contested: filing.primary.contested,
+          secondaries: filing.secondaries.map((s) => s.topic),
+        });
+        // T3: a dedup hit that cleared the collision guardrail is neither an insert nor a
+        // skip — nothing was written to "Resource", but the requested topic can now retrieve
+        // a row it previously could not reach at all.
+        if (outcome === 'inserted') insertedCount += 1;
+        else if (outcome === 'membership_added') membershipAddedCount += 1;
+        else skippedCount += 1;
+        // The whole point of quarantine: the row is written, filed and embedded like any
+        // other, but withheld from insertedIds — the set the caller judges, attaches and
+        // promotes to active. So it stays pending_review, shows up in the review queue,
+        // and is never placed on a learner's path until a human confirms it resolves.
+        if (!row.quarantined) insertedIds.push(...atomicIds);
+        upsertedRows.push({ resourceId, decompositionStatus, quarantined: row.quarantined });
       }
-    }
-    const filedTopic = filing.primary.topic;
-    if (filedTopic !== topic) reclassifiedCount += 1;
-    if (filing.primary.contested) contestedCount += 1;
-    const { outcome, atomicIds, resourceId, decompositionStatus } = await upsertResource(
-      filedTopic,
-      {
-        url: row.url,
-        title: titleByUrl.get(row.url)!,
-        type: row.type,
-        difficulty: row.difficulty,
-        ...sourcedDuration(row),
-        summary: row.summary,
-        prerequisiteConcepts: tags.prerequisiteConcepts,
-        conceptsTaught: tags.conceptsTaught,
-        // Present only for YouTube-prong rows — drives channel source resolution +
-        // engagement trust in upsertResource.
-        youtube: row.youtube,
-      },
-      result,
-      vector,
-      filing,
-    );
-    console.log('[web-fallback] filed', {
-      url: row.url,
-      requestTopic: topic,
-      filedTopic,
-      reason: filing.reason,
-      relevance: Number(filing.primary.relevance.toFixed(2)),
-      contested: filing.primary.contested,
-      secondaries: filing.secondaries.map((s) => s.topic),
-    });
-    // T3: a dedup hit that cleared the collision guardrail is neither an insert nor a
-    // skip — nothing was written to "Resource", but the requested topic can now retrieve
-    // a row it previously could not reach at all.
-    if (outcome === 'inserted') insertedCount += 1;
-    else if (outcome === 'membership_added') membershipAddedCount += 1;
-    else skippedCount += 1;
-    // The whole point of quarantine: the row is written, filed and embedded like any
-    // other, but withheld from insertedIds — the set the caller judges, attaches and
-    // promotes to active. So it stays pending_review, shows up in the review queue,
-    // and is never placed on a learner's path until a human confirms it resolves.
-    if (!row.quarantined) insertedIds.push(...atomicIds);
-    upsertedRows.push({ resourceId, decompositionStatus, quarantined: row.quarantined });
-  }
+    },
+    { label },
+  );
 
   // Library re-judge Block 1: record sourcing provenance for rows this run
   // demanded but can't attach — parked non-atomic, or held back by quarantine.

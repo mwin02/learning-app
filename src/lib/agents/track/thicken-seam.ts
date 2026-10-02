@@ -21,6 +21,7 @@ import { Difficulty } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { TRACK_MAX_THICKEN_CONCEPTS } from '@/lib/config';
 import { sourceAndAttachConcept } from '@/lib/agents/track/source-concept';
+import { timeStage } from '@/lib/log';
 
 export type ThickenRequest = {
   pathId: string;
@@ -91,19 +92,24 @@ export async function thickenSpine(req: ThickenRequest): Promise<ThickenResult> 
 
   let attached = 0;
   for (const c of concepts) {
-    attached += await sourceAndAttachConcept({
-      pathId,
-      topic: path.topic,
-      conceptId: c.id,
-      slug: c.slug,
-      title: c.title,
-      targetMastery,
-      isOnRamp: c.isOnRamp,
-      // requirePrimary stays false (R1): these concepts already HAVE a qualifying
-      // primary — they're too shallow, not uncovered — so flooring the web budget
-      // at 1 would buy a discovery call on every thicken pass for no coverage gain.
-      preferSubstantial: bySlug.get(c.slug)?.preferSubstantial ?? false,
-    });
+    attached += await timeStage(
+      'track.thicken.concept',
+      () =>
+        sourceAndAttachConcept({
+          pathId,
+          topic: path.topic,
+          conceptId: c.id,
+          slug: c.slug,
+          title: c.title,
+          targetMastery,
+          isOnRamp: c.isOnRamp,
+          // requirePrimary stays false (R1): these concepts already HAVE a qualifying
+          // primary — they're too shallow, not uncovered — so flooring the web budget
+          // at 1 would buy a discovery call on every thicken pass for no coverage gain.
+          preferSubstantial: bySlug.get(c.slug)?.preferSubstantial ?? false,
+        }),
+      { slug: c.slug },
+    );
   }
 
   return attached > 0
