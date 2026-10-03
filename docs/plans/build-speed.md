@@ -1,6 +1,6 @@
 # Faster course builds
 
-**Status:** active · **Blocks:** V1–V3 (stack 1); V4–V7 sketched, briefs pending stack 1's production data; no PRs yet · **Block IDs:** `V` · **Started:** 2026-10-03
+**Status:** active · **Blocks:** stack 1 (V1–V3) shipped 2026-10-03 (#390–#393), app and worker deployed at `1f02b6a`; V4–V7 sketched, briefs pending stack 1's production data · **Block IDs:** `V` · **Started:** 2026-10-03
 
 ## Diagnosis
 
