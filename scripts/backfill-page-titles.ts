@@ -56,7 +56,7 @@ const OFFENDERS = [
 ];
 
 const FETCH_UA =
-  'Mozilla/5.0 (compatible; LearningPathBot/1.0; +https://learning-app-sau6bxtxta-uw.a.run.app)';
+  'Mozilla/5.0 (compatible; LearningPathBot/1.0; +https://learning-app-74223797331.us-west1.run.app)';
 
 const apply = process.argv.includes('--apply');
 

@@ -84,7 +84,7 @@ const FETCH_CONCURRENCY = 6;
 // Same contact UA the pipeline crawls with (doctoc.ts) — a site owner reading their
 // logs should see one identity for this app, not one per script.
 const FETCH_UA =
-  'Mozilla/5.0 (compatible; LearningPathBot/1.0; +https://learning-app-sau6bxtxta-uw.a.run.app)';
+  'Mozilla/5.0 (compatible; LearningPathBot/1.0; +https://learning-app-74223797331.us-west1.run.app)';
 
 // `durationMin` is carried because `write()` needs to know whether declining would
 // destroy a number — see "never trade a number for a null" above.
