@@ -66,7 +66,7 @@ fi
 
   Set it to the service you mean to operate — there is no default, because a
   silent fallback to localhost is exactly the failure this script prevents:
-    OPERATOR_BASE_URL=https://learning-app-sau6bxtxta-uw.a.run.app   (production)
+    OPERATOR_BASE_URL=https://learning-app-74223797331.us-west1.run.app   (production)
     OPERATOR_BASE_URL=http://localhost:3000                          (local dev)"
 
 base="${base%/}"

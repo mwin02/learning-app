@@ -2,7 +2,7 @@
 
 **Describe a learning goal in one sentence. Get back a sequenced, multi-course program built out of vetted free material on the open web — then learn it, track progress, and rate what you're given.**
 
-🔗 **Live:** <https://learning-app-sau6bxtxta-uw.a.run.app> · Google sign-in, free, no card
+🔗 **Live:** <https://learning-app-74223797331.us-west1.run.app> · Google sign-in, free, no card
 
 <p align="center">
   <img src="docs/images/landing.png" alt="Coursehub landing page — a notebook-styled goal input reading &quot;What do you want to learn?&quot;" width="900">

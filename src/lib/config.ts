@@ -788,7 +788,7 @@ export const CLIENT_ERROR_REFILL_MS = 3_000;
 // custom domain lands (app-deploy.md §6) it falls back to the Cloud Run service;
 // the cutover is then setting APP_ORIGIN, not a code change. An unparseable
 // APP_ORIGIN also falls back, so the header never carries a malformed URL.
-export const CLOUD_RUN_ORIGIN = 'https://learning-app-sau6bxtxta-uw.a.run.app';
+export const CLOUD_RUN_ORIGIN = 'https://learning-app-74223797331.us-west1.run.app';
 
 export function resolveCrawlerContactOrigin(appOrigin: string | undefined): string {
   return resolvePublicOrigin({

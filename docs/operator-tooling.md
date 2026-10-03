@@ -41,7 +41,7 @@ Put it in `.env.local` alongside the other two vars, and **nowhere else that a
 shell will read it back**:
 
 ```
-OPERATOR_BASE_URL=https://learning-app-sau6bxtxta-uw.a.run.app
+OPERATOR_BASE_URL=https://learning-app-74223797331.us-west1.run.app
 OPERATOR_ADMIN_TOKEN=<the value>
 OPERATOR_ADMIN_USER_ID=<the User.id from step 1>
 ```
@@ -157,7 +157,7 @@ direct-DB helpers, `DATABASE_URL`.
 transcript rather than in whatever you remember about how a server was started:
 
 ```
-[operator-curl] POST https://learning-app-sau6bxtxta-uw.a.run.app/api/playground/pending-resources  ⚠ REMOTE
+[operator-curl] POST https://learning-app-74223797331.us-west1.run.app/api/playground/pending-resources  ⚠ REMOTE
 ```
 
 The direct-DB helpers print theirs in the shared `describeDatabaseUrl` format

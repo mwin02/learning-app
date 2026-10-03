@@ -57,9 +57,9 @@ describe('crawler User-Agent contact origin', () => {
   });
 
   it('names the Cloud Run service when APP_ORIGIN is unset', () => {
-    expect(CLOUD_RUN_ORIGIN).toBe('https://learning-app-sau6bxtxta-uw.a.run.app');
+    expect(CLOUD_RUN_ORIGIN).toBe('https://learning-app-74223797331.us-west1.run.app');
     expect(ua(undefined)).toBe(
-      'Mozilla/5.0 (compatible; LearningPathBot/1.0; +https://learning-app-sau6bxtxta-uw.a.run.app)',
+      'Mozilla/5.0 (compatible; LearningPathBot/1.0; +https://learning-app-74223797331.us-west1.run.app)',
     );
     expect(ua('')).toContain(CLOUD_RUN_ORIGIN);
   });
