@@ -2,6 +2,7 @@ import type { GoogleLanguageModelOptions } from '@ai-sdk/google';
 import type { LanguageModel } from 'ai';
 import { vertex, chatModel } from '@/lib/ai/vertex';
 import { withCallTiming } from '@/lib/ai/call-middleware';
+import { agentOverride, type AgentOverride } from '@/lib/ai/compare-scope';
 
 // Per-agent model configuration. Sampling params (temperature, thinkingLevel,
 // maxOutputTokens) are per-agent decisions, not deployment knobs. Only
@@ -366,8 +367,26 @@ export function resolveModel(
   };
 }
 
+// `null` clears an optional field back to the model default; omitted keeps the registry's.
+export function applyOverride(cfg: ModelConfig, override: AgentOverride): ModelConfig {
+  const pick = <T>(value: T | null | undefined, fallback: T | undefined): T | undefined =>
+    value === null ? undefined : (value ?? fallback);
+  return {
+    ...cfg,
+    modelId: override.modelId ?? cfg.modelId,
+    thinkingLevel: pick(override.thinkingLevel, cfg.thinkingLevel),
+    maxOutputTokens: override.maxOutputTokens ?? cfg.maxOutputTokens,
+    callTimeoutMs: pick(override.callTimeoutMs, cfg.callTimeoutMs),
+  };
+}
+
+// Inside a comparison scope the agent's override is applied to its registry entry,
+// and its `modelId`, when set, beats `MODEL_<AGENT>` too.
 export function getModel(name: AgentName): ResolvedModel {
-  return resolveModel(REGISTRY[name], process.env[`MODEL_${name.toUpperCase()}`], name);
+  const envOverride = process.env[`MODEL_${name.toUpperCase()}`];
+  const override = agentOverride(name);
+  if (override === undefined) return resolveModel(REGISTRY[name], envOverride, name);
+  return resolveModel(applyOverride(REGISTRY[name], override), override.modelId ?? envOverride, name);
 }
 
 // Embedding models are kept separate from the chat `REGISTRY` above: they have
