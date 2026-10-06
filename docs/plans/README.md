@@ -16,6 +16,7 @@ work — write a new plan instead.
 | --- | --- | --- |
 | [build-speed.md](build-speed.md) | active, not started | V1–V3 (stack 1, briefed); V4–V7 sketched, briefs pending stack 1's production data |
 | [library-quality.md](library-quality.md) | active, not started | Q1–Q8 |
+| [pro-to-flash.md](pro-to-flash.md) | active, not started | M1–M8 (M4/M6/M8 gated on their comparison runs) |
 | [tutor-agent.md](tutor-agent.md) | active, not started | T1–T4 |
 
 ## Archive
@@ -43,13 +44,14 @@ are in shipped PR titles and in source comments:
 | `F` | resource-reports (review-fix chain) | |
 | `G` | gemini-3-migration | |
 | `K` | cold-build-deadline | |
+| `M` | pro-to-flash | |
 | `Q` | library-quality | |
 | `R` | resource-reports, rung0-starvation | collision, pre-registry |
 | `S` | resource-serveability | its post-review follow-ups are `C1`–`C2`, colliding with free-beta's `C` |
 | `T` | topic-filing, tutor-agent | collision, pre-registry |
 | `V` | build-speed | |
 
-New plans pick an unclaimed letter. `H`–`P`, `U`, `W`–`Z` are free.
+New plans pick an unclaimed letter. `H`–`J`, `L`, `N`–`P`, `U`, `W`–`Z` are free.
 
 **A prefix that isn't a block prefix doesn't belong here.** `library-quality.md` uses `P1`–`P7`
 and `B1`–`B6` for defects and backfill tasks — analysis, not blocks — and its blocks are
