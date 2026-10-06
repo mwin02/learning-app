@@ -32,6 +32,7 @@ export const AGENT_NAMES = [
   'programDecomposer',
   'intake',
   'health',
+  'compareGrader',
 ] as const;
 
 export type AgentName = (typeof AGENT_NAMES)[number];
@@ -334,6 +335,15 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // a one-word reply spent at most 96 thinking tokens on any callable 3.x id,
     // so 512 also covers a MODEL_HEALTH override to another 3.x model.
     maxOutputTokens: 512,
+  },
+  compareGrader: {
+    // Comparison-only: the blind grader of scripts/compare-bank-models.ts
+    // (`pro-to-flash.md`, M5), which checks each authored bank's answer keys and
+    // scope. It has no production call site. Pro at the default, so the grader is
+    // at least as strong as the baseline it grades. 16k output: one short verdict
+    // per question; the rest is thinking headroom.
+    modelId: PRO_MODEL_ID,
+    maxOutputTokens: 16384,
   },
 };
 
