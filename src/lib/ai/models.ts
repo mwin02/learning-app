@@ -61,8 +61,8 @@ export type GoogleThinkingProviderOptions = {
 
 // The only callable Pro-tier id: the GA ids `gemini-3-pro` and `gemini-3.1-pro`
 // both 404 against this project (re-probed 2026-09-27). Retarget when one lands.
-const PRO_MODEL_ID = 'gemini-3.1-pro-preview';
-const FLASH_MODEL_ID = 'gemini-3.7-flash';
+export const PRO_MODEL_ID = 'gemini-3.1-pro-preview';
+export const FLASH_MODEL_ID = 'gemini-3.7-flash';
 
 // The background Flash agents normally answer in seconds, but single calls have
 // stalled silently for 2–3.75 min and held up a whole serial build behind them
