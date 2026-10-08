@@ -6,9 +6,11 @@ import {
   CallTimeoutError,
   callOutcome,
   isCallTimeoutError,
+  webSearchQueryCount,
   withCallTiming,
 } from '@/lib/ai/call-middleware';
 import { runWithTrace, traceUsageSnapshot } from '@/lib/log';
+import { runWithCompareScope, type CompareCallRecord } from '@/lib/ai/compare-scope';
 
 const okResult: LanguageModelV3GenerateResult = {
   content: [{ type: 'text', text: 'hello' }],
@@ -282,5 +284,141 @@ describe('callOutcome', () => {
   it('is error otherwise', () => {
     expect(callOutcome(new Error('x'), new AbortController().signal)).toBe('error');
     expect(callOutcome('string thrown', undefined)).toBe('error');
+  });
+});
+
+describe('withCallTiming — compare scope sink', () => {
+  function collect() {
+    const records: CompareCallRecord[] = [];
+    return { records, sink: (record: CompareCallRecord) => records.push(record) };
+  }
+
+  it('reports one record per ok attempt with tokens and no queries when metadata is absent', async () => {
+    spies();
+    const { records, sink } = collect();
+    const model = withCallTiming(
+      new MockLanguageModelV3({ modelId: 'gemini-mock', doGenerate: async () => okResult }),
+      'mapCandidateJudge',
+    );
+    await runWithCompareScope({ sink }, () => generateText({ model, prompt: 'hi' }));
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      agent: 'mapCandidateJudge',
+      modelId: 'gemini-mock',
+      outcome: 'ok',
+      inputTokens: 12,
+      outputTokens: 7,
+      reasoningTokens: 4,
+      webSearchQueries: 0,
+    });
+    expect(records[0].durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it.each(['vertex', 'google'])('counts webSearchQueries under the %s key', async (key) => {
+    spies();
+    const { records, sink } = collect();
+    const model = withCallTiming(
+      new MockLanguageModelV3({
+        doGenerate: async () => ({
+          ...okResult,
+          providerMetadata: {
+            [key]: { groundingMetadata: { webSearchQueries: ['a', 'b', 'c'] } },
+          },
+        }),
+      }),
+      'curriculumFallback',
+    );
+    await runWithCompareScope({ sink }, () => generateText({ model, prompt: 'hi' }));
+    expect(records.map((r) => r.webSearchQueries)).toEqual([3]);
+  });
+
+  it('counts 0 when groundingMetadata has no queries', async () => {
+    spies();
+    const { records, sink } = collect();
+    const model = withCallTiming(
+      new MockLanguageModelV3({
+        doGenerate: async () => ({
+          ...okResult,
+          providerMetadata: { vertex: { groundingMetadata: { webSearchQueries: null } } },
+        }),
+      }),
+      'curriculumFallback',
+    );
+    await runWithCompareScope({ sink }, () => generateText({ model, prompt: 'hi' }));
+    expect(records.map((r) => r.webSearchQueries)).toEqual([0]);
+  });
+
+  it('reports a failed attempt without tokens', async () => {
+    spies();
+    const { records, sink } = collect();
+    const model = withCallTiming(
+      new MockLanguageModelV3({
+        doGenerate: async () => {
+          throw new Error('quota exhausted');
+        },
+      }),
+      'mapCandidateJudge',
+    );
+    await expect(
+      runWithCompareScope({ sink }, () => generateText({ model, prompt: 'hi', maxRetries: 0 })),
+    ).rejects.toThrow('quota exhausted');
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ outcome: 'error', webSearchQueries: 0 });
+    expect(records[0]).not.toHaveProperty('inputTokens');
+  });
+
+  it('reports both attempts of a timed-out-then-retried call', async () => {
+    spies();
+    const { records, sink } = collect();
+    let calls = 0;
+    const model = withCallTiming(
+      new MockLanguageModelV3({
+        doGenerate: async ({ abortSignal }) => {
+          calls += 1;
+          if (calls === 1) {
+            return new Promise<never>((_, reject) => {
+              abortSignal?.addEventListener('abort', () => reject(new Error('request cancelled')));
+            });
+          }
+          return okResult;
+        },
+      }),
+      'conceptDeriver',
+      { timeoutMs: 20 },
+    );
+    await runWithCompareScope({ sink }, () => generateText({ model, prompt: 'hi' }));
+    expect(records.map((r) => r.outcome)).toEqual(['timeout', 'ok']);
+  });
+
+  it('runs and logs normally in a scope without a sink', async () => {
+    const { info } = spies();
+    const model = withCallTiming(
+      new MockLanguageModelV3({ doGenerate: async () => okResult }),
+      'mapCandidateJudge',
+    );
+    const result = await runWithCompareScope({}, () => generateText({ model, prompt: 'hi' }));
+    expect(result.text).toBe('hello');
+    expect(aiCallLines(info)).toHaveLength(1);
+  });
+
+  it('keeps the ai.call line identical with a sink present', async () => {
+    const { info } = spies();
+    const model = withCallTiming(
+      new MockLanguageModelV3({ modelId: 'gemini-mock', doGenerate: async () => okResult }),
+      'mapCandidateJudge',
+    );
+    await runWithCompareScope({ sink: () => {} }, () => generateText({ model, prompt: 'hi' }));
+    const [line] = aiCallLines(info);
+    expect(Object.keys(line)).not.toContain('webSearchQueries');
+    expect(line).toMatchObject({ outcome: 'ok', inputTokens: 12, finishReason: 'stop' });
+  });
+});
+
+describe('webSearchQueryCount', () => {
+  it('is 0 for missing or malformed metadata', () => {
+    expect(webSearchQueryCount(undefined)).toBe(0);
+    expect(webSearchQueryCount({ vertex: { groundingMetadata: 'nope' } })).toBe(0);
+    expect(webSearchQueryCount({ other: { groundingMetadata: { webSearchQueries: ['a'] } } })).toBe(0);
   });
 });

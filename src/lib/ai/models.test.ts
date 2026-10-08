@@ -29,8 +29,10 @@ import {
   AGENT_NAMES,
   getModel,
   resolveModel,
+  type AgentName,
   type ModelConfig,
 } from '@/lib/ai/models';
+import { runWithCompareScope, type CompareScope } from '@/lib/ai/compare-scope';
 
 const base: ModelConfig = {
   modelId: 'gemini-test',
@@ -211,5 +213,92 @@ describe('getModel — call timing', () => {
   it('reports the MODEL_<AGENT> override id', async () => {
     vi.stubEnv('MODEL_CONCEPTDERIVER', 'gemini-override');
     expect((await aiCallLine()).modelId).toBe('gemini-override');
+  });
+});
+
+describe('getModel — compare scope override', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const flashLow: CompareScope['overrides'] = {
+    conceptBankAuthor: { modelId: 'gemini-3.7-flash', thinkingLevel: 'low' },
+  };
+
+  it('applies the override inside the scope and ignores it outside', async () => {
+    await runWithCompareScope({ overrides: flashLow }, async () => {
+      const resolved = getModel('conceptBankAuthor');
+      expect(resolved.modelId).toBe('gemini-3.7-flash');
+      expect(resolved.providerOptions?.google.thinkingConfig.thinkingLevel).toBe('low');
+      expect(resolved.maxOutputTokens).toBe(32768);
+    });
+    const outside = getModel('conceptBankAuthor');
+    expect(outside.modelId).toBe('gemini-3.1-pro-preview');
+    expect(outside.providerOptions).toBeUndefined();
+  });
+
+  it('beats MODEL_<AGENT> inside the scope; the env still beats the registry outside', async () => {
+    vi.stubEnv('MODEL_CONCEPTBANKAUTHOR', 'gemini-env');
+    await runWithCompareScope({ overrides: flashLow }, async () => {
+      expect(getModel('conceptBankAuthor').modelId).toBe('gemini-3.7-flash');
+    });
+    expect(getModel('conceptBankAuthor').modelId).toBe('gemini-env');
+  });
+
+  it('keeps MODEL_<AGENT> when the override sets no modelId', async () => {
+    vi.stubEnv('MODEL_CONCEPTBANKAUTHOR', 'gemini-env');
+    await runWithCompareScope(
+      { overrides: { conceptBankAuthor: { thinkingLevel: 'low' } } },
+      async () => {
+        expect(getModel('conceptBankAuthor').modelId).toBe('gemini-env');
+      },
+    );
+  });
+
+  it('leaves every other agent unchanged', async () => {
+    const config = (name: AgentName) => {
+      const { modelId, temperature, maxOutputTokens, callTimeoutMs, providerOptions } =
+        getModel(name);
+      return { modelId, temperature, maxOutputTokens, callTimeoutMs, providerOptions };
+    };
+    const others = AGENT_NAMES.filter((name) => name !== 'conceptBankAuthor');
+    const outside = others.map(config);
+    await runWithCompareScope({ overrides: flashLow }, async () => {
+      expect(others.map(config)).toEqual(outside);
+    });
+  });
+
+  it('gives each of two concurrent scopes only its own override', async () => {
+    const ids = await Promise.all(
+      ['gemini-a', 'gemini-b'].map((modelId) =>
+        runWithCompareScope({ overrides: { conceptBankAuthor: { modelId } } }, async () => {
+          await new Promise((resolve) => setTimeout(resolve, 1));
+          return getModel('conceptBankAuthor').modelId;
+        }),
+      ),
+    );
+    expect(ids).toEqual(['gemini-a', 'gemini-b']);
+  });
+
+  it('clears thinkingLevel and callTimeoutMs to the model default on null', async () => {
+    await runWithCompareScope(
+      { overrides: { tagCanonicalizer: { thinkingLevel: null, callTimeoutMs: null } } },
+      async () => {
+        const resolved = getModel('tagCanonicalizer');
+        expect(resolved.providerOptions).toBeUndefined();
+        expect(resolved.callTimeoutMs).toBeUndefined();
+      },
+    );
+  });
+
+  it('sets maxOutputTokens and callTimeoutMs', async () => {
+    await runWithCompareScope(
+      { overrides: { trackComposer: { maxOutputTokens: 4096, callTimeoutMs: 30_000 } } },
+      async () => {
+        const resolved = getModel('trackComposer');
+        expect(resolved.maxOutputTokens).toBe(4096);
+        expect(resolved.callTimeoutMs).toBe(30_000);
+      },
+    );
   });
 });

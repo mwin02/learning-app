@@ -1,5 +1,7 @@
 import { RetryError, wrapLanguageModel, type LanguageModelMiddleware } from 'ai';
+import { z } from 'zod';
 import { log, logWarn, recordTiming } from '@/lib/log';
+import { compareSink } from '@/lib/ai/compare-scope';
 
 // `ai` does not re-export the provider spec's LanguageModelV3 by name.
 export type WrappableModel = Parameters<typeof wrapLanguageModel>[0]['model'];
@@ -53,6 +55,25 @@ export function callOutcome(
   return 'error';
 }
 
+const groundingMetadataSchema = z.object({
+  groundingMetadata: z
+    .object({ webSearchQueries: z.array(z.string()).nullish() })
+    .nullish(),
+});
+
+// The Vertex provider reports grounding under `vertex`, the Google provider
+// under `google`; anything unparseable counts as no queries.
+export function webSearchQueryCount(
+  providerMetadata: GenerateResult['providerMetadata'],
+): number {
+  for (const key of ['vertex', 'google']) {
+    const parsed = groundingMetadataSchema.safeParse(providerMetadata?.[key]);
+    const queries = parsed.success ? parsed.data.groundingMetadata?.webSearchQueries : undefined;
+    if (queries) return queries.length;
+  }
+  return 0;
+}
+
 export type CallTimingOptions = {
   // Per-attempt bound. Omitted → attempts run unbounded, under the caller's signal only.
   timeoutMs?: number;
@@ -81,31 +102,46 @@ export function callTimingMiddleware(
         timeoutSignal: AbortSignal | undefined,
       ): Promise<GenerateResult> => {
         const start = performance.now();
+        // Read per attempt, not at wrap time: the scope belongs to the caller.
+        const sink = compareSink();
+        let result: GenerateResult;
         try {
-          const result = await run();
-          const durationMs = Math.round(performance.now() - start);
-          recordTiming(`ai.${agent}`, durationMs);
-          log('ai.call', {
-            ...base,
-            durationMs,
-            outcome: 'ok',
-            inputTokens: result.usage.inputTokens.total,
-            outputTokens: result.usage.outputTokens.total,
-            reasoningTokens: result.usage.outputTokens.reasoning,
-            finishReason: result.finishReason.unified,
-          });
-          return result;
+          result = await run();
         } catch (err) {
           const durationMs = Math.round(performance.now() - start);
           recordTiming(`ai.${agent}`, durationMs);
+          const outcome = callOutcome(err, callerSignal, timeoutSignal);
           logWarn('ai.call', {
             ...base,
             durationMs,
-            outcome: callOutcome(err, callerSignal, timeoutSignal),
+            outcome,
             error: err instanceof Error ? err.message : String(err),
           });
+          sink?.({ ...base, durationMs, outcome, webSearchQueries: 0 });
           throw err;
         }
+        const durationMs = Math.round(performance.now() - start);
+        recordTiming(`ai.${agent}`, durationMs);
+        const tokens = {
+          inputTokens: result.usage.inputTokens.total,
+          outputTokens: result.usage.outputTokens.total,
+          reasoningTokens: result.usage.outputTokens.reasoning,
+        };
+        log('ai.call', {
+          ...base,
+          durationMs,
+          outcome: 'ok',
+          ...tokens,
+          finishReason: result.finishReason.unified,
+        });
+        sink?.({
+          ...base,
+          durationMs,
+          outcome: 'ok',
+          ...tokens,
+          webSearchQueries: webSearchQueryCount(result.providerMetadata),
+        });
+        return result;
       };
 
       const { timeoutMs } = options;
