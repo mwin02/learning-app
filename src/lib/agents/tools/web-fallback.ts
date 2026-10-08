@@ -779,7 +779,8 @@ export async function discoverForConceptScoped(
 // The allowlist = curated Source domains (docs/courseware/textbook/educator), minus
 // YouTube (the Data API prong owns video) and the blanket community buckets. Read
 // from the DB so an operator adding a Source widens the allowlist with no code change.
-async function loadAllowlistDomains(): Promise<string[]> {
+// Exported for scripts/compare-discovery-models.ts, which replays rung 1 read-only.
+export async function loadAllowlistDomains(): Promise<string[]> {
   const sources = await prisma.source.findMany({
     where: { kind: { in: ['official_docs', 'course_platform', 'textbook', 'educator'] } },
     select: { url: true },
