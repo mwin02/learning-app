@@ -216,11 +216,15 @@ const REGISTRY: Record<AgentName, ModelConfig> = {
     // volume: the author sees only the concept title + its resource titles (not the
     // resource content), so it must reason carefully about what those resources
     // plausibly cover and NOT over-reach into deep specifics they don't establish.
-    // Flash over-reached at 8 questions; Pro authors a tighter, better-calibrated
-    // set of 5. Off-the-hot-path (best-effort, once per concept), so the Pro cost is
-    // fine. 32k output (matches the other Pro authors): the question array is
-    // small; the rest is thinking headroom.
+    // Pro at `low` thinking, measured against Pro at the default over 15 production
+    // concepts (`pro-to-flash.md`, Results, M5): blind-graded key errors 0% for both
+    // (0/37 kept vs 0/36), p50 14.9 s vs 30.3 s, $0.023 vs $0.051 per bank, no 429s,
+    // and the human read found 0 wrong keys. Both Flash arms were faster and cheaper
+    // but made real arithmetic slips in answer keys (1.3%). No `callTimeoutMs`: one
+    // `low` attempt took 113 s. 32k output (matches the other Pro authors): the
+    // question array is small; the rest is thinking headroom.
     modelId: PRO_MODEL_ID,
+    thinkingLevel: 'low',
     maxOutputTokens: 32768,
   },
   tagCanonicalizer: {

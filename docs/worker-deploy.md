@@ -356,6 +356,23 @@ an endpoint the worker's ADC identity has never called (every `gemini-3*` id goe
 `global`) — so the proof is §11 step 1: a real request, enqueued from the deployed app,
 that the worker fulfils with its own `claimedBy`.
 
+**Rolling back a bank-author retarget.** `conceptBankAuthor` writes question banks that are
+kept forever, so reverting its registry entry stops new bad banks but leaves the ones already
+written. `pro-to-flash.md` moved it from Pro at the default to Pro at `low` thinking. That is
+a smaller quality risk than a model swap, but the procedure is the same if banks regress:
+
+1. Redeploy the previous worker image (§9, with the old tag).
+2. Delete the `ConceptQuestion` rows with `origin = agent` and `createdAt` ≥ the time the §9
+   deploy of the retarget ran, on concepts with `bankReviewed = false`. `ConceptQuestion`
+   has no model provenance, so the `createdAt` window is the only way to pick them out.
+3. Nothing else: the bank backfill regenerates any non-on-ramp concept with no questions on
+   its Path's next build. `markBankStale` is not a substitute; it only flags reviewed banks
+   and regenerates nothing.
+
+Reviewed banks (`bankReviewed = true`) are left for the operator to re-curate by hand. The
+delete in step 2 is a production write: it needs the user's explicit go-ahead at the time,
+not a standing approval from the retarget's PR.
+
 ## 10. Operations
 
 | Task | Command |

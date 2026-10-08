@@ -1,6 +1,6 @@
 # Pro-tier agents to Flash, where quality holds
 
-**Status:** active · **Blocks:** M1–M8; no PRs yet · **Block IDs:** `M` · **Started:** 2026-10-07
+**Status:** active · **Blocks:** M1–M3, M5, M7 shipped (#397–#401); M6 this PR; M4 and M8 not implemented (no passing arm) · **Block IDs:** `M` · **Started:** 2026-10-07
 
 ## Diagnosis
 
@@ -284,6 +284,90 @@ order M3 → M5 → M7, so the ledger's reserve covers any re-pilot.
 - **Rung 2 (open-web) discovery in the comparison.** Rung 1 is the common path and has the
   same model call. Rung 2 only runs when rung 1 came up short.
 - **Re-authoring existing Pro banks on Flash.** Existing banks are untouched.
+
+## Results (runs 2026-10-06 → 2026-10-07, production, read-only)
+
+Total comparison spend **$7.33 of $15** (ledger: discovery $3.40, banks $2.15, composer
+$1.78). Raw rows are in `docs/audits/pro-to-flash/` (local only). Dollar figures are per call
+and, for Flash arms, at the intro / 2027 price. Bars are as written in **Pass bars**; none was
+moved after a run.
+
+### M5 — `conceptBankAuthor`: **moves to Pro at `low` thinking** (M6)
+
+Run `492a4991-2b0f-4fa7-9e9c-79d201e97e44`, 2026-10-07, 15 concepts, concurrency 4.
+Verdict for `pro-low`: **PASS** on every automated bar, and the user's blind read (recorded
+2026-10-07) passed.
+
+| Arm | Key errors | Out of scope | Kept / authored | p50 | Max | 429s (confirmed / failed attempts) | $ / bank | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| baseline (Pro, default) | 0.0% (0/36) | 0.0% | 36/75 | 30.3 s | 49.9 s | 0 / 2 | $0.0515 | — |
+| `flash-low` | 1.3% (1/75) | 0.0% | 75/75 | 10.4 s | 69.4 s | 0 / 0 | $0.0049 / $0.0098 | FAIL (key errors) |
+| `flash-default` | 1.3% (1/75) | 0.0% | 75/75 | 17.3 s | 38.0 s | 0 / 0 | $0.0089 / $0.0178 | FAIL (key errors) |
+| `pro-low` | 0.0% (0/37) | 0.0% | 37/75 | 14.9 s | 112.9 s | 0 / 0 | $0.0228 | **PASS** |
+
+- Both Flash key errors were real arithmetic slips in Linear Algebra › Determinants (e.g.
+  "26 + 15 = 31"), not grader noise. That is the failure the bar exists to catch.
+- Blind read: 60 questions (30 baseline, 30 `pro-low`), 0 wrong keys. One `pro-low` key
+  (`useState`'s initial value "evaluated" vs "used") was flagged as imprecise, not wrong.
+- Pro at either thinking level drops about half its authored questions at the MCQ format
+  check (kept 48–49%); Flash keeps all of them. Not a bar failure (the bar is relative), but
+  it is why a Pro bank holds ~2–3 questions, not 5.
+- Grader 429s occurred on the Pro quota during the run (the grader is Pro). No author arm
+  recorded a confirmed 429, so this run does not settle whether Flash and Pro share a quota
+  pool.
+- `pro-low`'s max attempt was 112.9 s > 30 s, so it gets **no** `callTimeoutMs`.
+- Rollback: `worker-deploy.md`, "A model retarget reaches the worker only through §9".
+
+### M3 — `curriculumFallback`: **stays on Pro** (M4 not implemented)
+
+2026-10-06 → 07, 10 inputs; baseline is the mean of 2 runs. Verdict for `flash-low`:
+**INCONCLUSIVE** on yield (baseline median attested is 0, so the yield bars can't fail) and
+**FAIL** on latency, which alone keeps it off. `flash-default` and `pro-low` never ran (`pro-low`
+is not on this agent's ladder).
+
+| Metric | baseline (mean of 2) | `flash-low` | Bar |
+| --- | --- | --- | --- |
+| Median attested (post-describe) | 0 | 2 | ≥ 80% of baseline |
+| Median survivors | 0 | 2 | ≥ 80% of baseline |
+| Σ `teaches` | 2.5 | 15 | ≥ 90% of baseline |
+| Zero-`teaches` concepts | 7.5 | 2 | ≤ baseline + 1 |
+| Pre-describe attested (Σ) | 12 and 8 | 49 | — |
+| p50 discovery call | 22.8 s | 138.6 s (successful); 145.2 s incl. the failed attempt | ≤ 13.7 s — **FAIL by ~10×** |
+| Max discovery call | 42.4 s | 247 s ok / 301 s failed | — |
+| Grounding queries (Σ) | 42.5 | 73 | — |
+| $ / call | $0.083 | $0.116 / $0.118 | — |
+| Errors | 0.5 | 2 (both describer double-timeouts) | — |
+
+- **"Attested" in this driver is post-describe**: the rows `discoverForConceptScoped` returns,
+  which have already been through `describeCandidates` (`discoveryDescriber`, Flash). The
+  describer drops most attested URLs: baseline's 12 and 8 pre-describe candidates became 3 and
+  2. That drop-off, not the Pro discovery call, is what makes baseline's yield so thin, and it
+  is worth its own look before anyone re-runs this comparison.
+- Flash at `low` is slower *and* dearer here: it issues more grounding queries, and grounding
+  is costed at $14 / 1,000. It also yields far more, but the latency bar exists to make the
+  critical path shorter, and a 10× slower call does the opposite.
+
+### M7 — `trackComposer`: **stays on Pro** (M8 not implemented; accepted by the user)
+
+Run `1728b20f-7b0e-4332-b2ce-0b502218830a`, 2026-10-07, 8 compositions (2 Paths × 4
+scenarios). No arm passed. Heavy Pro 429s: baseline run 1 lost 2 of 8 compositions and run
+2 lost 6 of 8, so the yardstick (Jaccard 0.952, bar 0.852) rests on the 2 compositions
+both baseline runs completed.
+
+| Arm | Jaccard vs run 1 (bar ≥ 0.852) | Thicken agreement (bar ≥ 80%) | Skipped thickens | Fallback warnings | Intent agreement | p50 (bar ≤ 33.5 s) | $ / composition | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| baseline run 1 | — | — | — | 0 | — | 53.3 s | $0.086 | — |
+| `flash-low` | 0.787 FAIL | 67% FAIL | 0 | 0 | 100% | 15.4 s | $0.016 / $0.033 | FAIL |
+| `flash-default` | 0.826 FAIL | 67% FAIL | 0 | 0 | 100% | 43.4 s FAIL | $0.025 / $0.051 | FAIL |
+| `pro-low` | 0.746 FAIL | 50% FAIL | 0 | 0 | 83% | 51.3 s FAIL | $0.046 | FAIL |
+
+- Directional: where baseline run 1 thickened (3 of the 6 it completed), `flash-low`
+  thickened in only 1. That is the under-thickening risk this plan flagged. The
+  skipped-thicken bar couldn't fire, because baseline run 2 had failed on those compositions.
+- `pro-low` also lost 2 of 8 compositions to errors; its $/composition is over all 8
+  attempted ($0.061 over the 6 it completed).
+- With the yardstick on 2 compositions, a re-run after the Pro quota is raised (or off-peak)
+  is the only way to get a firmer answer. Not part of this plan.
 
 ## Open questions for you
 
