@@ -40,8 +40,10 @@ type Input = { topic: string; slug: string; conceptTitle: string; isOnRamp: bool
 // Fixed before any run (the plan's rule: inputs can't be picked to fit a result).
 // Order matters: the first PILOT_INPUTS are the pilot, and a shrunk run keeps a prefix.
 const INPUTS: readonly Input[] = [
-  // The four thicken concepts of production request cmuro8iil000301s6fy7bj5fq
-  // (operating-systems, 2026-10-03; `track.thicken.concept` lines in Cloud Logging).
+  // Positions 1, 3, 5 and 7 (I/O Systems, Mass-Storage Management, Protection,
+  // Introduction to Operating Systems) are the four thicken concepts of production
+  // request cmuro8iil000301s6fy7bj5fq (operating-systems, 2026-10-03;
+  // `track.thicken.concept` lines in Cloud Logging).
   { topic: 'operating-systems', slug: 'io-systems', conceptTitle: 'I/O Systems', isOnRamp: false },
   { topic: 'python-data-ml', slug: 'data-manipulation-pandas', conceptTitle: 'Data Manipulation and Analysis with Pandas', isOnRamp: false },
   { topic: 'operating-systems', slug: 'mass-storage-management', conceptTitle: 'Mass-Storage Management', isOnRamp: false },

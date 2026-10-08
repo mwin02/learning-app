@@ -59,7 +59,8 @@ function perCall(records: readonly CompareCallRecord[]): UsdPerCall {
 
 export function summarizeRun(results: readonly DiscoveryInputResult[]): DiscoveryRunMetrics {
   const calls = results.flatMap((r) => r.discoveryCalls);
-  const latency = latencySummary(calls.map((c) => c.durationMs));
+  // Failed attempts, a 429 among them, return in milliseconds and would flatter the p50.
+  const latency = latencySummary(calls.filter((c) => c.outcome === 'ok').map((c) => c.durationMs));
   return {
     inputs: results.length,
     medianAttested: median(results.map((r) => r.attested)) ?? 0,

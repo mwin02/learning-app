@@ -74,6 +74,16 @@ describe('summarizeRun', () => {
     expect(flash.flash2027).toBeCloseTo(1.5 + 14);
   });
 
+  it('measures latency over successful attempts only', () => {
+    const failed = (durationMs: number): CompareCallRecord => ({ ...call(PRO_MODEL_ID, durationMs), outcome: 'error' });
+    const m = summarizeRun([
+      input(1, 1, 1, [failed(5), call(PRO_MODEL_ID, 30_000)]),
+      input(1, 1, 1, [call(PRO_MODEL_ID, 40_000), failed(200_000)]),
+    ]);
+    expect(m.p50LatencyMs).toBe(35_000);
+    expect(m.maxLatencyMs).toBe(40_000);
+  });
+
   it('counts an errored input as zero-yield and as an error', () => {
     const m = summarizeRun([{ attested: 0, survivors: 0, teaches: 0, discoveryCalls: [], error: 'boom' }]);
     expect(m.zeroTeaches).toBe(1);
