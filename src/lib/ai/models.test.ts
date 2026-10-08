@@ -71,6 +71,7 @@ describe('getModel — tiers', () => {
     'conceptDeriver',
     'mapCandidateJudge',
     'curriculumFallback',
+    'conceptBankAuthor',
   ] as const;
 
   const isIn = (list: readonly string[], name: string) => list.includes(name);
@@ -93,7 +94,7 @@ describe('getModel — tiers', () => {
     expect(getModel(name).temperature).toBeUndefined();
   });
 
-  it.each(AGENT_NAMES)('%s has low thinking only if it is a gate/classifier or discovery', (name) => {
+  it.each(AGENT_NAMES)('%s has low thinking only if it is a gate/classifier, discovery or the bank author', (name) => {
     const { providerOptions } = getModel(name);
     if (isIn(LOW_THINKING_AGENTS, name)) {
       expect(providerOptions).toEqual({
@@ -130,17 +131,27 @@ describe('getModel — curriculumFallback', () => {
     });
   });
 
-  it('leaves every other Pro agent at the model default', () => {
+  it('leaves every other Pro agent but the bank author at the model default', () => {
     const otherPro = [
       'mapSpineAuthor',
       'mapSpineReviewer',
       'onRampAuthor',
       'onRampCritic',
       'trackComposer',
-      'conceptBankAuthor',
       'compareGrader',
     ] as const;
     for (const name of otherPro) expect(getModel(name).providerOptions).toBeUndefined();
+  });
+});
+
+describe('getModel — conceptBankAuthor', () => {
+  it('authors banks on the Pro id at low thinking with no call timeout', () => {
+    const { modelId, providerOptions, callTimeoutMs } = getModel('conceptBankAuthor');
+    expect(modelId).toBe(getModel('mapSpineAuthor').modelId);
+    expect(providerOptions).toEqual({
+      google: { thinkingConfig: { thinkingLevel: 'low' } },
+    });
+    expect(callTimeoutMs).toBeUndefined();
   });
 });
 
@@ -224,35 +235,35 @@ describe('getModel — compare scope override', () => {
   });
 
   const flashLow: CompareScope['overrides'] = {
-    conceptBankAuthor: { modelId: 'gemini-3.7-flash', thinkingLevel: 'low' },
+    mapSpineAuthor: { modelId: 'gemini-3.7-flash', thinkingLevel: 'low' },
   };
 
   it('applies the override inside the scope and ignores it outside', async () => {
     await runWithCompareScope({ overrides: flashLow }, async () => {
-      const resolved = getModel('conceptBankAuthor');
+      const resolved = getModel('mapSpineAuthor');
       expect(resolved.modelId).toBe('gemini-3.7-flash');
       expect(resolved.providerOptions?.google.thinkingConfig.thinkingLevel).toBe('low');
       expect(resolved.maxOutputTokens).toBe(32768);
     });
-    const outside = getModel('conceptBankAuthor');
+    const outside = getModel('mapSpineAuthor');
     expect(outside.modelId).toBe('gemini-3.1-pro-preview');
     expect(outside.providerOptions).toBeUndefined();
   });
 
   it('beats MODEL_<AGENT> inside the scope; the env still beats the registry outside', async () => {
-    vi.stubEnv('MODEL_CONCEPTBANKAUTHOR', 'gemini-env');
+    vi.stubEnv('MODEL_MAPSPINEAUTHOR', 'gemini-env');
     await runWithCompareScope({ overrides: flashLow }, async () => {
-      expect(getModel('conceptBankAuthor').modelId).toBe('gemini-3.7-flash');
+      expect(getModel('mapSpineAuthor').modelId).toBe('gemini-3.7-flash');
     });
-    expect(getModel('conceptBankAuthor').modelId).toBe('gemini-env');
+    expect(getModel('mapSpineAuthor').modelId).toBe('gemini-env');
   });
 
   it('keeps MODEL_<AGENT> when the override sets no modelId', async () => {
-    vi.stubEnv('MODEL_CONCEPTBANKAUTHOR', 'gemini-env');
+    vi.stubEnv('MODEL_MAPSPINEAUTHOR', 'gemini-env');
     await runWithCompareScope(
-      { overrides: { conceptBankAuthor: { thinkingLevel: 'low' } } },
+      { overrides: { mapSpineAuthor: { thinkingLevel: 'low' } } },
       async () => {
-        expect(getModel('conceptBankAuthor').modelId).toBe('gemini-env');
+        expect(getModel('mapSpineAuthor').modelId).toBe('gemini-env');
       },
     );
   });
@@ -263,7 +274,7 @@ describe('getModel — compare scope override', () => {
         getModel(name);
       return { modelId, temperature, maxOutputTokens, callTimeoutMs, providerOptions };
     };
-    const others = AGENT_NAMES.filter((name) => name !== 'conceptBankAuthor');
+    const others = AGENT_NAMES.filter((name) => name !== 'mapSpineAuthor');
     const outside = others.map(config);
     await runWithCompareScope({ overrides: flashLow }, async () => {
       expect(others.map(config)).toEqual(outside);
@@ -273,9 +284,9 @@ describe('getModel — compare scope override', () => {
   it('gives each of two concurrent scopes only its own override', async () => {
     const ids = await Promise.all(
       ['gemini-a', 'gemini-b'].map((modelId) =>
-        runWithCompareScope({ overrides: { conceptBankAuthor: { modelId } } }, async () => {
+        runWithCompareScope({ overrides: { mapSpineAuthor: { modelId } } }, async () => {
           await new Promise((resolve) => setTimeout(resolve, 1));
-          return getModel('conceptBankAuthor').modelId;
+          return getModel('mapSpineAuthor').modelId;
         }),
       ),
     );
