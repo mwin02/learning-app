@@ -41,8 +41,8 @@ const base: ModelConfig = {
 };
 
 describe('getModel — registry', () => {
-  it('has 22 agents', () => {
-    expect(AGENT_NAMES).toHaveLength(22);
+  it('has 23 agents', () => {
+    expect(AGENT_NAMES).toHaveLength(23);
   });
 
   it.each(AGENT_NAMES)('%s resolves with a non-empty modelId', (name) => {
@@ -59,6 +59,7 @@ describe('getModel — tiers', () => {
     'onRampCritic',
     'trackComposer',
     'conceptBankAuthor',
+    'compareGrader',
   ] as const;
 
   const LOW_THINKING_AGENTS = [
@@ -137,6 +138,7 @@ describe('getModel — curriculumFallback', () => {
       'onRampCritic',
       'trackComposer',
       'conceptBankAuthor',
+      'compareGrader',
     ] as const;
     for (const name of otherPro) expect(getModel(name).providerOptions).toBeUndefined();
   });
