@@ -2,7 +2,7 @@
 // owe once rung 0's candidates have been judged and attached. source-concept's
 // module graph pulls in env-validating leaves (@/lib/db, @/lib/ai/vertex,
 // @/lib/ai/models) via the sourcing/judge chain, so those are stubbed per the
-// CLAUDE.md module-eval note. The timeout-containment tests at the bottom also
+// CLAUDE.md module-eval note. The timeout and rate-limit containment tests also
 // stub the judge and the sourcing rungs, and give the prisma stub the two reads
 // that run before the judge.
 import { describe, it, expect, vi, afterEach } from 'vitest';
@@ -37,6 +37,7 @@ vi.mock('@/lib/agents/tools/web-fallback', async (importOriginal) => ({
   sourceFromWeb: (...a: unknown[]) => sourceFromWeb(...a),
 }));
 
+import { APICallError, RetryError } from 'ai';
 import { CallTimeoutError } from '@/lib/ai/call-middleware';
 import { webBudgetAfterLibrary, rejectedCandidates, sourceAndAttachConcept } from './source-concept';
 
@@ -218,5 +219,74 @@ describe('sourceAndAttachConcept — call timeout containment', () => {
 
     await expect(sourceAndAttachConcept(args)).rejects.toThrow('quota exhausted');
     expect(timeoutWarnLines(warn)).toHaveLength(0);
+  });
+});
+
+describe('sourceAndAttachConcept — rate-limit containment', () => {
+  const args = { pathId: 'p1', topic: 'api-fundamentals', conceptId: 'c1', slug: 'http-methods', title: 'HTTP methods' };
+  const apiError = (statusCode: number) =>
+    new APICallError({ message: 'Resource exhausted', url: 'https://vertex/discovery', requestBodyValues: {}, statusCode });
+  // The shape of the production failure: the SDK's retries all hit 429.
+  const exhausted429 = () =>
+    new RetryError({
+      message: 'Failed after 3 attempts. Last error: Resource exhausted.',
+      reason: 'maxRetriesExceeded',
+      errors: [apiError(429), apiError(429), apiError(429)],
+    });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.resetAllMocks();
+  });
+
+  function rateLimitWarnLines(spy: { mock: { calls: unknown[][] } }): Record<string, unknown>[] {
+    return spy.mock.calls
+      .map((call) => JSON.parse(String(call[0])))
+      .filter((line: Record<string, unknown>) => line.event === 'source-concept.rate-limited');
+  }
+
+  it('attaches nothing and warns once when web discovery stays rate-limited', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    libraryRungCandidates.mockResolvedValue([]);
+    sourceFromWeb.mockRejectedValue(exhausted429());
+
+    await expect(sourceAndAttachConcept(args)).resolves.toBe(0);
+
+    const lines = rateLimitWarnLines(warn);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      pathId: 'p1',
+      concept: 'http-methods',
+      url: 'https://vertex/discovery',
+      attempts: 3,
+      attached: 0,
+    });
+  });
+
+  it('still rejects on a 429 once the job is aborted', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    libraryRungCandidates.mockResolvedValue([]);
+    const controller = new AbortController();
+    sourceFromWeb.mockImplementation(async () => {
+      controller.abort();
+      throw exhausted429();
+    });
+
+    await expect(
+      sourceAndAttachConcept({ ...args, abortSignal: controller.signal }),
+    ).rejects.toThrow('Failed after 3 attempts');
+    expect(rateLimitWarnLines(warn)).toHaveLength(0);
+  });
+
+  it('still rejects on a non-429 API error', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    libraryRungCandidates.mockResolvedValue([]);
+    sourceFromWeb.mockRejectedValue(apiError(400));
+
+    await expect(sourceAndAttachConcept(args)).rejects.toThrow('Resource exhausted');
+    expect(rateLimitWarnLines(warn)).toHaveLength(0);
   });
 });

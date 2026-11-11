@@ -1,4 +1,4 @@
-import { RetryError, wrapLanguageModel, type LanguageModelMiddleware } from 'ai';
+import { APICallError, RetryError, wrapLanguageModel, type LanguageModelMiddleware } from 'ai';
 import { z } from 'zod';
 import { log, logWarn, recordTiming } from '@/lib/log';
 import { compareSink } from '@/lib/ai/compare-scope';
@@ -37,6 +37,16 @@ export function callTimeoutErrorOf(err: unknown): CallTimeoutError | undefined {
 
 export function isCallTimeoutError(err: unknown): boolean {
   return callTimeoutErrorOf(err) !== undefined;
+}
+
+// A 429 the SDK's own retries did not outlast. Vertex returns it for exhausted
+// shared capacity on preview models (Dynamic Shared Quota) even with project quota
+// to spare, so it is transient by nature. Matched on the status code, never the
+// message: a 429 is the only signal that says "try later", and a message match
+// would also catch errors that will fail the same way on every retry.
+export function rateLimitErrorOf(err: unknown): APICallError | undefined {
+  const last = RetryError.isInstance(err) ? err.lastError : err;
+  return APICallError.isInstance(last) && last.statusCode === 429 ? last : undefined;
 }
 
 // The signals are the truth, not error names: a provider surfaces an abort as an
