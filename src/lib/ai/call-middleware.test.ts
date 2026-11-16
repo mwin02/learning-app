@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { generateText, RetryError } from 'ai';
+import { APICallError, generateText, RetryError } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3GenerateResult } from '@ai-sdk/provider';
 import {
   CallTimeoutError,
   callOutcome,
   isCallTimeoutError,
+  rateLimitErrorOf,
   webSearchQueryCount,
   withCallTiming,
 } from '@/lib/ai/call-middleware';
@@ -245,6 +246,39 @@ describe('isCallTimeoutError', () => {
     });
     expect(isCallTimeoutError(wrapped)).toBe(true);
     expect(isCallTimeoutError(new Error('x'))).toBe(false);
+  });
+});
+
+describe('rateLimitErrorOf', () => {
+  const apiError = (statusCode: number) =>
+    new APICallError({ message: 'Resource exhausted', url: 'u', requestBodyValues: {}, statusCode });
+
+  it('sees the 429 the SDK gave up on after its retries', () => {
+    const last = apiError(429);
+    const wrapped = new RetryError({
+      message: 'Failed after 3 attempts',
+      reason: 'maxRetriesExceeded',
+      errors: [apiError(429), apiError(429), last],
+    });
+    expect(rateLimitErrorOf(wrapped)).toBe(last);
+  });
+
+  it('sees a bare 429', () => {
+    expect(rateLimitErrorOf(apiError(429))).toBeDefined();
+  });
+
+  it('ignores a retry run that ended on something other than a 429', () => {
+    const wrapped = new RetryError({
+      message: 'Failed after 2 attempts',
+      reason: 'errorNotRetryable',
+      errors: [apiError(429), apiError(400)],
+    });
+    expect(rateLimitErrorOf(wrapped)).toBeUndefined();
+  });
+
+  it('ignores other status codes and a message that only mentions exhaustion', () => {
+    expect(rateLimitErrorOf(apiError(503))).toBeUndefined();
+    expect(rateLimitErrorOf(new Error('Resource exhausted (429)'))).toBeUndefined();
   });
 });
 

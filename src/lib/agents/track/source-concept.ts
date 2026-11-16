@@ -37,7 +37,8 @@
 import { Difficulty, BankStaleReason } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { logWarn } from '@/lib/log';
-import { callTimeoutErrorOf } from '@/lib/ai/call-middleware';
+import { RetryError } from 'ai';
+import { callTimeoutErrorOf, rateLimitErrorOf } from '@/lib/ai/call-middleware';
 import { recomputeReadiness } from '@/lib/agents/map/recompute-readiness';
 import { judgeCandidates } from '@/lib/agents/map/candidate-judge';
 import { selectAttachable, capCandidates } from '@/lib/agents/map/attach-candidates';
@@ -86,26 +87,42 @@ type SourceConceptArgs = {
   abortSignal?: AbortSignal;
 };
 
-// A model call that timed out twice (V3's per-call timeout) ends this concept's
-// sourcing with whatever already committed, instead of failing the whole thicken
-// cycle or remediation pass above it. Every attach is its own transaction with no
-// model call inside, so stopping between them leaves nothing half-written. Any
+// A model call that timed out twice (V3's per-call timeout), or that stayed
+// rate-limited (429) through the SDK's retries, ends this concept's sourcing with
+// whatever already committed, instead of failing the whole thicken cycle or
+// remediation pass above it. Both are transient, and a remediation pass over ten
+// holes used to lose all ten to one 429. Every attach is its own transaction with
+// no model call inside, so stopping between them leaves nothing half-written. Any
 // other error, a job abort included, propagates.
 export async function sourceAndAttachConcept(args: SourceConceptArgs): Promise<number> {
   const progress = { attached: 0 };
   try {
     return await sourceAndAttachConceptUnguarded(args, progress);
   } catch (err) {
+    if (args.abortSignal?.aborted) throw err;
     const timeout = callTimeoutErrorOf(err);
-    if (!timeout) throw err;
-    logWarn('source-concept.call-timeout', {
-      pathId: args.pathId,
-      concept: args.slug,
-      agent: timeout.agent,
-      timeoutMs: timeout.timeoutMs,
-      attached: progress.attached,
-    });
-    return progress.attached;
+    if (timeout) {
+      logWarn('source-concept.call-timeout', {
+        pathId: args.pathId,
+        concept: args.slug,
+        agent: timeout.agent,
+        timeoutMs: timeout.timeoutMs,
+        attached: progress.attached,
+      });
+      return progress.attached;
+    }
+    const rateLimit = rateLimitErrorOf(err);
+    if (rateLimit) {
+      logWarn('source-concept.rate-limited', {
+        pathId: args.pathId,
+        concept: args.slug,
+        url: rateLimit.url,
+        attempts: RetryError.isInstance(err) ? err.errors.length : 1,
+        attached: progress.attached,
+      });
+      return progress.attached;
+    }
+    throw err;
   }
 }
 
